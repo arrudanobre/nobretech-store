@@ -51,9 +51,9 @@ export default function InventoryPage() {
 
   const fetchInventory = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from("inventory")
-        .select("id, catalog_id, imei, serial_number, grade, status, purchase_price, suggested_price, purchase_date, photos, battery_health, ios_version, condition_notes, created_at, catalog:product_catalog(category, model, variant, storage, color, brand, year)")
+      const { data, error } = await (supabase
+        .from("inventory") as any)
+        .select("id, catalog_id, imei, serial_number, grade, status, purchase_price, suggested_price, purchase_date, photos, battery_health, ios_version, condition_notes, created_at")
         .order("created_at", { ascending: false })
 
       if (error) {
@@ -61,11 +61,11 @@ export default function InventoryPage() {
         return
       }
 
-      // If some catalog joins failed, fetch them in a follow-up
       const items = (data || []) as unknown as InventoryItem[]
-      const missingCatalog = items.filter((i: InventoryItem) => !i.catalog && i.catalog_id)
-      if (missingCatalog.length > 0) {
-        const catalogIds = missingCatalog.map((i: InventoryItem) => i.catalog_id)
+
+      // Collect all catalog_ids and fetch them in one query
+      const catalogIds = [...new Set(items.map((i: InventoryItem) => i.catalog_id).filter(Boolean))]
+      if (catalogIds.length > 0) {
         const { data: catalogs } = await (supabase
           .from("product_catalog") as any)
           .select("id, category, model, variant, storage, color, brand, year")
@@ -74,7 +74,7 @@ export default function InventoryPage() {
         if (catalogs) {
           const catalogMap = new Map(catalogs.map((c: any) => [c.id, c]))
           items.forEach((item: InventoryItem) => {
-            if (!item.catalog && item.catalog_id && catalogMap.has(item.catalog_id)) {
+            if (item.catalog_id && catalogMap.has(item.catalog_id)) {
               item.catalog = catalogMap.get(item.catalog_id)
             }
           })
