@@ -21,13 +21,29 @@ export default function SalesPage() {
       try {
         const { data, error } = await (supabase
           .from("sales") as any)
-          .select("*, customers(full_name, cpf), inventory(*, product_catalog(*))")
+          .select(`
+            *,
+            customers:customer_id (id, full_name, cpf, phone),
+            inventory:inventory_id (
+              id,
+              purchase_price,
+              imei,
+              status,
+              catalog:catalog_id (id, brand, model, variant, storage, color)
+            )
+          `)
           .order("sale_date", { ascending: false })
+          .limit(50)
 
         if (error) throw error
         setSales(data || [])
-      } catch (err) {
-        console.error("Erro ao carregar vendas:", err)
+      } catch (err: any) {
+        console.error("Erro detalhado ao carregar vendas:", {
+          message: err?.message,
+          details: err?.details,
+          hint: err?.hint,
+          code: err?.code
+        })
       } finally {
         setLoading(false)
       }
@@ -36,7 +52,7 @@ export default function SalesPage() {
   }, [])
 
   const filtered = sales.filter((s) => {
-    const productName = s.inventory?.product_catalog?.model || ""
+    const productName = s.inventory?.catalog?.model || ""
     const customerName = s.customers?.full_name || ""
     return (
       !search ||
@@ -90,7 +106,7 @@ export default function SalesPage() {
         <div className="space-y-2">
           {filtered.map((s) => {
             const customerName = s.customers?.full_name || "—"
-            const catalog = s.inventory?.product_catalog || {}
+            const catalog = s.inventory?.catalog || {}
             const productName = `${catalog.model || "Produto"} ${catalog.variant || ""} ${catalog.storage || ""} ${catalog.color || ""}`.trim()
             const warrantyDays = daysBetween(s.warranty_end)
 
