@@ -197,15 +197,28 @@ export function MobileNav() {
   )
 }
 
+import { useRouter } from "next/navigation"
+
 export function DashboardLayout({ children, title }: { children: React.ReactNode; title: string }) {
   const [counts, setCounts] = useState<Record<string, number>>({ estoque: 0, garantias: 0 })
   const [refreshKey, setRefreshKey] = useState(0)
+  const [checkingAuth, setCheckingAuth] = useState(true)
+  const router = useRouter()
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), [])
 
   useEffect(() => {
-    const fetchCounts = async () => {
+    const checkAuthAndFetch = async () => {
       try {
+        // 1. Guard check
+        const { data: { session } } = await supabase.auth.getSession()
+        if (!session) {
+          router.push("/login")
+          return
+        }
+        setCheckingAuth(false)
+
+        // 2. Data fetching
         const { data, error } = await (supabase
           .from("inventory") as any)
           .select("id")
@@ -226,14 +239,22 @@ export function DashboardLayout({ children, title }: { children: React.ReactNode
       }
     }
 
-    fetchCounts()
-    const interval = setInterval(fetchCounts, 5000)
+    checkAuthAndFetch()
+    const interval = setInterval(checkAuthAndFetch, 5000)
     return () => clearInterval(interval)
-  }, [refreshKey])
+  }, [refreshKey, router])
+
+  if (checkingAuth) {
+    return (
+      <div className="min-h-screen bg-navy-950 flex items-center justify-center">
+        <div className="w-12 h-12 border-4 border-royal-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    )
+  }
 
   return (
     <BadgeCountContext.Provider value={{ counts, refresh }}>
-      <div className="min-h-screen bg-surface">
+      <div className="min-h-screen bg-surface font-inter">
         <Sidebar />
         <MobileNav />
         {/* Main content */}

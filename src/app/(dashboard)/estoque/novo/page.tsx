@@ -211,23 +211,24 @@ export default function AddProductPage() {
     const suggestedPrice = priceTable.length > 0 ? priceTable[0].price : 0
 
     try {
-      // Get auth session
+      // 1. Get auth session
       const { data: { session } } = await supabase.auth.getSession()
       if (!session?.user) {
-        throw new Error("Não autenticado. Faça login novamente.")
+        throw new Error("Sessão expirada. Por favor, saia e entre novamente no sistema.")
       }
 
-      // Get company ID
-      const { data: company } = await (supabase
+      // 2. Get company ID (relying on RLS)
+      const { data: company, error: companyError } = await (supabase
         .from("companies") as any)
         .select("id")
         .single()
 
-      if (!company?.id) {
-        throw new Error("Empresa não encontrada no banco")
+      if (companyError || !company?.id) {
+        console.error("Company fetch error:", companyError)
+        throw new Error("Não foi possível identificar sua empresa. Verifique suas permissões.")
       }
 
-      // Ensure user record exists
+      // 3. Ensure user record exists
       const { error: userError } = await (supabase.from("users") as any).upsert({
         id: session.user.id,
         company_id: company.id,
@@ -237,9 +238,12 @@ export default function AddProductPage() {
         onConflict: "id",
       })
 
-      if (userError) throw userError
+      if (userError) {
+        console.error("User upsert error:", userError)
+        throw new Error("Erro ao sincronizar perfil de usuário.")
+      }
 
-      // Insert checklist
+      // 4. Insert checklist
       const { data: checklist, error: checklistError } = await (supabase.from("checklists") as any).insert({
         company_id: company.id,
         device_type: category,
