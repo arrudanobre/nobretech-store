@@ -9,7 +9,7 @@ import { supabase } from "@/lib/supabase"
 import { formatBRL, formatDate } from "@/lib/helpers"
 import { CHECKLIST_TEMPLATES } from "@/lib/constants"
 import jsPDF from "jspdf"
-import { ArrowLeft, ShieldCheck, FileText, CreditCard, User, ShoppingCart, AlertTriangle } from "lucide-react"
+import { ArrowLeft, ShieldCheck, FileText, CreditCard, User, ShoppingCart, AlertTriangle, Download, CheckCircle2, XCircle, MinusCircle, Loader2 } from "lucide-react"
 
 const checklistLabels: Record<string, string> = {}
 for (const [cat, items] of Object.entries(CHECKLIST_TEMPLATES)) {
@@ -28,7 +28,7 @@ export default function SaleDetailPage() {
   const [customer, setCustomer] = useState<any>(null)
   const [product, setProduct] = useState<any>(null)
   const [checklist, setChecklist] = useState<any[]>([])
-  const [checklistData, setChecklistData] = useState<any>(null)
+  const [generatingPdf, setGeneratingPdf] = useState(false)
 
   useEffect(() => {
     const fetchSale = async () => {
@@ -67,7 +67,6 @@ export default function SaleDetailPage() {
                 .eq("id", (p as any).checklist_id)
                 .single()
               if (cl?.items) {
-                setChecklistData(cl)
                 const items = typeof cl.items === "string" ? JSON.parse(cl.items) : cl.items
                 setChecklist(items)
               }
@@ -94,6 +93,56 @@ export default function SaleDetailPage() {
       credit_10x: "Crédito 10x", credit_11x: "Crédito 11x", credit_12x: "Crédito 12x",
     }
     return map[sale.payment_method] || sale.payment_method
+  }
+
+  const handleDownloadInspectionPDF = async () => {
+    const { default: jsPDF } = await import("jspdf")
+    const html2canvasF = (await import("html2canvas")).default
+
+    const el = document.getElementById("inspection-pdf-content")
+    if (!el || !product) return
+    setGeneratingPdf(true)
+
+    try {
+      const canvas = await html2canvasF(el, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: "#ffffff",
+        logging: false,
+      })
+
+      const pdf = new jsPDF("p", "mm", "a4")
+      const pageW = pdf.internal.pageSize.getWidth()
+      const pageH = pdf.internal.pageSize.getHeight()
+      const marginMm = 10
+
+      const imgWidth = pageW - marginMm * 2
+      const imgHeight = (canvas.height * imgWidth) / canvas.width
+
+      const pxPerPmm = canvas.width / imgWidth
+      const pageSlicePx = Math.floor((pageH - marginMm * 2) * pxPerPmm)
+
+      const imgData = canvas.toDataURL("image/png")
+
+      pdf.addImage(imgData, "PNG", marginMm, 0, imgWidth, imgHeight)
+      let currentPage = 1
+
+      while (currentPage * pageSlicePx < canvas.height) {
+        const pageOffsetMm = (currentPage * pageSlicePx) / pxPerPmm
+        pdf.addPage()
+        pdf.addImage(imgData, "PNG", marginMm, marginMm - pageOffsetMm, imgWidth, imgHeight)
+        currentPage++
+      }
+
+      const fileName = `laudo-${product.product_catalog?.model || "aparelho"}-${product.imei?.slice(-4) || product.id.slice(0, 8)}.pdf`
+      pdf.save(fileName)
+      toast({ title: "Laudo gerado!", type: "success" })
+    } catch (err) {
+      console.error("PDF error:", err)
+      toast({ title: "Erro ao gerar PDF", type: "error" })
+    } finally {
+      setGeneratingPdf(false)
+    }
   }
 
   const generatePDF = async (type: "warranty" | "report") => {
@@ -444,14 +493,81 @@ export default function SaleDetailPage() {
         </div>
       </div>
 
+      {/* Checklist Section (Copied from Inventory) */}
+      {checklist.length > 0 && (
+        <div className="bg-card rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="flex items-center justify-between p-4 sm:p-6 pb-3">
+            <div>
+              <h3 className="font-display font-bold text-navy-900 font-syne">
+                Laudo de Inspeção
+              </h3>
+              <p className="text-xs text-gray-500 mt-0.5">
+                {okCount} OK · {failCount} Falhas · {checklist.length} itens no total
+              </p>
+            </div>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleDownloadInspectionPDF}
+              isLoading={generatingPdf}
+            >
+              <Download className="w-4 h-4" /> Baixar PDF
+            </Button>
+          </div>
+
+          <div className="px-4 sm:px-6">
+            <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${
+                  (okCount / checklist.length) >= 0.8 ? "bg-success-500" : (okCount / checklist.length) >= 0.5 ? "bg-warning-500" : "bg-danger-500"
+                }`}
+                style={{ width: `${(okCount / checklist.length) * 100}%` }}
+              />
+            </div>
+          </div>
+
+          <div className="p-4 sm:px-6 sm:pb-5 divide-y divide-gray-50">
+            {checklist.map((item, idx) => {
+              const isOk = item.status === "ok"
+              const isFail = item.status === "fail"
+              const isNa = item.status === "na"
+
+              return (
+                <div key={idx} className={`py-2.5 flex items-center gap-3 ${isFail ? "bg-red-50/50 -mx-4 px-4 rounded-lg" : ""}`}>
+                  <div className="shrink-0">
+                    {isOk && <CheckCircle2 className="w-5 h-5 text-success-500" />}
+                    {isFail && <XCircle className="w-5 h-5 text-danger-500" />}
+                    {isNa && <MinusCircle className="w-5 h-5 text-gray-300" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-navy-900">{item.label}</p>
+                    {item.note && isFail && (
+                      <p className="text-xs text-danger-500 mt-0.5">{item.note}</p>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Condition Notes */}
+      {product?.condition_notes && (
+        <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
+          <h3 className="font-display font-bold text-navy-900 font-syne mb-2">Observações do Produto</h3>
+          <p className="text-sm text-gray-600 leading-relaxed">{product.condition_notes}</p>
+        </div>
+      )}
+
       <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
-        <h3 className="font-display font-bold text-navy-900 mb-4 font-syne">Documentos</h3>
+        <h3 className="font-display font-bold text-navy-900 mb-4 font-syne">Documentos da Venda</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Button
             size="lg"
             variant="outline"
-            onClick={() => generatePDF("report")}
-            isLoading={generating === "report"}
+            onClick={handleDownloadInspectionPDF}
+            isLoading={generatingPdf}
             className="flex items-center gap-3 p-6 h-auto"
           >
             <FileText className="w-6 h-6 text-navy-900 shrink-0" />
@@ -473,6 +589,98 @@ export default function SaleDetailPage() {
               <p className="text-xs text-gray-400">Certificado de cobertura</p>
             </div>
           </Button>
+        </div>
+      </div>
+
+      {/* Hidden PDF content for Laudo Técnico rendering */}
+      <div style={{ position: "fixed", left: "-10000px", top: 0, zIndex: -1 }}>
+        <div id="inspection-pdf-content" style={{ width: "794px", padding: "36px 48px 48px", fontFamily: "'Inter', system-ui, sans-serif", background: "#fff", color: "#0D1B2E" }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginBottom: "16px", borderBottom: "3px solid #0D1B2E", paddingBottom: "16px" }}>
+            <img src="/logo-nobretech.png" alt="Nobretech Store" style={{ width: "220px", height: "auto", marginBottom: "4px" }} />
+            <h1 style={{ fontSize: "24px", fontWeight: 700, color: "#0D1B2E", margin: 0, fontFamily: "Inter, system-ui, sans-serif" }}>Laudo de Inspeção</h1>
+            <p style={{ fontSize: "13px", color: "#3A6BC4", marginTop: "4px" }}>
+              {fullModel}
+            </p>
+          </div>
+
+          <div style={{ background: "#F5F8FF", borderRadius: "12px", padding: "20px", marginBottom: "24px" }}>
+            <p style={{ fontSize: "11px", fontWeight: 700, letterSpacing: "2px", color: "#3A6BC4", marginBottom: "12px", textTransform: "uppercase" }}>Dados do Aparelho</p>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 32px" }}>
+              {[
+                ["IMEI", product?.imei || "N/D"],
+                ["Nº Série", product?.serial_number || "N/D"],
+                ["Grade", product?.grade || "N/D"],
+                ["Bateria", product?.battery_health ? `${product.battery_health}%` : "N/D"],
+                ["Software", product?.ios_version || "N/D"],
+                ["Cor", product?.product_catalog?.color || "N/D"],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <p style={{ fontSize: "10px", color: "#9CA3AF", margin: 0, textTransform: "uppercase", letterSpacing: "1px" }}>{label}</p>
+                  <p style={{ fontSize: "13px", fontWeight: 600, color: "#0D1B2E", margin: "2px 0 0" }}>{value}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: "16px", marginBottom: "24px" }}>
+            {[
+              { label: "Aprovados", value: okCount, color: "#3ABF82" },
+              { label: "Falhas", value: failCount, color: "#E05C5C" },
+              { label: "Não se aplica", value: checklist.filter(i => i.status === 'na').length, color: "#9CA3AF" },
+            ].map((stat) => (
+              <div key={stat.label} style={{ flex: 1, background: "#F9FAFB", borderRadius: "10px", padding: "16px", textAlign: "center" }}>
+                <p style={{ fontSize: "28px", fontWeight: 700, color: stat.color, margin: 0 }}>{stat.value}</p>
+                <p style={{ fontSize: "11px", color: "#6B7280", margin: "4px 0 0" }}>{stat.label}</p>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ height: "1px", background: "#E5E7EB", marginBottom: "20px" }} />
+
+          {checklist.length > 0 && (
+            <>
+              <p style={{ fontSize: "11px", fontWeight: 700, letterSpacing: "2px", color: "#3A6BC4", marginBottom: "12px", textTransform: "uppercase" }}>Detalhamento</p>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+                <thead>
+                  <tr>
+                    <th style={{ padding: "8px 0", textAlign: "left", borderBottom: "2px solid #0D1B2E", color: "#0D1B2E", fontWeight: 700, fontSize: "11px" }}>Item</th>
+                    <th style={{ padding: "8px 12px", textAlign: "center", borderBottom: "2px solid #0D1B2E", color: "#0D1B2E", fontWeight: 700, fontSize: "11px", whiteSpace: "nowrap" }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {checklist.filter((i: any) => i.status !== "na").map((item: any, idx: number) => (
+                    <tr key={idx} style={{ borderBottom: "1px solid #F3F4F6" }}>
+                      <td style={{ padding: "10px 0", color: "#1F2937" }}>
+                        {item.label}
+                        {item.note && item.status === "fail" && (
+                          <p style={{ fontSize: "11px", color: "#E05C5C", margin: "4px 0 0", fontStyle: "italic" }}>* {item.note}</p>
+                        )}
+                      </td>
+                      <td style={{ padding: "10px 12px", textAlign: "center" }}>
+                        <span style={{ color: item.status === "ok" ? "#3ABF82" : "#E05C5C", fontWeight: 700, fontSize: "11px" }}>
+                          {item.status === "ok" ? "✓ APROVADO" : "✕ FALHA"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+
+          {product?.condition_notes && (
+            <div style={{ marginTop: "24px", padding: "16px", background: "#F9FAFB", borderRadius: "10px" }}>
+              <p style={{ fontSize: "11px", fontWeight: 700, letterSpacing: "2px", color: "#3A6BC4", marginBottom: "8px", textTransform: "uppercase" }}>Observações</p>
+              <p style={{ fontSize: "12px", color: "#4B5563", lineHeight: 1.7, margin: 0 }}>{product.condition_notes}</p>
+            </div>
+          )}
+
+          <div style={{ textAlign: "center", marginTop: "40px", paddingTop: "20px", borderTop: "1px solid #E5E7EB" }}>
+            <p style={{ fontSize: "12px", fontWeight: 600, color: "#0D1B2E", margin: 0 }}>NOBRETECH STORE</p>
+            <p style={{ fontSize: "10px", color: "#9CA3AF", margin: "4px 0 0" }}>
+              Documento gerado automaticamente em {new Date().toLocaleDateString("pt-BR")}
+            </p>
+          </div>
         </div>
       </div>
     </div>
