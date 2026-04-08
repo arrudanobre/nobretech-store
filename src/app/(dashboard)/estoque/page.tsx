@@ -86,24 +86,46 @@ export default function InventoryPage() {
   const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    if (!confirm("Tem certeza que deseja excluir este item?")) return
 
-    setDeletingId(id)
     try {
+      // 1. Check permissions (Admin only)
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user?.email !== "arrudanobre@gmail.com") {
+        toast({
+          title: "Acesso Negado",
+          description: "Apenas o administrador (arrudanobre@gmail.com) pode excluir aparelhos.",
+          type: "error",
+        })
+        return
+      }
+
+      if (!confirm("Tem certeza que deseja excluir? Isso removerá permanentemente a venda, garantia e histórico vinculados.")) return
+
+      setDeletingId(id)
+
+      // 2. Sequential Cleanup (Cascading)
+      // Delete problems
+      await (supabase.from("problems") as any).delete().eq("inventory_id", id)
+      // Delete warranties
+      await (supabase.from("warranties") as any).delete().eq("inventory_id", id)
+      // Delete sales
+      await (supabase.from("sales") as any).delete().eq("inventory_id", id)
+      
+      // 3. Delete Main Record
       const { error } = await (supabase.from("inventory") as any).delete().eq("id", id)
       if (error) throw error
 
       setItems((prev) => prev.filter((i) => i.id !== id))
       refreshBadge()
       toast({
-        title: "Item excluído",
-        description: "O aparelho foi removido do estoque.",
+        title: "Item e histórico excluídos",
+        description: "O aparelho e todos os seus registros foram removidos.",
         type: "success",
       })
     } catch (err: any) {
       toast({
         title: "Erro ao excluir",
-        description: err?.message || "Não foi possível excluir o item.",
+        description: err?.message || "Não foi possível realizar a exclusão completa.",
         type: "error",
       })
     } finally {
