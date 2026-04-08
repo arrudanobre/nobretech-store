@@ -55,44 +55,23 @@ export default function InventoryPage() {
     try {
       const { data, error } = await (supabase
         .from("inventory") as any)
-        .select("*, product_catalog(id, category, model, variant, storage, color, brand, year), sales(sale_price)")
+        .select(`
+          *,
+          catalog:catalog_id (id, category, model, variant, storage, color, brand, year),
+          sales(sale_price)
+        `)
         .order("created_at", { ascending: false })
+        .limit(100)
 
-      if (error) {
-        console.error("Error fetching inventory:", JSON.stringify(error))
-        return
-      }
-
-      const items = (data || []) as unknown as any[]
-      
-      // Safety: ensure product_catalog is mapped to catalog if it exists
-      items.forEach(item => {
-        if (!item.catalog && item.product_catalog) {
-          item.catalog = item.product_catalog;
-        }
-      });
-
-      // Collect all catalog_ids and fetch them in one query
-      const catalogIds = [...new Set(items.map((i: InventoryItem) => i.catalog_id).filter(Boolean))]
-      if (catalogIds.length > 0) {
-        const { data: catalogs } = await (supabase
-          .from("product_catalog") as any)
-          .select("id, category, model, variant, storage, color, brand, year")
-          .in("id", catalogIds)
-
-        if (catalogs) {
-          const catalogMap = new Map(catalogs.map((c: any) => [c.id, c]))
-          items.forEach((item: InventoryItem) => {
-            if (item.catalog_id && catalogMap.has(item.catalog_id)) {
-              item.catalog = catalogMap.get(item.catalog_id)
-            }
-          })
-        }
-      }
-
-      setItems(items)
-    } catch (err) {
-      console.error("Error fetching inventory:", err)
+      if (error) throw error
+      setItems(data || [])
+    } catch (err: any) {
+      console.error("Erro detalhado ao carregar estoque:", {
+        message: err?.message,
+        details: err?.details,
+        hint: err?.hint,
+        code: err?.code
+      })
     } finally {
       setLoading(false)
       refreshBadge()
