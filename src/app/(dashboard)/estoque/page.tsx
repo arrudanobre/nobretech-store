@@ -45,7 +45,7 @@ export default function InventoryPage() {
   const [search, setSearch] = useState("")
   const [activeCategory, setActiveCategory] = useState("all")
   const [activeStatus, setActiveStatus] = useState("all")
-  const [activeGradeGroup, setActiveGradeGroup] = useState("all")
+  const [activeGrade, setActiveGrade] = useState("all")
   const [items, setItems] = useState<InventoryItem[]>([])
   const [loading, setLoading] = useState(true)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -114,17 +114,13 @@ export default function InventoryPage() {
   const filtered = items.filter((item) => {
     const matchCategory = activeCategory === "all" || item.catalog?.category === activeCategory
     const matchStatus = activeStatus === "all" || item.status === activeStatus
-    const matchGradeGroup = activeGradeGroup === "all"
-      ? true
-      : activeGradeGroup === "lacrado"
-        ? item.grade === "Lacrado"
-        : (item.grade && item.grade !== "Lacrado")
+    const matchGrade = activeGrade === "all" ? true : item.grade === activeGrade
     const matchSearch = search
       ? (item.catalog?.model || "").toLowerCase().includes(search.toLowerCase()) ||
         (item.imei || "").includes(search) ||
         false
       : true
-    return matchCategory && matchStatus && matchSearch && matchGradeGroup
+    return matchCategory && matchStatus && matchSearch && matchGrade
   })
 
   const inStockCount = items.filter((i) => i.status === "in_stock").length
@@ -171,35 +167,29 @@ export default function InventoryPage() {
           {/* Grade/Condition Filters */}
           <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide border-b border-gray-50 pb-2">
             <button
-              onClick={() => setActiveGradeGroup("all")}
+              onClick={() => setActiveGrade("all")}
               className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold border transition-all ${
-                activeGradeGroup === "all"
+                activeGrade === "all"
                   ? "bg-navy-900 text-white border-navy-900 shadow-sm"
                   : "bg-white text-gray-400 border-gray-100 hover:border-gray-300"
               }`}
             >
-              Todos
+              Qualquer Grade
             </button>
-            <button
-              onClick={() => setActiveGradeGroup("lacrado")}
-              className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold border transition-all flex items-center gap-1.5 ${
-                activeGradeGroup === "lacrado"
-                  ? "bg-royal-600 text-white border-royal-600 shadow-sm"
-                  : "bg-white text-gray-500 border-gray-100 hover:border-royal-200"
-              }`}
-            >
-              <span>📦</span> Lacrados
-            </button>
-            <button
-              onClick={() => setActiveGradeGroup("seminovo")}
-              className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold border transition-all flex items-center gap-1.5 ${
-                activeGradeGroup === "seminovo"
-                  ? "bg-emerald-600 text-white border-emerald-600 shadow-sm"
-                  : "bg-white text-gray-500 border-gray-100 hover:border-emerald-200"
-              }`}
-            >
-              <span>✨</span> Seminovos (ABEC)
-            </button>
+            {GRADES.map((g) => (
+              <button
+                key={g.value}
+                onClick={() => setActiveGrade(g.value)}
+                className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold border transition-all flex items-center gap-1.5 ${
+                  activeGrade === g.value
+                    ? g.value === 'Lacrado' ? "bg-royal-600 text-white border-royal-600 shadow-sm" : "bg-emerald-600 text-white border-emerald-600 shadow-sm"
+                    : "bg-white text-gray-500 border-gray-100 hover:border-gray-200"
+                }`}
+              >
+                {g.value === 'Lacrado' && <span>📦</span>}
+                {g.label}
+              </button>
+            ))}
           </div>
 
           {/* Category tabs */}
