@@ -1,30 +1,136 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { formatDate } from "@/lib/helpers"
-import { FileText, Search, Download, ShieldCheck, Filter } from "lucide-react"
+import { supabase } from "@/lib/supabase"
+import { FileText, Search, Download, ShieldCheck, Loader2 } from "lucide-react"
 
-const mockDocuments = [
-  { id: "1", type: "checklist", date: "2026-04-01", product: "MacBook Air M2 256GB", customer: "João Silva", status: "active" as const },
-  { id: "2", type: "warranty", date: "2026-04-01", product: "MacBook Air M2 256GB", customer: "João Silva", status: "active" as const },
-  { id: "3", type: "checklist", date: "2026-03-28", product: "AirPods Pro 2", customer: "Ana Oliveira", status: "active" as const },
-  { id: "4", type: "warranty", date: "2026-03-28", product: "AirPods Pro 2", customer: "Ana Oliveira", status: "active" as const },
-  { id: "5", type: "checklist", date: "2026-03-15", product: "iPad Air M1 64GB", customer: "Lucia Ferreira", status: "expired" as const },
-  { id: "6", type: "warranty", date: "2026-03-15", product: "iPad Air M1 64GB", customer: "Lucia Ferreira", status: "expiring_soon" as const },
-  { id: "7", type: "checklist", date: "2026-03-10", product: "iPhone 13 Pro 128GB", customer: "Carlos Mendes", status: "active" as const },
-  { id: "8", type: "warranty", date: "2026-03-10", product: "iPhone 13 Pro 128GB", customer: "Carlos Mendes", status: "expiring_soon" as const },
-  { id: "9", type: "checklist", date: "2026-01-05", product: "iPhone 12 64GB", customer: "Pedro Costa", status: "expired" as const },
-  { id: "10", type: "checklist", date: "2025-12-20", product: "iPhone 14 128GB", customer: "Maria Santos", status: "expired" as const },
-]
+interface HistoryDocument {
+  id: string
+  type: "checklist" | "warranty"
+  date: string
+  product: string
+  customer: string
+  status: "active" | "expired" | "expiring_soon"
+}
 
 export default function HistoryPage() {
   const [filter, setFilter] = useState("both")
   const [search, setSearch] = useState("")
+  const [documents, setDocuments] = useState<HistoryDocument[]>([])
+  const [loading, setLoading] = useState(true)
 
-  const filtered = mockDocuments.filter((d) => {
+  const fetchHistory = useCallback(async () => {
+    try {
+      setLoading(true)
+      
+      // 1. Fetch Checklists
+      const { data: checklists, error: cError } = await (supabase
+        .from("checklists") as any)
+        .select(`
+          id,
+          created_at,
+          inventory:inventory_id(
+            product_catalog(model, variant, storage),
+            sales(customer_id, customers(full_name))
+          )
+        `)
+        .order("created_at", { ascending: false })
+
+      if (cError) console.error("Error fetching checklists:", cError)
+
+      // 2. Fetch Sales (Warranties)
+      const { data: sales, error: sError } = await (supabase
+        .from("sales") as any)
+        .select(`
+          id,
+          sale_date,
+          warranty_end,
+          customers(full_name),
+          inventory:inventory_id(
+            product_catalog(model, variant, storage)
+          )
+        `)
+        .order("sale_date", { ascending: false })
+
+      if (sError) console.error("Error fetching warranties:", sError)
+
+      // 3. Map Checklists
+      const mappedChecklists: HistoryDocument[] = (checklists || []).map((c: any) => {
+        const inv = c.inventory
+        const catalog = inv?.product_catalog
+        const sale = inv?.sales?.[0] // Get first sale if exists
+        
+        const productName = catalog 
+          ? `${catalog.model}${catalog.variant ? " " + catalog.variant : ""}${catalog.storage ? " " + catalog.storage : ""}`
+          : "Dispositivo"
+          
+        const customerName = sale?.customers?.full_name || "Estoque"
+        
+        return {
+          id: `c-${c.id}`,
+          type: "checklist",
+          date: c.created_at,
+          product: productName,
+          customer: customerName,
+          status: "active"
+        }
+      })
+
+      // 4. Map Warranties
+      const mappedWarranties: HistoryDocument[] = (sales || []).map((s: any) => {
+        const inv = s.inventory
+        const catalog = inv?.product_catalog
+        const customerName = s.customers?.full_name || "Cliente"
+        
+        const productName = catalog 
+          ? `${catalog.model}${catalog.variant ? " " + catalog.variant : ""}${catalog.storage ? " " + catalog.storage : ""}`
+          : "Dispositivo"
+
+        // Calc status
+        const today = new Date().toISOString().split("T")[0]
+        let status: any = "active"
+        if (s.warranty_end) {
+          if (s.warranty_end < today) status = "expired"
+          else {
+            const end = new Date(s.warranty_end).getTime()
+            const now = new Date().getTime()
+            const diffDays = (end - now) / (1000 * 60 * 60 * 24)
+            if (diffDays < 30) status = "expiring_soon"
+          }
+        }
+
+        return {
+          id: `w-${s.id}`,
+          type: "warranty",
+          date: s.sale_date,
+          product: productName,
+          customer: customerName,
+          status: status
+        }
+      })
+
+      // Combined results
+      const combined = [...mappedChecklists, ...mappedWarranties].sort(
+        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+      )
+      
+      setDocuments(combined)
+    } catch (err) {
+      console.error("Unexpected error fetching history:", err)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchHistory()
+  }, [fetchHistory])
+
+  const filtered = documents.filter((d) => {
     const matchFilter =
       filter === "both" ||
       (filter === "checklist" && d.type === "checklist") ||
@@ -37,9 +143,9 @@ export default function HistoryPage() {
   })
 
   const counts = {
-    checklists: mockDocuments.filter((d) => d.type === "checklist").length,
-    warranties: mockDocuments.filter((d) => d.type === "warranty").length,
-    total: mockDocuments.length,
+    checklists: documents.filter((d) => d.type === "checklist").length,
+    warranties: documents.filter((d) => d.type === "warranty").length,
+    total: documents.length,
   }
 
   return (
@@ -77,37 +183,53 @@ export default function HistoryPage() {
         icon={<Search className="w-4 h-4" />}
       />
 
+      {/* Loading state */}
+      {loading && (
+        <div className="flex items-center justify-center py-16">
+          <Loader2 className="w-8 h-8 animate-spin text-royal-500" />
+        </div>
+      )}
+
+      {/* Empty state */}
+      {!loading && filtered.length === 0 && (
+        <div className="text-center py-16 bg-card rounded-2xl border border-gray-100 italic text-gray-400">
+          Nenhum registro encontrado.
+        </div>
+      )}
+
       {/* Document list */}
-      <div className="space-y-2">
-        {filtered.map((d) => (
-          <div
-            key={d.id}
-            className="bg-card rounded-xl border border-gray-100 p-4 shadow-sm flex items-center justify-between"
-          >
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 bg-royal-100">
-                {d.type === "checklist" ? (
-                  <FileText className="w-5 h-5 text-royal-500" />
-                ) : (
-                  <ShieldCheck className="w-5 h-5 text-success-500" />
-                )}
+      {!loading && (
+        <div className="space-y-2">
+          {filtered.map((d) => (
+            <div
+              key={d.id}
+              className="bg-card rounded-xl border border-gray-100 p-4 shadow-sm flex items-center justify-between"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 bg-royal-100">
+                  {d.type === "checklist" ? (
+                    <FileText className="w-5 h-5 text-royal-500" />
+                  ) : (
+                    <ShieldCheck className="w-5 h-5 text-success-500" />
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-navy-900 truncate">{d.product}</p>
+                  <p className="text-xs text-gray-500 flex items-center gap-2">
+                    {d.customer} · {formatDate(d.date)}
+                    <Badge variant={d.type === "checklist" ? "blue" : "green"} className="text-[10px]">
+                      {d.type === "checklist" ? "Laudo" : "Garantia"}
+                    </Badge>
+                  </p>
+                </div>
               </div>
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-navy-900 truncate">{d.product}</p>
-                <p className="text-xs text-gray-500 flex items-center gap-2">
-                  {d.customer} · {formatDate(d.date)}
-                  <Badge variant={d.type === "checklist" ? "blue" : "green"} className="text-[10px]">
-                    {d.type === "checklist" ? "Laudo" : "Garantia"}
-                  </Badge>
-                </p>
-              </div>
+              <Button variant="ghost" size="icon">
+                <Download className="w-4 h-4" />
+              </Button>
             </div>
-            <Button variant="ghost" size="icon">
-              <Download className="w-4 h-4" />
-            </Button>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
