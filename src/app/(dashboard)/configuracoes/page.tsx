@@ -148,8 +148,8 @@ export default function SettingsPage() {
       setInviteEmail("")
       toast.success(`Convite enviado para ${inviteEmail}`)
       
-      const { data: members } = await supabase
-        .from("users")
+      const { data: members } = await (supabase
+        .from("users") as any)
         .select("id, full_name, email, role")
         .eq("company_id", companyId)
       if (members) setTeam(members as TeamMember[])

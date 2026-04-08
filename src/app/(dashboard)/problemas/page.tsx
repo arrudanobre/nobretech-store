@@ -87,8 +87,8 @@ export default function ProblemsPage() {
 
   const fetchProblems = async () => {
     try {
-      const { data, error } = await supabase
-        .from("problems")
+      const { data, error } = await (supabase
+        .from("problems") as any)
         .select(`
           *,
           customers(full_name, cpf, phone),
@@ -110,7 +110,7 @@ export default function ProblemsPage() {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
-      const { data } = await supabase.from("users").select("full_name").eq("id", user.id).single()
+      const { data } = await (supabase.from("users") as any).select("full_name").eq("id", user.id).single()
       if (data?.full_name) setCurrentUserName(data.full_name)
       else setCurrentUserName(user.email || "Técnico")
     } catch {}
@@ -124,11 +124,11 @@ export default function ProblemsPage() {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error("Não autenticado")
-      const { data: userData } = await supabase.from("users").select("company_id").eq("id", user.id).single()
+      const { data: userData } = await (supabase.from("users") as any).select("company_id").eq("id", user.id).single()
       if (!userData?.company_id) throw new Error("Empresa não encontrada")
       const tagsArray = formData.tags
         ? formData.tags.split(",").map((t: string) => t.trim().toLowerCase()).filter(Boolean) : []
-      const { error } = await supabase.from("problems").insert({
+      const { error } = await (supabase.from("problems") as any).insert({
         company_id: userData.company_id,
         customer_id: selectedCustomerId || null,
         inventory_id: selectedInventoryId || null,
@@ -157,9 +157,9 @@ export default function ProblemsPage() {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
-      const { data: userData } = await supabase.from("users").select("company_id").eq("id", user.id).single()
-      const { data } = await supabase
-        .from("customers")
+      const { data: userData } = await (supabase.from("users") as any).select("company_id").eq("id", user.id).single()
+      const { data } = await (supabase
+        .from("customers") as any)
         .select("id, full_name, cpf, phone")
         .eq("company_id", userData?.company_id)
         .or(`full_name.ilike.%${query}%,cpf.ilike.%${query}%`).limit(10)
@@ -174,8 +174,8 @@ export default function ProblemsPage() {
     setCustomerResults([])
     setFormData(prev => ({ ...prev, searchProduct: "" }))
     try {
-      const { data } = await supabase
-        .from("sales")
+      const { data } = await (supabase
+        .from("sales") as any)
         .select(`
           id, sale_date, sale_price, payment_method, warranty_start, warranty_end, warranty_months,
           inventory(id, imei, battery_health, grade, product_catalog(model, variant, storage, color))
@@ -187,8 +187,8 @@ export default function ProblemsPage() {
 
   const updateProblemStatus = async (problemId: string, newStatus: string) => {
     try {
-      const { error } = await supabase
-        .from("problems")
+      const { error } = await (supabase
+        .from("problems") as any)
         .update({ status: newStatus, resolved_date: newStatus === "resolved" ? new Date().toISOString().split("T")[0] : undefined })
         .eq("id", problemId)
       if (error) throw error
@@ -204,7 +204,7 @@ export default function ProblemsPage() {
     setIsUpdating(true)
     try {
       const { data: { user } } = await supabase.auth.getUser()
-      const { error } = await supabase.from("problem_updates").insert({
+      const { error } = await (supabase.from("problem_updates") as any).insert({
         problem_id: problemId, note: updateNote.trim(), created_by: user?.id,
       })
       if (error) {
@@ -212,8 +212,8 @@ export default function ProblemsPage() {
         const dateStr = now.toLocaleDateString("pt-BR")
         const timeStr = now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
         const author = currentUserName || "Técnico"
-        await supabase
-          .from("problems")
+        await (supabase
+          .from("problems") as any)
           .update({ description: `${(updateProblem?.description || "")}\n\n[ATUALIZAÇÃO ${author} • ${dateStr} ${timeStr}]: ${updateNote.trim()}` })
           .eq("id", problemId)
         toast({ title: "Atualização registrada!", type: "success" })
@@ -248,7 +248,7 @@ export default function ProblemsPage() {
     try {
       const tagsArray = editFormData.tags
         ? editFormData.tags.split(",").map((t: string) => t.trim().toLowerCase()).filter(Boolean) : []
-      const { error } = await supabase.from("problems").update({
+      const { error } = await (supabase.from("problems") as any).update({
         type: editFormData.type, description: editFormData.description,
         priority: editFormData.priority, action_deadline: editFormData.deadline || null,
         refund_amount: editFormData.refundAmount ? parseFloat(editFormData.refundAmount) : null,
@@ -266,7 +266,7 @@ export default function ProblemsPage() {
   const deleteProblem = async (problemId: string) => {
     setIsDeleting(true)
     try {
-      const { error } = await supabase.from("problems").delete().eq("id", problemId)
+      const { error } = await (supabase.from("problems") as any).delete().eq("id", problemId)
       if (error) throw error
       toast({ title: "Problema removido!", type: "success" })
       setDeleteConfirm(null); fetchProblems()
@@ -279,9 +279,9 @@ export default function ProblemsPage() {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error("Não autenticado")
-      const { data: userData } = await supabase.from("users").select("company_id").eq("id", user.id).single()
+      const { data: userData } = await (supabase.from("users") as any).select("company_id").eq("id", user.id).single()
       if (!userData?.company_id) throw new Error("Empresa não encontrada")
-      const { error } = await supabase.from("problems").insert({
+      const { error } = await (supabase.from("problems") as any).insert({
         company_id: userData.company_id,
         customer_id: problem.customer_id, inventory_id: problem.inventory_id, sale_id: problem.sale_id,
         type: problem.type, description: problem.description, priority: problem.priority,
