@@ -116,11 +116,7 @@ export default function TradeInEvalPage() {
   useEffect(() => {
     const fetchFees = async () => {
       try {
-        const { data } = await supabase
-          .from("financial_settings")
-          .select("*")
-          .limit(1)
-          .single()
+        const { data } = await (supabase.from("financial_settings").select("*").limit(1).single() as any)
         if (data) {
           setFinancialSettings({
             pix: Number(data.pix_fee_pct) || 0,
