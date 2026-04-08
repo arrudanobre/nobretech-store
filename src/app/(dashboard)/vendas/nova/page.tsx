@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
-import { buildPriceTable, calcPrice, calcProfit, formatBRL, maskCPF, formatPhone, validateCPF, getFeeKey } from "@/lib/helpers"
+import { buildPriceTable, calcPrice, calcProfit, formatBRL, maskCPF, formatPhone, validateCPF, getFeeKey, getProductName } from "@/lib/helpers"
 import { PAYMENT_METHODS, CATEGORIES, PRODUCT_CATALOG, GRADES } from "@/lib/constants"
 import { useToast } from "@/components/ui/toaster"
 import { CategoryIcon } from "@/components/ui/icon-helpers"
@@ -116,17 +116,16 @@ function NewSaleContent() {
       try {
         const { data, error } = await supabase
           .from("inventory")
-          .select("id, imei, purchase_price, suggested_price, battery_health, status, catalog:catalog_id(model, variant, storage, color)")
+          .select("id, imei, purchase_price, suggested_price, battery_health, status, condition_notes, catalog:catalog_id(model, variant, storage, color)")
           .eq("status", "in_stock")
           .order("created_at", { ascending: false })
 
         if (error) throw error
 
         const products = (data || []).map((item: any) => {
-          const cat = item.catalog || {}
           return {
             id: item.id,
-            name: `${cat.model || "Produto"}${cat.variant ? " " + cat.variant : ""}${cat.storage ? " " + cat.storage : ""} ${cat.color || ""}`.trim(),
+            name: getProductName(item),
             imei: item.imei || "",
             cost: item.purchase_price || 0,
             suggested: item.suggested_price || 0,
@@ -149,7 +148,7 @@ function NewSaleContent() {
     const fetchProduct = async () => {
       try {
         const { data: items, error } = await (supabase.from("inventory") as any)
-          .select("id, imei, purchase_price, suggested_price, battery_health, catalog:catalog_id(model, variant, storage, color)")
+          .select("id, imei, purchase_price, suggested_price, battery_health, condition_notes, catalog:catalog_id(model, variant, storage, color)")
           .eq("id", preselectId)
           .single()
 
@@ -163,11 +162,9 @@ function NewSaleContent() {
           return
         }
 
-        const cat = items.catalog || {}
-        const modelName = `${cat.model || ""}${cat.variant ? " " + cat.variant : ""}${cat.storage ? " " + cat.storage : ""} ${cat.color || ""}`.trim()
         const product = {
           id: items.id,
-          name: modelName || "Produto sem nome",
+          name: getProductName(items),
           imei: items.imei || "",
           cost: items.purchase_price || 0,
           suggested: items.suggested_price || 0,
