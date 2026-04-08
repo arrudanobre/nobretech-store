@@ -6,12 +6,12 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { CategoryIcon } from "@/components/ui/icon-helpers"
-import { formatBRL, daysBetween } from "@/lib/helpers"
+import { formatBRL, daysBetween, getSupabaseThumbnail } from "@/lib/helpers"
 import { CATEGORIES, GRADES } from "@/lib/constants"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/toaster"
 import { useBadgeCount } from "@/components/layout/sidebar"
-import { Plus, Search, Package, Loader2, Trash2 } from "lucide-react"
+import { Plus, Search, Package, Loader2, Trash2, CameraOff } from "lucide-react"
 
 interface InventoryItem {
   id: string
@@ -189,10 +189,20 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      {/* Loading state */}
+      {/* Loading state using Skeletons */}
       {loading && (
-        <div className="flex items-center justify-center py-16">
-          <Loader2 className="w-8 h-8 animate-spin text-royal-500" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+          {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
+            <div key={i} className="bg-card rounded-2xl border border-gray-100 p-3 h-[380px] animate-pulse">
+              <div className="aspect-[4/3] bg-gray-100 rounded-xl mb-3" />
+              <div className="h-4 bg-gray-100 rounded w-3/4 mb-2" />
+              <div className="h-3 bg-gray-100 rounded w-1/2 mb-4" />
+              <div className="flex justify-between mt-auto">
+                <div className="h-8 bg-gray-50 rounded w-20" />
+                <div className="h-8 bg-gray-50 rounded w-20" />
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
@@ -240,40 +250,55 @@ export default function InventoryPage() {
                 className="group bg-card rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-all overflow-hidden animate-fade-in relative"
               >
                 <Link href={`/estoque/${item.id}`} className="block">
-                {/* Photo */}
-                <div className="aspect-[4/3] relative">
+                {/* Photo (Optimized: Single Image with Lazy Loading) */}
+                <div className="aspect-[4/3] relative bg-gray-50">
                   {item.photos && item.photos.length > 0 ? (
-                    <PhotoCarousel photos={item.photos} alt={catalogName}>
+                    <div className="relative w-full h-full overflow-hidden">
+                      <img 
+                        src={getSupabaseThumbnail(item.photos[0], 600)} 
+                        alt={catalogName}
+                        loading="lazy"
+                        decoding="async"
+                        className="w-full h-full object-cover"
+                      />
                       {item.status === "sold" && (
-                        <div className="absolute inset-0 bg-black/30 flex items-center justify-center z-10">
-                          <span className="bg-white text-navy-900 px-3 py-1 rounded-lg text-xs font-bold -rotate-12">
+                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center z-10 transition-colors group-hover:bg-black/20">
+                          <span className="bg-white text-navy-900 px-3 py-1 rounded-lg text-xs font-bold shadow-lg -rotate-12">
                             VENDIDO
                           </span>
                         </div>
                       )}
                       {item.status === "under_repair" && (
-                        <div className="absolute inset-0 bg-red-900/20 flex items-center justify-center z-10">
-                          <span className="bg-danger-500 text-white px-3 py-1 rounded-lg text-xs font-bold">
+                        <div className="absolute inset-0 bg-red-900/10 flex items-center justify-center z-10">
+                          <span className="bg-danger-500 text-white px-3 py-1 rounded-lg text-xs font-bold shadow-lg">
                             EM REPARO
                           </span>
                         </div>
                       )}
                       {item.grade && (
-                        <span className={`absolute top-2 right-2 px-2 py-0.5 rounded-md text-xs font-bold z-10 ${gradeInfo?.color}`}>
+                        <span className={`absolute top-2 right-2 px-2 py-0.5 rounded-md text-[10px] font-bold z-10 shadow-sm ${gradeInfo?.color}`}>
                           {item.grade}
                         </span>
                       )}
                       {days > 30 && item.status === "in_stock" && (
-                        <span className="absolute top-2 left-2 bg-danger-500 text-white px-2 py-0.5 rounded-md text-[10px] font-bold z-10">
+                        <span className="absolute top-2 left-2 bg-danger-500 text-white px-2 py-0.5 rounded-md text-[9px] font-bold z-10 shadow-sm">
                           {days} dias
                         </span>
                       )}
-                    </PhotoCarousel>
+                      {item.photos.length > 1 && (
+                        <div className="absolute bottom-2 right-2 bg-black/60 text-white text-[9px] px-1.5 py-0.5 rounded-md font-medium backdrop-blur-sm">
+                          1 / {item.photos.length}
+                        </div>
+                      )}
+                    </div>
                   ) : (
-                    <div className="bg-gradient-to-br from-gray-100 to-gray-200 w-full h-full flex items-center justify-center">
-                      <span className="text-4xl">
-                        {item.catalog || item.product_catalog ? <CategoryIcon category={(item.catalog || item.product_catalog).category} className="!w-8 !h-8" /> : "📦"}
-                      </span>
+                    <div className="w-full h-full flex flex-col items-center justify-center text-gray-300 gap-2">
+                      {item.catalog || item.product_catalog ? (
+                        <CategoryIcon category={(item.catalog || item.product_catalog).category} className="!w-10 !h-10 opacity-20" />
+                      ) : (
+                        <CameraOff className="w-8 h-8 opacity-20" />
+                      )}
+                      <span className="text-[10px] font-medium uppercase tracking-widest opacity-40">Sem Foto</span>
                     </div>
                   )}
                 </div>

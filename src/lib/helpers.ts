@@ -293,3 +293,13 @@ export function getAIScoreColor(score: number): string {
   if (score >= 5) return 'bg-amber-500 text-white'
   return 'bg-red-500 text-white'
 }
+
+/** Get Supabase image thumbnail URL (if transformations are enabled) */
+export function getSupabaseThumbnail(url: string | null, width: number = 400): string {
+  if (!url) return ""
+  if (url.includes('supabase.co')) {
+    // If it's a public URL from Supabase, we can try to append transformation params
+    return `${url}?width=${width}&quality=80`
+  }
+  return url
+}
