@@ -650,20 +650,40 @@ export default function AddProductPage() {
           {formData.purchase_price && (
             <div className="bg-surface rounded-xl p-4 space-y-3">
               <div className="flex items-center justify-between">
-                <label className="text-sm font-medium text-navy-900">Margem Desejada</label>
-                <Badge variant="blue">{formData.margin}%</Badge>
+                <label className="text-sm font-medium text-navy-900">Preço de Venda Sugerido</label>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs text-gray-400">R$</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={priceTable[0]?.price || ""}
+                      onChange={(e) => {
+                        const newPrice = parseFloat(e.target.value) || 0
+                        const cost = parseFloat(formData.purchase_price) || 0
+                        if (cost > 0) {
+                          const newMargin = Math.max(0, Math.round(((newPrice - cost) / cost) * 100)).toString()
+                          setFormData((prev) => ({ ...prev, margin: newMargin }))
+                        }
+                      }}
+                      className="w-24 h-8 text-center rounded-lg border border-gray-200 text-sm font-semibold px-2"
+                    />
+                  </div>
+                  <Badge variant="blue">Margem: {formData.margin}%</Badge>
+                </div>
               </div>
               <input
                 type="range"
-                min="5"
-                max="50"
+                min="0"
+                max="100"
                 value={formData.margin}
                 onChange={(e) => updateField("margin", e.target.value)}
                 className="w-full accent-royal-500"
               />
               <div className="flex justify-between text-xs text-gray-400">
-                <span>5%</span>
-                <span>50%</span>
+                <span>0%</span>
+                <span>100%</span>
               </div>
             </div>
           )}
