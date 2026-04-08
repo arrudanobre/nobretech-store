@@ -114,7 +114,7 @@ export default function SalesPage() {
               <button
                 key={s.id}
                 onClick={() => router.push(`/vendas/${s.id}`)}
-                className="w-full bg-card rounded-xl border border-gray-100 p-4 shadow-sm hover:shadow transition-shadow text-left"
+                className="w-full bg-card rounded-xl border border-gray-100 p-4 shadow-sm hover:shadow-md hover:border-royal-200/50 hover:bg-gray-50/30 transition-all text-left cursor-pointer active:scale-[0.995]"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
