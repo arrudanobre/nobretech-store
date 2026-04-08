@@ -1,0 +1,669 @@
+export type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: Json | undefined }
+  | Json[];
+
+export interface Database {
+  public: {
+    Tables: {
+      companies: {
+        Row: {
+          id: string;
+          name: string;
+          slug: string;
+          logo_url: string | null;
+          settings: Json | null;
+          plan: string | null;
+          created_at: string;
+          updated_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          name: string;
+          slug: string;
+          logo_url?: string | null;
+          settings?: Json | null;
+          plan?: string | null;
+          created_at?: string;
+          updated_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          name?: string;
+          slug?: string;
+          logo_url?: string | null;
+          settings?: Json | null;
+          plan?: string | null;
+          created_at?: string;
+          updated_at?: string | null;
+        };
+      };
+      users: {
+        Row: {
+          id: string;
+          company_id: string | null;
+          full_name: string | null;
+          role: string | null;
+          avatar_url: string | null;
+          created_at: string | null;
+        };
+        Insert: {
+          id: string;
+          company_id?: string | null;
+          full_name?: string | null;
+          role?: string | null;
+          avatar_url?: string | null;
+          created_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          company_id?: string | null;
+          full_name?: string | null;
+          role?: string | null;
+          avatar_url?: string | null;
+          created_at?: string | null;
+        };
+      };
+      suppliers: {
+        Row: {
+          id: string;
+          company_id: string | null;
+          name: string;
+          contact: string | null;
+          phone: string | null;
+          email: string | null;
+          city: string | null;
+          notes: string | null;
+          rating: number | null;
+          created_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          company_id?: string | null;
+          name: string;
+          contact?: string | null;
+          phone?: string | null;
+          email?: string | null;
+          city?: string | null;
+          notes?: string | null;
+          rating?: number | null;
+          created_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          company_id?: string | null;
+          name?: string;
+          contact?: string | null;
+          phone?: string | null;
+          email?: string | null;
+          city?: string | null;
+          notes?: string | null;
+          rating?: number | null;
+          created_at?: string | null;
+        };
+      };
+      product_catalog: {
+        Row: {
+          id: string;
+          category: string;
+          brand: string;
+          model: string;
+          variant: string | null;
+          storage: string | null;
+          color: string | null;
+          color_hex: string | null;
+          year: number | null;
+          specs: Json | null;
+          created_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          category: string;
+          brand: string;
+          model: string;
+          variant?: string | null;
+          storage?: string | null;
+          color?: string | null;
+          color_hex?: string | null;
+          year?: number | null;
+          specs?: Json | null;
+          created_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          category?: string;
+          brand?: string;
+          model?: string;
+          variant?: string | null;
+          storage?: string | null;
+          color?: string | null;
+          color_hex?: string | null;
+          year?: number | null;
+          specs?: Json | null;
+          created_at?: string | null;
+        };
+      };
+      checklists: {
+        Row: {
+          id: string;
+          company_id: string | null;
+          inventory_id: string | null;
+          device_type: string;
+          items: Json;
+          completed_at: string | null;
+          completed_by: string | null;
+          pdf_url: string | null;
+          created_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          company_id?: string | null;
+          inventory_id?: string | null;
+          device_type: string;
+          items: Json;
+          completed_at?: string | null;
+          completed_by?: string | null;
+          pdf_url?: string | null;
+          created_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          company_id?: string | null;
+          inventory_id?: string | null;
+          device_type?: string;
+          items?: Json;
+          completed_at?: string | null;
+          completed_by?: string | null;
+          pdf_url?: string | null;
+          created_at?: string | null;
+        };
+      };
+      inventory: {
+        Row: {
+          id: string;
+          company_id: string;
+          catalog_id: string | null;
+          imei: string | null;
+          serial_number: string | null;
+          imei2: string | null;
+          grade: string | null;
+          condition_notes: string | null;
+          purchase_price: number;
+          purchase_date: string;
+          supplier_id: string | null;
+          suggested_price: number | null;
+          status: string | null;
+          checklist_id: string | null;
+          photos: string[] | null;
+          ios_version: string | null;
+          battery_health: number | null;
+          notes: string | null;
+          created_at: string | null;
+          updated_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          company_id: string;
+          catalog_id?: string | null;
+          imei?: string | null;
+          serial_number?: string | null;
+          imei2?: string | null;
+          grade?: string | null;
+          condition_notes?: string | null;
+          purchase_price: number;
+          purchase_date: string;
+          supplier_id?: string | null;
+          suggested_price?: number | null;
+          status?: string | null;
+          checklist_id?: string | null;
+          photos?: string[] | null;
+          ios_version?: string | null;
+          battery_health?: number | null;
+          notes?: string | null;
+          created_at?: string | null;
+          updated_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          company_id?: string;
+          catalog_id?: string | null;
+          imei?: string | null;
+          serial_number?: string | null;
+          imei2?: string | null;
+          grade?: string | null;
+          condition_notes?: string | null;
+          purchase_price?: number;
+          purchase_date?: string;
+          supplier_id?: string | null;
+          suggested_price?: number | null;
+          status?: string | null;
+          checklist_id?: string | null;
+          photos?: string[] | null;
+          ios_version?: string | null;
+          battery_health?: number | null;
+          notes?: string | null;
+          created_at?: string | null;
+          updated_at?: string | null;
+        };
+      };
+      customers: {
+        Row: {
+          id: string;
+          company_id: string | null;
+          full_name: string;
+          cpf: string | null;
+          phone: string | null;
+          email: string | null;
+          address: string | null;
+          notes: string | null;
+          created_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          company_id?: string | null;
+          full_name: string;
+          cpf?: string | null;
+          phone?: string | null;
+          email?: string | null;
+          address?: string | null;
+          notes?: string | null;
+          created_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          company_id?: string | null;
+          full_name?: string;
+          cpf?: string | null;
+          phone?: string | null;
+          email?: string | null;
+          address?: string | null;
+          notes?: string | null;
+          created_at?: string | null;
+        };
+      };
+      trade_ins: {
+        Row: {
+          id: string;
+          company_id: string | null;
+          catalog_id: string | null;
+          imei: string | null;
+          serial_number: string | null;
+          grade: string | null;
+          condition_notes: string | null;
+          trade_in_value: number;
+          checklist_data: Json | null;
+          photos: string[] | null;
+          status: string | null;
+          linked_inventory_id: string | null;
+          notes: string | null;
+          received_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          company_id?: string | null;
+          catalog_id?: string | null;
+          imei?: string | null;
+          serial_number?: string | null;
+          grade?: string | null;
+          condition_notes?: string | null;
+          trade_in_value: number;
+          checklist_data?: Json | null;
+          photos?: string[] | null;
+          status?: string | null;
+          linked_inventory_id?: string | null;
+          notes?: string | null;
+          received_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          company_id?: string | null;
+          catalog_id?: string | null;
+          imei?: string | null;
+          serial_number?: string | null;
+          grade?: string | null;
+          condition_notes?: string | null;
+          trade_in_value?: number;
+          checklist_data?: Json | null;
+          photos?: string[] | null;
+          status?: string | null;
+          linked_inventory_id?: string | null;
+          notes?: string | null;
+          received_at?: string | null;
+        };
+      };
+      sales: {
+        Row: {
+          id: string;
+          company_id: string | null;
+          inventory_id: string;
+          customer_id: string | null;
+          sale_price: number;
+          payment_method: string | null;
+          card_fee_pct: number | null;
+          net_amount: number | null;
+          has_trade_in: boolean | null;
+          trade_in_id: string | null;
+          warranty_months: number | null;
+          warranty_start: string | null;
+          warranty_end: string | null;
+          warranty_pdf_url: string | null;
+          sale_date: string;
+          notes: string | null;
+          created_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          company_id?: string | null;
+          inventory_id: string;
+          customer_id?: string | null;
+          sale_price: number;
+          payment_method?: string | null;
+          card_fee_pct?: number | null;
+          net_amount?: number | null;
+          has_trade_in?: boolean | null;
+          trade_in_id?: string | null;
+          warranty_months?: number | null;
+          warranty_start?: string | null;
+          warranty_end?: string | null;
+          warranty_pdf_url?: string | null;
+          sale_date?: string;
+          notes?: string | null;
+          created_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          company_id?: string | null;
+          inventory_id?: string;
+          customer_id?: string | null;
+          sale_price?: number;
+          payment_method?: string | null;
+          card_fee_pct?: number | null;
+          net_amount?: number | null;
+          has_trade_in?: boolean | null;
+          trade_in_id?: string | null;
+          warranty_months?: number | null;
+          warranty_start?: string | null;
+          warranty_end?: string | null;
+          warranty_pdf_url?: string | null;
+          sale_date?: string;
+          notes?: string | null;
+          created_at?: string | null;
+        };
+      };
+      warranties: {
+        Row: {
+          id: string;
+          company_id: string | null;
+          sale_id: string | null;
+          inventory_id: string | null;
+          customer_id: string | null;
+          start_date: string;
+          end_date: string;
+          status: string | null;
+          pdf_url: string | null;
+          notes: string | null;
+        };
+        Insert: {
+          id?: string;
+          company_id?: string | null;
+          sale_id?: string | null;
+          inventory_id?: string | null;
+          customer_id?: string | null;
+          start_date: string;
+          end_date: string;
+          status?: string | null;
+          pdf_url?: string | null;
+          notes?: string | null;
+        };
+        Update: {
+          id?: string;
+          company_id?: string | null;
+          sale_id?: string | null;
+          inventory_id?: string | null;
+          customer_id?: string | null;
+          start_date?: string;
+          end_date?: string;
+          status?: string | null;
+          pdf_url?: string | null;
+          notes?: string | null;
+        };
+      };
+      problems: {
+        Row: {
+          id: string;
+          company_id: string | null;
+          sale_id: string | null;
+          inventory_id: string | null;
+          customer_id: string | null;
+          type: string | null;
+          description: string;
+          reported_date: string;
+          cause: string | null;
+          action_plan: string | null;
+          action_deadline: string | null;
+          resolved_date: string | null;
+          resolution_notes: string | null;
+          tags: string[] | null;
+          status: string | null;
+          priority: string | null;
+          refund_amount: number | null;
+          repair_cost: number | null;
+          created_by: string | null;
+          created_at: string | null;
+          updated_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          company_id?: string | null;
+          sale_id?: string | null;
+          inventory_id?: string | null;
+          customer_id?: string | null;
+          type?: string | null;
+          description: string;
+          reported_date?: string;
+          cause?: string | null;
+          action_plan?: string | null;
+          action_deadline?: string | null;
+          resolved_date?: string | null;
+          resolution_notes?: string | null;
+          tags?: string[] | null;
+          status?: string | null;
+          priority?: string | null;
+          refund_amount?: number | null;
+          repair_cost?: number | null;
+          created_by?: string | null;
+          created_at?: string | null;
+          updated_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          company_id?: string | null;
+          sale_id?: string | null;
+          inventory_id?: string | null;
+          customer_id?: string | null;
+          type?: string | null;
+          description?: string;
+          reported_date?: string;
+          cause?: string | null;
+          action_plan?: string | null;
+          action_deadline?: string | null;
+          resolved_date?: string | null;
+          resolution_notes?: string | null;
+          tags?: string[] | null;
+          status?: string | null;
+          priority?: string | null;
+          refund_amount?: number | null;
+          repair_cost?: number | null;
+          created_by?: string | null;
+          created_at?: string | null;
+          updated_at?: string | null;
+        };
+      };
+      quotes: {
+        Row: {
+          id: string;
+          company_id: string | null;
+          supplier_id: string | null;
+          catalog_id: string | null;
+          device_desc: string;
+          grade: string | null;
+          quoted_price: number;
+          quantity: number | null;
+          valid_until: string | null;
+          notes: string | null;
+          ai_analysis: string | null;
+          ai_score: number | null;
+          status: string | null;
+          quoted_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          company_id?: string | null;
+          supplier_id?: string | null;
+          catalog_id?: string | null;
+          device_desc: string;
+          grade?: string | null;
+          quoted_price: number;
+          quantity?: number | null;
+          valid_until?: string | null;
+          notes?: string | null;
+          ai_analysis?: string | null;
+          ai_score?: number | null;
+          status?: string | null;
+          quoted_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          company_id?: string | null;
+          supplier_id?: string | null;
+          catalog_id?: string | null;
+          device_desc?: string;
+          grade?: string | null;
+          quoted_price?: number;
+          quantity?: number | null;
+          valid_until?: string | null;
+          notes?: string | null;
+          ai_analysis?: string | null;
+          ai_score?: number | null;
+          status?: string | null;
+          quoted_at?: string | null;
+        };
+      };
+      financial_settings: {
+        Row: {
+          id: string;
+          company_id: string | null;
+          default_margin_pct: number | null;
+          debit_fee_pct: number | null;
+          credit_1x_fee_pct: number | null;
+          credit_2x_fee_pct: number | null;
+          credit_3x_fee_pct: number | null;
+          credit_4x_fee_pct: number | null;
+          credit_5x_fee_pct: number | null;
+          credit_6x_fee_pct: number | null;
+          credit_7x_fee_pct: number | null;
+          credit_8x_fee_pct: number | null;
+          credit_9x_fee_pct: number | null;
+          credit_10x_fee_pct: number | null;
+          credit_11x_fee_pct: number | null;
+          credit_12x_fee_pct: number | null;
+          pix_fee_pct: number | null;
+          cash_discount_pct: number | null;
+          default_warranty_months: number | null;
+          updated_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          company_id?: string | null;
+          default_margin_pct?: number | null;
+          debit_fee_pct?: number | null;
+          credit_1x_fee_pct?: number | null;
+          credit_2x_fee_pct?: number | null;
+          credit_3x_fee_pct?: number | null;
+          credit_4x_fee_pct?: number | null;
+          credit_5x_fee_pct?: number | null;
+          credit_6x_fee_pct?: number | null;
+          credit_7x_fee_pct?: number | null;
+          credit_8x_fee_pct?: number | null;
+          credit_9x_fee_pct?: number | null;
+          credit_10x_fee_pct?: number | null;
+          credit_11x_fee_pct?: number | null;
+          credit_12x_fee_pct?: number | null;
+          pix_fee_pct?: number | null;
+          cash_discount_pct?: number | null;
+          default_warranty_months?: number | null;
+          updated_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          company_id?: string | null;
+          default_margin_pct?: number | null;
+          debit_fee_pct?: number | null;
+          credit_1x_fee_pct?: number | null;
+          credit_2x_fee_pct?: number | null;
+          credit_3x_fee_pct?: number | null;
+          credit_4x_fee_pct?: number | null;
+          credit_5x_fee_pct?: number | null;
+          credit_6x_fee_pct?: number | null;
+          credit_7x_fee_pct?: number | null;
+          credit_8x_fee_pct?: number | null;
+          credit_9x_fee_pct?: number | null;
+          credit_10x_fee_pct?: number | null;
+          credit_11x_fee_pct?: number | null;
+          credit_12x_fee_pct?: number | null;
+          pix_fee_pct?: number | null;
+          cash_discount_pct?: number | null;
+          default_warranty_months?: number | null;
+          updated_at?: string | null;
+        };
+      };
+      audit_logs: {
+        Row: {
+          id: string;
+          company_id: string | null;
+          user_id: string | null;
+          action: string | null;
+          table_name: string | null;
+          record_id: string | null;
+          old_data: Json | null;
+          new_data: Json | null;
+          ip_address: unknown | null;
+          user_agent: string | null;
+          created_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          company_id?: string | null;
+          user_id: string | null;
+          action?: string | null;
+          table_name?: string | null;
+          record_id?: string | null;
+          old_data?: Json | null;
+          new_data?: Json | null;
+          ip_address?: unknown | null;
+          user_agent?: string | null;
+          created_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          company_id?: string | null;
+          user_id: string | null;
+          action?: string | null;
+          table_name?: string | null;
+          record_id?: string | null;
+          old_data?: Json | null;
+          new_data?: Json | null;
+          ip_address?: unknown | null;
+          user_agent?: string | null;
+          created_at?: string | null;
+        };
+      };
+    };
+    Views: Record<never, never>;
+    Functions: Record<never, never>;
+    Enums: Record<never, never>;
+  };
+}

@@ -1,0 +1,131 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import Link from "next/link"
+import { useRouter } from "next/navigation"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
+import { formatBRL, formatDate, daysBetween } from "@/lib/helpers"
+import { supabase } from "@/lib/supabase"
+import { Plus, Search } from "lucide-react"
+
+export default function SalesPage() {
+  const [search, setSearch] = useState("")
+  const [sales, setSales] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const router = useRouter()
+
+  useEffect(() => {
+    const fetchSales = async () => {
+      try {
+        const { data, error } = await supabase
+          .from("sales")
+          .select("*, customers(full_name, cpf), inventory(*, product_catalog(*))")
+          .order("sale_date", { ascending: false })
+
+        if (error) throw error
+        setSales(data || [])
+      } catch (err) {
+        console.error("Erro ao carregar vendas:", err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    fetchSales()
+  }, [])
+
+  const filtered = sales.filter((s) => {
+    const productName = s.inventory?.product_catalog?.model || ""
+    const customerName = s.customers?.full_name || ""
+    return (
+      !search ||
+      productName.toLowerCase().includes(search.toLowerCase()) ||
+      customerName.toLowerCase().includes(search.toLowerCase())
+    )
+  })
+
+  const totalMonth = sales
+    .filter((s) => {
+      const d = daysBetween(s.sale_date.slice(0, 7) + "-01")
+      return d < 31
+    })
+    .reduce((sum, s) => sum + Number(s.sale_price), 0)
+
+  return (
+    <div className="space-y-4 animate-fade-in">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-display font-bold text-navy-900 font-syne">Vendas</h2>
+          <p className="text-sm text-gray-500">
+            {sales.length} vendas · {loading ? "carregando..." : `${formatBRL(totalMonth)} no mês`}
+          </p>
+        </div>
+        <Link href="/vendas/nova">
+          <Button variant="primary" size="sm">
+            <Plus className="w-4 h-4" /> Nova Venda
+          </Button>
+        </Link>
+      </div>
+
+      <Input
+        placeholder="Buscar por produto ou cliente…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        icon={<Search className="w-4 h-4" />}
+      />
+
+      {loading ? (
+        <div className="text-center py-12 text-gray-400">Carregando vendas...</div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-12">
+          <p className="text-gray-400 mb-3">Nenhuma venda encontrada.</p>
+          <Link href="/vendas/nova">
+            <Button variant="primary" size="sm">
+              <Plus className="w-4 h-4" /> Nova Venda
+            </Button>
+          </Link>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {filtered.map((s) => {
+            const customerName = s.customers?.full_name || "—"
+            const catalog = s.inventory?.product_catalog || {}
+            const productName = `${catalog.model || "Produto"} ${catalog.variant || ""} ${catalog.storage || ""} ${catalog.color || ""}`.trim()
+            const warrantyDays = daysBetween(s.warranty_end)
+
+            return (
+              <button
+                key={s.id}
+                onClick={() => router.push(`/vendas/${s.id}`)}
+                className="w-full bg-card rounded-xl border border-gray-100 p-4 shadow-sm hover:shadow transition-shadow text-left"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-sm text-navy-900 truncate">{productName}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {customerName} · {s.payment_method ? s.payment_method.replace("credit_", "Crédito ").replace("debit", "Débito").replace("pix", "PIX").replace("cash", "Dinheiro") : "—"} · {formatDate(s.sale_date)}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="font-bold text-navy-900">{formatBRL(s.sale_price)}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 mt-2">
+                  <Badge
+                    variant={
+                      warrantyDays > 15 ? "green" : warrantyDays > 0 ? "yellow" : "red"
+                    }
+                    dot
+                  >
+                    Garantia: {Math.max(0, warrantyDays)} dias
+                  </Badge>
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
