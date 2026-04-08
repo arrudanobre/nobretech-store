@@ -56,13 +56,13 @@ export default function SupplierPricesPage() {
     }
     try {
       // Fetch company_id from users table
-      const { data: userData } = await supabase
+      const { data: userData } = await (supabase
         .from("users")
         .select("company_id")
-        .single()
+        .single() as any)
       const companyId = userData?.company_id
 
-      const { error } = await supabase.from("supplier_prices").insert({
+      const { error } = await ((supabase.from("supplier_prices") as any).insert({
         supplier_name: entry.supplier_name || null,
         category: entry.category,
         model: entry.model,
@@ -71,7 +71,7 @@ export default function SupplierPricesPage() {
         price: parseFloat(entry.price),
         source_url: entry.source_url || null,
         company_id: companyId,
-      })
+      }))
       if (error) throw error
       toast({ title: "Preço adicionado!", type: "success" })
       setEntry({ supplier_name: "", category: "", model: "", storage: "", color: "", price: "", source_url: "" })
@@ -192,13 +192,13 @@ export default function SupplierPricesPage() {
 
     try {
       // Fetch company_id from users table
-      const { data: userData } = await supabase
+      const { data: userData } = await (supabase
         .from("users")
         .select("company_id")
-        .single()
+        .single() as any)
       const companyId = userData?.company_id
 
-      const { error } = await supabase.from("supplier_prices").insert(
+      const { error } = await ((supabase.from("supplier_prices") as any).insert(
         items.map((item) => ({
           category: "iphone",
           model: item.model,
@@ -208,7 +208,7 @@ export default function SupplierPricesPage() {
           notes: item.grade ? `Grade: ${item.grade}` : null,
           company_id: companyId || null,
         }))
-      )
+      ))
       if (error) throw error
       toast({ title: `${items.length} preços importados!`, type: "success" })
       setBulkText("")

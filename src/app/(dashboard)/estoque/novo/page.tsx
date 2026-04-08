@@ -189,13 +189,13 @@ export default function AddProductPage() {
   useEffect(() => {
     async function fetchSuppliers() {
       setLoadingSuppliers(true)
-      const { data, error } = await supabase
-        .from("suppliers")
+      const { data, error } = await (supabase
+        .from("suppliers") as any)
         .select("id, name, city")
         .order("name", { ascending: true })
       
       if (!error && data) {
-        setSuppliers(data.map(s => ({
+        setSuppliers((data as any[]).map((s: any) => ({
           label: `${s.name}${s.city ? ` — ${s.city}` : ""}`,
           value: s.id
         })))
@@ -218,8 +218,8 @@ export default function AddProductPage() {
       }
 
       // Get company ID
-      const { data: company } = await supabase
-        .from("companies")
+      const { data: company } = await (supabase
+        .from("companies") as any)
         .select("id")
         .single()
 
@@ -249,8 +249,8 @@ export default function AddProductPage() {
       if (checklistError) throw checklistError
 
       // Find or create product catalog entry
-      const { data: catalogEntries } = await supabase
-        .from("product_catalog")
+      const { data: catalogEntries } = await (supabase
+        .from("product_catalog") as any)
         .select("id")
         .eq("category", category)
         .eq("model", selectedModel.name)

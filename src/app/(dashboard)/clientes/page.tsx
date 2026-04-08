@@ -24,17 +24,17 @@ export default function CustomersPage() {
 
   const fetchCustomers = async () => {
     try {
-      const { data: customersData, error: customersError } = await supabase
-        .from("customers")
+      const { data: customersData, error: customersError } = await (supabase
+        .from("customers") as any)
         .select("id, full_name, cpf, phone, email, notes, created_at")
         .order("created_at", { ascending: false })
 
       if (customersError) throw customersError
 
       // Fetch sales count per customer
-      const { data: salesData } = await supabase
-        .from("sales")
-        .select("customer_id")
+      const { data: salesData } = await (supabase
+        .from("sales") as any)
+        .select("customer_id, sale_price")
 
       const salesByCustomer: Record<string, number> = {}
       salesData?.forEach((s: any) => {
@@ -42,8 +42,8 @@ export default function CustomersPage() {
       })
 
       // Fetch active warranties per customer
-      const { data: warrantiesData } = await supabase
-        .from("warranties")
+      const { data: warrantiesData } = await (supabase
+        .from("warranties") as any)
         .select("customer_id, status")
         .eq("status", "active")
 
@@ -53,8 +53,8 @@ export default function CustomersPage() {
       })
 
       // Fetch last purchase date per customer
-      const { data: lastSales } = await supabase
-        .from("sales")
+      const { data: lastSales } = await (supabase
+        .from("sales") as any)
         .select("customer_id, sale_date")
         .order("sale_date", { ascending: false })
 
@@ -106,8 +106,8 @@ export default function CustomersPage() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error("Não autenticado")
 
-      const { data: userData } = await supabase
-        .from("users")
+      const { data: userData } = await (supabase
+        .from("users") as any)
         .select("company_id")
         .eq("id", user.id)
         .single()
@@ -116,8 +116,8 @@ export default function CustomersPage() {
 
       // Check duplicate CPF
       if (form.cpf && form.cpf.length >= 14) {
-        const { data: existing } = await supabase
-          .from("customers")
+        const { data: existing } = await (supabase
+          .from("customers") as any)
           .select("id")
           .match({ cpf: form.cpf, company_id: userData.company_id })
           .maybeSingle()
@@ -129,8 +129,8 @@ export default function CustomersPage() {
         }
       }
 
-      const { error } = await supabase
-        .from("customers")
+      const { error } = await ((supabase
+        .from("customers") as any)
         .insert({
           company_id: userData.company_id,
           full_name: form.full_name.trim(),
@@ -138,7 +138,7 @@ export default function CustomersPage() {
           phone: form.phone || null,
           email: form.email || null,
           notes: form.notes || null,
-        })
+        }))
 
       if (error) throw error
 

@@ -36,7 +36,7 @@ export function buildPriceTable(cost: number, marginPct: number, settings: Parti
 
   return PAYMENT_METHODS.map((m) => {
     const feeKey = getFeeKey(m.value)
-    const fee = Number(settings[feeKey] ?? 0)
+    const fee = Number((settings as any)[feeKey] ?? 0)
     const price = fee > 0 ? calcPrice(targetNet, fee) : targetNet
     const installments = m.maxInstallments > 1 ? m.maxInstallments : 1
     const installmentValue = price / installments

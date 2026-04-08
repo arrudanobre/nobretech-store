@@ -62,8 +62,8 @@ export default function FinancePage() {
   useEffect(() => {
     const fetchSettings = async () => {
       try {
-        const { data, error } = await supabase
-          .from("financial_settings")
+        const { data, error } = await (supabase
+          .from("financial_settings") as any)
           .select("*")
           .limit(1)
         if (!error && data && data.length > 0) {
@@ -101,8 +101,8 @@ export default function FinancePage() {
     setIsSaving(true)
     try {
       // Try to update existing record, insert if none exists
-      const { error } = await supabase
-        .from("financial_settings")
+      const { error } = await (supabase
+        .from("financial_settings") as any)
         .upsert({
           debit_fee_pct: settings.debit_fee_pct,
           credit_1x_fee_pct: settings.credit_1x_fee_pct,

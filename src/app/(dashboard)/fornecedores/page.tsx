@@ -40,7 +40,6 @@ export default function SuppliersPage() {
   const [showModal, setShowModal] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  // Form State
   const [formData, setFormData] = useState({
     name: "",
     contact: "",
@@ -51,11 +50,10 @@ export default function SuppliersPage() {
     rating: 5
   })
 
-  // Load suppliers
   const loadSuppliers = async () => {
     setLoading(true)
-    const { data, error } = await supabase
-      .from("suppliers")
+    const { data, error } = await (supabase
+      .from("suppliers") as any)
       .select("*")
       .order("name", { ascending: true })
 
@@ -71,16 +69,14 @@ export default function SuppliersPage() {
     loadSuppliers()
   }, [])
 
-  // Handle Save
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!formData.name) return toast.error("Nome é obrigatório")
 
     setSaving(true)
     
-    // Pegar o company_id dinamicamente da tabela de empresas
-    const { data: companies, error: companyError } = await supabase
-      .from("companies")
+    const { data: companies, error: companyError } = await (supabase
+      .from("companies") as any)
       .select("id")
       .limit(1)
       .single()
@@ -90,8 +86,8 @@ export default function SuppliersPage() {
       return toast.error("Não foi possível identificar a empresa principal.")
     }
 
-    const { error } = await supabase
-      .from("suppliers")
+    const { error } = await (supabase
+      .from("suppliers") as any)
       .insert([
         {
           name: formData.name,
@@ -101,7 +97,7 @@ export default function SuppliersPage() {
           city: formData.city,
           notes: formData.notes,
           rating: formData.rating,
-          company_id: companies.id
+          company_id: (companies as any).id
         }
       ])
 
@@ -197,7 +193,6 @@ export default function SuppliersPage() {
         </div>
       )}
 
-      {/* Modal Novo Fornecedor */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-navy-900/60 backdrop-blur-sm" onClick={() => setShowModal(false)} />

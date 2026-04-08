@@ -7,6 +7,16 @@ import { BarChart3, Package, ShoppingCart, ShieldCheck, AlertTriangle, FileText,
 import { useState, useEffect, createContext, useContext, useCallback } from "react"
 import { supabase } from "@/lib/supabase"
 
+export interface NavItem {
+  label: string
+  href: string
+  icon: any
+  badge?: {
+    count: number
+    color: string
+  }
+}
+
 export interface BadgeCountContextType {
   counts: Record<string, number>
   refresh: () => void
@@ -21,7 +31,7 @@ export function useBadgeCount() {
   return useContext(BadgeCountContext)
 }
 
-const staticNavItems: Omit<NavItem, "badge"> & { badge?: { count?: number; defaultCount?: number; color: string; source?: "db"; countKey?: string } }[] = [
+const staticNavItems: (Omit<NavItem, "badge"> & { badge?: { count?: number; defaultCount?: number; color: string; source?: "db"; countKey?: string } })[] = [
   { label: "Dashboard", href: "/dashboard", icon: BarChart3 },
   { label: "Estoque", href: "/estoque", icon: Package, badge: { defaultCount: 0, color: "bg-royal-500", source: "db", countKey: "estoque" } },
   { label: "Vendas", href: "/vendas", icon: ShoppingCart },
@@ -196,16 +206,16 @@ export function DashboardLayout({ children, title }: { children: React.ReactNode
   useEffect(() => {
     const fetchCounts = async () => {
       try {
-        const { data, error } = await supabase
-          .from("inventory")
+        const { data, error } = await (supabase
+          .from("inventory") as any)
           .select("id")
           .eq("status", "in_stock")
         if (!error) {
           setCounts((prev) => ({ ...prev, estoque: data?.length ?? 0 }))
         }
 
-        const { data: warrantyData, error: warrantyError } = await supabase
-          .from("warranties")
+        const { data: warrantyData, error: warrantyError } = await (supabase
+          .from("warranties") as any)
           .select("id")
           .eq("status", "expiring_soon")
         if (!warrantyError) {

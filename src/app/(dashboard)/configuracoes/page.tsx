@@ -61,8 +61,8 @@ export default function SettingsPage() {
     async function loadData() {
       setLoading(true)
       
-      const { data: company, error: companyError } = await supabase
-        .from("companies")
+      const { data: company, error: companyError } = await (supabase
+        .from("companies") as any)
         .select("*")
         .limit(1)
         .single()
@@ -82,8 +82,8 @@ export default function SettingsPage() {
       }
 
       if (company?.id) {
-        const { data: members } = await supabase
-          .from("users")
+        const { data: members } = await (supabase
+          .from("users") as any)
           .select("id, full_name, email, role")
           .eq("company_id", company.id)
         
@@ -111,8 +111,8 @@ export default function SettingsPage() {
       warranty_template: warrantyTemplate
     }
 
-    const { error } = await supabase
-      .from("companies")
+    const { error } = await (supabase
+      .from("companies") as any)
       .update({
         name: companyName,
         settings: updatedSettings

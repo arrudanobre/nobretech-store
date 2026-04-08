@@ -66,8 +66,8 @@ export default function InventoryPage() {
       const missingCatalog = items.filter((i: InventoryItem) => !i.catalog && i.catalog_id)
       if (missingCatalog.length > 0) {
         const catalogIds = missingCatalog.map((i: InventoryItem) => i.catalog_id)
-        const { data: catalogs } = await supabase
-          .from("product_catalog")
+        const { data: catalogs } = await (supabase
+          .from("product_catalog") as any)
           .select("id, category, model, variant, storage, color, brand, year")
           .in("id", catalogIds)
 
@@ -101,7 +101,7 @@ export default function InventoryPage() {
 
     setDeletingId(id)
     try {
-      const { error } = await supabase.from("inventory").delete().eq("id", id)
+      const { error } = await (supabase.from("inventory") as any).delete().eq("id", id)
       if (error) throw error
 
       setItems((prev) => prev.filter((i) => i.id !== id))
@@ -226,7 +226,7 @@ export default function InventoryPage() {
       {!loading && filtered.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
           {filtered.map((item) => {
-            const status = statusLabels[item.status] || { label: item.status, badge: "gray" as const }
+            const status = statusLabels[item.status as any] || { label: item.status, badge: "gray" as const }
             const gradeInfo = GRADES.find((g) => g.value === item.grade)
             const days = daysBetween(item.purchase_date)
             const catalogName = item.catalog ? `${item.catalog.model}${item.catalog.variant ? " " + item.catalog.variant : ""}` : "Sem catálogo"

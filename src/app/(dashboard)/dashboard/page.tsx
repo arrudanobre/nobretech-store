@@ -31,7 +31,6 @@ import {
 } from "recharts"
 import Link from "next/link"
 
-// ── Category colours ────────────────────────────────────────────
 const CATEGORY_COLORS: Record<string, string> = {
   iPhone: "#3A6BC4",
   iPad: "#3ABF82",
@@ -58,21 +57,17 @@ function daysUntil(dateStr: string): number {
   return Math.ceil((new Date(dateStr).getTime() - Date.now()) / 86400000)
 }
 
-// ── Page ────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
 
-  // KPIs
   const [totalInvested, setTotalInvested] = useState(0)
   const [monthlySales, setMonthlySales] = useState(0)
   const [monthlyProfit, setMonthlyProfit] = useState(0)
   const [avgMargin, setAvgMargin] = useState(0)
 
-  // Charts
   const [salesChartData, setSalesChartData] = useState<{ month: string; value: number }[]>([])
   const [categoryData, setCategoryData] = useState<{ name: string; value: number; color: string }[]>([])
 
-  // Widgets
   const [expiringWarranties, setExpiringWarranties] = useState<
     { customer: string; product: string; days: number }[]
   >([])
@@ -94,7 +89,6 @@ export default function DashboardPage() {
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
       const in30Days = new Date(now.getTime() + 30 * 86400000).toISOString().split("T")[0]
 
-      // ── Run all queries in parallel ──────────────────────────
       const [
         inventoryRes,
         salesMonthRes,
@@ -104,34 +98,24 @@ export default function DashboardPage() {
         problemsRes,
         recentSalesRes,
       ] = await Promise.all([
-        // Stock: items not yet sold
-        supabase
-          .from("inventory")
+        (supabase.from("inventory") as any)
           .select("purchase_price, status")
           .in("status", ["available", "reserved", "in_stock"]),
 
-        // This month's sales with cost price joined
-        supabase
-          .from("sales")
+        (supabase.from("sales") as any)
           .select("sale_price, net_amount, created_at, inventory:inventory_id(purchase_price)")
           .gte("sale_date", startOfMonth),
 
-        // Last 6 months of sales for chart
-        supabase
-          .from("sales")
+        (supabase.from("sales") as any)
           .select("sale_price, sale_date")
           .gte("sale_date", new Date(now.getFullYear(), now.getMonth() - 5, 1).toISOString().split("T")[0])
           .order("sale_date", { ascending: true }),
 
-        // Sales with category for donut chart
-        supabase
-          .from("sales")
+        (supabase.from("sales") as any)
           .select("inventory:inventory_id(catalog:catalog_id(category))")
           .gte("sale_date", new Date(now.getFullYear(), now.getMonth() - 2, 1).toISOString().split("T")[0]),
 
-        // Warranties expiring in 30 days
-        supabase
-          .from("warranties")
+        (supabase.from("warranties") as any)
           .select("end_date, customer:customer_id(full_name), inventory:inventory_id(catalog:catalog_id(model, brand))")
           .lte("end_date", in30Days)
           .gte("end_date", now.toISOString().split("T")[0])
@@ -139,29 +123,24 @@ export default function DashboardPage() {
           .order("end_date", { ascending: true })
           .limit(5),
 
-        // Open problems
-        supabase
-          .from("problems")
+        (supabase.from("problems") as any)
           .select("priority, tags, customer:customer_id(full_name), inventory:inventory_id(catalog:catalog_id(model))")
           .neq("status", "resolved")
           .order("created_at", { ascending: false })
           .limit(6),
 
-        // Recent sales for activity feed
-        supabase
-          .from("sales")
+        (supabase.from("sales") as any)
           .select("sale_price, created_at, customer:customer_id(full_name), inventory:inventory_id(catalog:catalog_id(model, brand))")
           .order("created_at", { ascending: false })
           .limit(6),
       ])
 
-      // ── KPIs ────────────────────────────────────────────────
-      const inventory = inventoryRes.data ?? []
+      const inventory = (inventoryRes.data as any[]) ?? []
       const invested = inventory.reduce((acc, i) => acc + (i.purchase_price ?? 0), 0)
       setTotalInvested(invested)
       setStockCount(inventory.length)
 
-      const salesMonth = salesMonthRes.data ?? []
+      const salesMonth = (salesMonthRes.data as any[]) ?? []
       const totalSales = salesMonth.reduce((acc, s) => acc + (s.sale_price ?? 0), 0)
       setMonthlySales(totalSales)
 
@@ -177,8 +156,7 @@ export default function DashboardPage() {
         setAvgMargin(Math.round((totalProfit / totalSales) * 100 * 10) / 10)
       }
 
-      // ── Sales chart (last 6 months) ─────────────────────────
-      const salesLast6 = salesLast6Res.data ?? []
+      const salesLast6 = (salesLast6Res.data as any[]) ?? []
       const monthMap: Record<string, number> = {}
       for (let i = 5; i >= 0; i--) {
         const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
@@ -196,8 +174,7 @@ export default function DashboardPage() {
         }))
       )
 
-      // ── Category donut ──────────────────────────────────────
-      const catRaw = salesCategoryRes.data ?? []
+      const catRaw = (salesCategoryRes.data as any[]) ?? []
       const catCount: Record<string, number> = {}
       catRaw.forEach((s: any) => {
         const cat = s.inventory?.catalog?.category ?? "Outros"
@@ -212,8 +189,7 @@ export default function DashboardPage() {
         }))
       )
 
-      // ── Warranties ──────────────────────────────────────────
-      const warranties = warrantiesRes.data ?? []
+      const warranties = (warrantiesRes.data as any[]) ?? []
       setWarrantiesCount(warranties.length)
       setExpiringWarranties(
         warranties.map((w: any) => ({
@@ -223,8 +199,7 @@ export default function DashboardPage() {
         }))
       )
 
-      // ── Problems ────────────────────────────────────────────
-      const problems = problemsRes.data ?? []
+      const problems = (problemsRes.data as any[]) ?? []
       setProblemsCount(problems.length)
       setOpenProblems(
         problems.map((p: any) => ({
@@ -235,8 +210,7 @@ export default function DashboardPage() {
         }))
       )
 
-      // ── Recent activity (last sales) ─────────────────────────
-      const recentSales = recentSalesRes.data ?? []
+      const recentSales = (recentSalesRes.data as any[]) ?? []
       setRecentActivity(
         recentSales.map((s: any) => ({
           action: "Venda realizada",
@@ -270,7 +244,6 @@ export default function DashboardPage() {
         <KPICard title="Margem Média" value={avgMargin} icon={Percent} prefix="%" />
       </div>
 
-      {/* Alerts */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         <Link href="/garantias">
           <div className="bg-card border border-gray-100 rounded-xl p-4 shadow-sm hover:shadow transition-shadow cursor-pointer flex items-center justify-between">
@@ -316,9 +289,7 @@ export default function DashboardPage() {
         </Link>
       </div>
 
-      {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Sales Chart */}
         <div className="bg-card rounded-2xl border border-gray-100 p-5 shadow-sm">
           <h3 className="font-display font-semibold text-navy-900 mb-4 font-syne">Vendas — Últimos 6 meses</h3>
           {salesChartData.every((d) => d.value === 0) ? (
@@ -344,7 +315,6 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* Category Donut */}
         <div className="bg-card rounded-2xl border border-gray-100 p-5 shadow-sm">
           <h3 className="font-display font-semibold text-navy-900 mb-4 font-syne">Categorias Vendidas</h3>
           {categoryData.length === 0 ? (
@@ -381,9 +351,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Expiring Warranties + Recent Activity */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Expiring Warranties */}
         <div className="bg-card rounded-2xl border border-gray-100 p-5 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-display font-semibold text-navy-900 font-syne">Garantias Vencendo</h3>
@@ -410,7 +378,6 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* Recent Activity */}
         <div className="bg-card rounded-2xl border border-gray-100 p-5 shadow-sm">
           <h3 className="font-display font-semibold text-navy-900 mb-4 font-syne">Atividade Recente</h3>
           {recentActivity.length === 0 ? (
@@ -432,7 +399,6 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Open Problems */}
       {openProblems.length > 0 && (
         <div className="bg-card rounded-2xl border border-gray-100 p-5 shadow-sm">
           <div className="flex items-center justify-between mb-4">

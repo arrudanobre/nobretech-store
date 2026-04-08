@@ -19,8 +19,8 @@ export default function SalesPage() {
   useEffect(() => {
     const fetchSales = async () => {
       try {
-        const { data, error } = await supabase
-          .from("sales")
+        const { data, error } = await (supabase
+          .from("sales") as any)
           .select("*, customers(full_name, cpf), inventory(*, product_catalog(*))")
           .order("sale_date", { ascending: false })
 

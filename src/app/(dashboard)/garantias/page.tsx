@@ -29,8 +29,8 @@ export default function WarrantiesPage() {
 
   const fetchWarranties = async () => {
     try {
-      const { data, error } = await supabase
-        .from("warranties")
+      const { data, error } = await (supabase
+        .from("warranties") as any)
         .select(`
           id,
           start_date,

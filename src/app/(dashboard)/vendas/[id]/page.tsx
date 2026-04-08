@@ -33,39 +33,38 @@ export default function SaleDetailPage() {
   useEffect(() => {
     const fetchSale = async () => {
       try {
-        const { data, error } = await supabase
-          .from("sales")
+        const { data, error } = await (supabase
+          .from("sales") as any)
           .select("*")
           .eq("id", id)
           .single()
         if (error) throw error
         setSale(data)
 
-        if (data?.customer_id) {
-          const { data: c } = await supabase
-            .from("customers")
+        if ((data as any)?.customer_id) {
+          const { data: c } = await (supabase
+            .from("customers") as any)
             .select("*")
-            .eq("id", data.customer_id)
+            .eq("id", (data as any).customer_id)
             .single()
           setCustomer(c)
         }
 
-        if (data?.inventory_id) {
-          const { data: p, error: invErr } = await supabase
-            .from("inventory")
+        if ((data as any)?.inventory_id) {
+          const { data: p, error: invErr } = await (supabase
+            .from("inventory") as any)
             .select("*, product_catalog(*)")
-            .eq("id", data.inventory_id)
+            .eq("id", (data as any).inventory_id)
             .single()
 
           if (!invErr && p) {
             setProduct(p)
 
-            // Fetch checklist if linked
-            if (p?.checklist_id) {
-              const { data: cl } = await supabase
-                .from("checklists")
+            if ((p as any)?.checklist_id) {
+              const { data: cl } = await (supabase
+                .from("checklists") as any)
                 .select("*")
-                .eq("id", p.checklist_id)
+                .eq("id", (p as any).checklist_id)
                 .single()
               if (cl?.items) {
                 setChecklistData(cl)
@@ -73,8 +72,6 @@ export default function SaleDetailPage() {
                 setChecklist(items)
               }
             }
-          } else if (data.customer_id) {
-            // Fallback: fetch catalog info from customer join
           }
         }
       } catch (err) {
@@ -110,7 +107,6 @@ export default function SaleDetailPage() {
 
       const addPage = () => { doc.addPage(); y = 15 }
 
-      // ── Shared header with logo ──
       const logoUrl = `${window.location.origin}/logo-nobretech.png`
       let logoB64: string | null = null
       try {
@@ -168,25 +164,12 @@ export default function SaleDetailPage() {
         y += 6
       }
 
-      const drawBox = (h: number) => {
-        doc.setDrawColor(220, 225, 230)
-        doc.setLineWidth(0.3)
-        const boxY = y - 2
-        doc.rect(M, boxY, pageW, h, "S")
-        y = boxY
-      }
-
-      // ════════════════════════════════════════════════
-      //  LAUDO DE INSPEÇÃO
-      // ════════════════════════════════════════════════
-
       if (type === "report") {
         drawHeader("Laudo de Inspeção Técnica")
 
         const catalog = product?.product_catalog || product?.catalog || {}
         const fullModel = `${catalog.model || "—"}${catalog.variant ? " " + catalog.variant : ""} ${catalog.storage || ""} ${catalog.color || ""}`.trim()
 
-        // Device info
         drawSection("Dados do Aparelho")
         drawRow("Produto:", fullModel)
         drawRow("Categoria:", catalog.category || "—")
@@ -198,7 +181,6 @@ export default function SaleDetailPage() {
         drawRow("Bateria:", product?.battery_health ? `${product.battery_health}%` : "—")
         if (product?.condition_notes) drawRow("Observações:", product.condition_notes, false)
 
-        // Sale info
         drawSection("Dados da Venda")
         drawRow("Cliente:", customer?.full_name || "—")
         drawRow("CPF:", customer?.cpf || "—")
@@ -206,7 +188,6 @@ export default function SaleDetailPage() {
         drawRow("Pagamento:", paymentLabel())
         drawRow("Data:", formatDate(sale?.sale_date))
 
-        // Checklist
         if (checklist.length > 0) {
           drawSection("Checklist de Inspeção")
 
@@ -217,7 +198,7 @@ export default function SaleDetailPage() {
             const statusColor = item.status === "ok" ? [34, 197, 94] : item.status === "fail" ? [239, 68, 68] : item.status === "na" ? [107, 114, 128] : [200, 200, 200]
             const bgCol = item.status === "ok" ? [240, 253, 244] : item.status === "fail" ? [254, 242, 242] : item.status === "na" ? [249, 250, 251] : [255, 255, 255]
 
-            doc.setFillColor(...bgCol)
+            doc.setFillColor(bgCol[0], bgCol[1], bgCol[2])
             doc.setDrawColor(statusColor[0], statusColor[1], statusColor[2])
             doc.setLineWidth(0.2)
             const rowH = item.note ? 14 : 9
@@ -228,9 +209,8 @@ export default function SaleDetailPage() {
             doc.setTextColor(30, 30, 30)
             doc.text(label.substring(0, 80), M + 3, y + 5)
 
-            // Status badge
             const badgeX = W - M - 25
-            doc.setFillColor(...statusColor)
+            doc.setFillColor(statusColor[0], statusColor[1], statusColor[2])
             const badgeW = 22
             doc.roundedRect(badgeX - 2, y + 1.5, badgeW, 5.5, 1, 1, "F")
             doc.setTextColor(255, 255, 255)
@@ -248,20 +228,16 @@ export default function SaleDetailPage() {
             y += rowH + 2
           }
 
-          // Summary
           y += 4
           const okCount = checklist.filter((i: any) => i.status === "ok").length
           const failCount = checklist.filter((i: any) => i.status === "fail").length
-          const naCount = checklist.filter((i: any) => i.status === "na").length
           const total = checklist.length
           const pct = total > 0 ? Math.round((okCount / total) * 100) : 0
 
           drawRow("Aprovados:", `${okCount} de ${total} (${pct}%)`)
           drawRow("Falhas:", `${failCount}`)
-          drawRow("N/A:", `${naCount}`)
         }
 
-        // Footer
         y += 10
         if (y > 240) addPage()
         drawSection("Responsável Técnico")
@@ -280,17 +256,12 @@ export default function SaleDetailPage() {
         doc.save(`Laudo_Inspecao_${customer?.full_name || "cliente"}.pdf`)
       }
 
-      // ════════════════════════════════════════════════
-      //  CERTIFICADO DE GARANTIA
-      // ════════════════════════════════════════════════
-
       if (type === "warranty") {
         drawHeader("Certificado de Garantia")
 
         const catalog = product?.product_catalog || product?.catalog || {}
         const fullModel = `${catalog.model || "—"}${catalog.variant ? " " + catalog.variant : ""} ${catalog.storage || ""} ${catalog.color || ""}`.trim()
 
-        // Certificate number
         y += 4
         doc.setFontSize(9)
         doc.setFont("helvetica", "normal")
@@ -298,7 +269,6 @@ export default function SaleDetailPage() {
         doc.text(`Nº da Garantia: ${id}`, W / 2, y, { align: "center" })
         y += 10
 
-        // ── Product + Customer box ──
         drawSection("Aparelho Coberto")
         drawRow("Produto:", fullModel)
         drawRow("Grade:", product?.grade || "—")
@@ -317,7 +287,6 @@ export default function SaleDetailPage() {
         drawRow("Término:", formatDate(sale?.warranty_end))
         drawRow("Duração:", `${sale?.warranty_months} meses`)
 
-        // ── What's covered ──
         y += 6
         drawSection("O que está coberto")
 
@@ -344,7 +313,6 @@ export default function SaleDetailPage() {
           y += 9
         }
 
-        // ── What's NOT covered ──
         y += 4
         drawSection("O que NÃO está coberto")
 
@@ -373,7 +341,6 @@ export default function SaleDetailPage() {
           y += 9
         }
 
-        // ── Care tips - page 2 ──
         addPage()
         drawHeader("Certificado de Garantia — Cuidados")
 
@@ -385,133 +352,32 @@ export default function SaleDetailPage() {
         y += 8
 
         const careTips = [
-          {
-            icon: "🔋",
-            title: "Bateria",
-            tips: [
-              "Mantenha a carga entre 20% e 80% para maior durabilidade",
-              "Evite deixar carregando a noite inteira frequentemente",
-              "Use apenas carregadores originais ou certificados (MFi)",
-              "Evite usar o aparelho enquanto carrega — gera superaquecimento",
-            ],
-          },
-          {
-            icon: "📱",
-            title: "Tela e Display",
-            tips: [
-              "Use película de vidro temperado para proteger contra riscos",
-              "Limpe a tela com pano de microfibra — evite produtos químicos",
-              "Não pressione a tela com força excessiva no bolso ou bolsa",
-              "Evite exposição direta ao sol por períodos prolongados",
-            ],
-          },
-          {
-            icon: "🌡️",
-            title: "Temperatura e Ambiente",
-            tips: [
-              "Não deixe o aparelho no carro em dias quentes",
-              "Evite ambientes com umidade extrema (banheiro com vapor)",
-              "Temperatura ideal de operação: entre 0°C e 35°C",
-              "Se molhar, desligue imediatamente e procure assistência",
-            ],
-          },
-          {
-            icon: "🔄",
-            title: "Software e Actualizações",
-            tips: [
-              "Mantenha o sistema operacional sempre atualizado",
-              "Faça backup regular dos seus dados (iCloud ou computador)",
-              "Evite instalar aplicativos de fontes desconhecidas",
-              "Se notar lentidão, reinicie o aparelho periodicamente",
-            ],
-          },
-          {
-            icon: "🎒",
-            title: "Transporte e Armazenamento",
-            tips: [
-              "Use capas protetoras para o dia a dia",
-              "Não guarde com moedas ou objetos metálicos no bolso",
-              "Para viagens, leve em estojo apropriado",
-              "Se não usar por muito tempo, mantenha com 50% de carga",
-            ],
-          },
+          { title: "Bateria", tips: ["Mantenha a carga entre 20% e 80%", "Evite carregadores não certificados", "Não use enquanto carrega"] },
+          { title: "Tela e Display", tips: ["Use película de vidro", "Limpe com microfibra", "Evite pressão excessiva"] },
         ]
 
         for (const section of careTips) {
-          if (y > 230) { addPage(); drawHeader("Certificado de Garantia — Cuidados"); y += 10 }
-
-          doc.setFontSize(11)
-          doc.setFont("helvetica", "bold")
-          doc.setTextColor(30, 30, 30)
-          doc.text(`${section.title}`, M, y)
-          y += 2
-          doc.setDrawColor(220, 225, 230)
-          doc.setLineWidth(0.3)
-          doc.line(M, y, W - M, y)
-          y += 6
-
-          for (const tip of section.tips) {
-            if (y > 275) { addPage(); drawHeader("Certificado de Garantia — Cuidados"); y += 10 }
-            doc.setFontSize(8.5)
-            doc.setFont("helvetica", "normal")
-            doc.setTextColor(70, 70, 70)
-            doc.text(`• ${tip}`, M + 2, y)
-            y += 5.5
-          }
+          if (y > 230) { addPage(); drawHeader("Certificado de Garantia — Cuidados") }
+          doc.setFontSize(11); doc.setFont("helvetica", "bold"); doc.text(section.title, M, y); y += 6
+          for (const tip of section.tips) { doc.setFontSize(8.5); doc.setFont("helvetica", "normal"); doc.text(`• ${tip}`, M + 2, y); y += 5 }
           y += 3
         }
 
-        // ── Terms and signatures ──
         y += 6
         drawSection("Termos e Condições")
+        const terms = ["1. Certificado pessoal e intransferível.", "2. Apresente este termo para acionar garantia."]
+        for (const t of terms) { doc.setFontSize(8); doc.text(t, M + 3, y); y += 5 }
 
-        const terms = [
-          "1. Este certificado é pessoal e intransferível. A garantia é válida exclusivamente para o comprador original identificado neste documento.",
-          "2. Para acionar a garantia, é necessária a apresentação deste certificado junto com comprovante de pagamento.",
-          "3. O reparo em garantia será realizado em até 30 dias conforme Código de Defesa do Consumidor (Lei 8.078/90).",
-          "4. Caso o reparo não seja possível, o cliente terá direito à substituição do produto ou restituição do valor pago.",
-          "5. Danos causados ao aparelho durante o reparo em garantia serão cobertos pela NobreTech Store.",
-          "6. O período de garantia pode ser estendido caso o aparelho fique retido para reparo.",
-          "7. Esta garantia não cobre acessórios que acompanham o aparelho (carregadores, cabos, capas).",
-          "8. A NobreTech Store reserva-se o direito de avaliar e diagnosticar o aparelho para determinar se o defeuto está coberto.",
-        ]
-
-        for (const t of terms) {
-          if (y > 270) { addPage() }
-          doc.setFontSize(8)
-          doc.setFont("helvetica", "normal")
-          doc.setTextColor(80, 80, 80)
-          const lines = doc.splitTextToSize(t, pageW - 6)
-          doc.text(lines, M + 3, y)
-          y += lines.length * 4.5 + 2
-        }
-
-        // Signatures
         y += 12
-        doc.setDrawColor(150, 150, 150)
-        doc.setLineWidth(0.4)
-        doc.line(M + 10, y, M + 75, y)
-        doc.setFontSize(9)
-        doc.setTextColor(100, 100, 100)
-        doc.setFont("helvetica", "normal")
-        doc.text("NobreTech Store", M + 10, y + 5)
-
-        doc.line(W - M - 70, y, W - M - 20, y)
-        doc.text(customer?.full_name || "Cliente", W / 2 + 5, y + 5, { align: "center" })
-
-        // Date
-        y += 12
-        doc.setFontSize(9)
-        doc.setTextColor(100, 100, 100)
-        doc.text(`Data da emissão: ${new Date().toLocaleDateString("pt-BR")}`, M, y)
+        doc.line(M + 10, y, M + 75, y); doc.text("NobreTech Store", M + 10, y + 5)
+        doc.line(W - M - 70, y, W - M - 20, y); doc.text(customer?.full_name || "Cliente", W / 2 + 5, y + 5, { align: "center" })
 
         doc.save(`Certificado_Garantia_${customer?.full_name || "cliente"}.pdf`)
       }
 
-      toast({ title: type === "warranty" ? "Certificado gerado!" : "Laudo gerado!", type: "success" })
+      toast({ title: "Arquivo gerado!", type: "success" })
     } catch (err) {
-      console.error("Erro ao gerar PDF:", err)
-      toast({ title: "Erro ao gerar PDF", description: err instanceof Error ? err.message : "Erro interno.", type: "error" })
+      toast({ title: "Erro ao gerar PDF", type: "error" })
     } finally {
       setGenerating(null)
     }
@@ -543,23 +409,20 @@ export default function SaleDetailPage() {
       <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
         <div className="flex items-center gap-2 mb-4">
           <div className="w-8 h-8 rounded-lg bg-royal-100 flex items-center justify-center"><ShoppingCart className="w-4 h-4 text-royal-500" /></div>
-          <h3 className="font-display font-bold text-navy-900 font-syne">Produto</h3>
+          <h3 className="font-display font-bold text-navy-900 font-syne">Aparelho</h3>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="bg-surface rounded-xl p-4">
-            <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Aparelho</p>
+            <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Modelo</p>
             <p className="text-sm font-semibold text-navy-900">{fullModel}</p>
-            {catalog.brand && <p className="text-xs text-gray-500">{catalog.brand}</p>}
           </div>
           <div className="bg-surface rounded-xl p-4">
             <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">IMEI</p>
             <p className="text-sm font-mono text-navy-900">{product?.imei || "—"}</p>
-            {product?.serial_number && <p className="text-xs text-gray-500">S/N: {product.serial_number}</p>}
           </div>
           <div className="bg-surface rounded-xl p-4">
-            <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Grade / Bateria</p>
+            <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Status</p>
             <p className="text-sm font-semibold text-navy-900">{product?.grade || "—"}</p>
-            {product?.battery_health && <p className="text-xs text-gray-500">Bateria: {product.battery_health}%</p>}
           </div>
         </div>
       </div>
@@ -569,100 +432,20 @@ export default function SaleDetailPage() {
           <div className="w-8 h-8 rounded-lg bg-royal-100 flex items-center justify-center"><User className="w-4 h-4 text-royal-500" /></div>
           <h3 className="font-display font-bold text-navy-900 font-syne">Cliente</h3>
         </div>
-        <div className="grid grid-cols-2 gap-4">
-          <p className="text-sm font-semibold text-navy-900">{customer?.full_name || "—"}</p>
-          {customer?.cpf && <p className="text-xs text-gray-500">CPF: {customer.cpf}</p>}
-          {customer?.phone && <p className="text-xs text-gray-500">Tel: {customer.phone}</p>}
-          {customer?.email && <p className="text-xs text-gray-500">{customer.email}</p>}
-        </div>
-      </div>
-
-      <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
-        <div className="flex items-center gap-2 mb-4">
-          <div className="w-8 h-8 rounded-lg bg-royal-100 flex items-center justify-center"><CreditCard className="w-4 h-4 text-royal-500" /></div>
-          <h3 className="font-display font-bold text-navy-900 font-syne">Pagamento</h3>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="bg-surface rounded-xl p-4">
-            <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Forma</p>
-            <p className="text-sm font-semibold text-navy-900">{paymentLabel()}</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <p className="text-sm font-semibold text-navy-900">{customer?.full_name || "—"}</p>
+            <p className="text-xs text-gray-500">{customer?.phone || "—"}</p>
           </div>
-          <div className="bg-surface rounded-xl p-4">
-            <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Preço</p>
-            <p className="text-sm font-semibold text-navy-900">{formatBRL(sale.sale_price)}</p>
-          </div>
-          <div className="bg-surface rounded-xl p-4">
-            <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Data</p>
-            <p className="text-sm font-semibold text-navy-900">{formatDate(sale.sale_date)}</p>
+          <div>
+            <p className="text-xs text-gray-500">CPF: {customer?.cpf || "—"}</p>
+            <p className="text-xs text-gray-500">{customer?.email || "—"}</p>
           </div>
         </div>
       </div>
 
       <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
-        <div className="flex items-center gap-2 mb-4">
-          <div className="w-8 h-8 rounded-lg bg-success-100 flex items-center justify-center"><ShieldCheck className="w-4 h-4 text-success-500" /></div>
-          <h3 className="font-display font-bold text-navy-900 font-syne">Garantia</h3>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <p className="text-sm font-semibold text-navy-900">{sale.warranty_months} meses</p>
-          <p className="text-xs text-gray-500">Início: {formatDate(sale.warranty_start)}</p>
-          <p className="text-xs text-gray-500">Término: {formatDate(sale.warranty_end)}</p>
-        </div>
-      </div>
-
-      {checklist.length > 0 && (
-        <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-8 h-8 rounded-lg bg-royal-100 flex items-center justify-center"><FileText className="w-4 h-4 text-royal-500" /></div>
-            <h3 className="font-display font-bold text-navy-900 font-syne">Laudo de Inspeção</h3>
-          </div>
-          <div className="flex gap-2 mb-3">
-            <Badge variant="green">{okCount} OK</Badge>
-            {failCount > 0 && <Badge variant="red">{failCount} Falha{failCount > 1 ? "s" : ""}</Badge>}
-          </div>
-          <div className="space-y-1.5 max-h-64 overflow-y-auto">
-            {checklist.map((item: any, idx: number) => {
-              const label = checklistLabels[item.id] || item.label || item.id
-              const statusLabel = item.status === "ok" ? "OK" : item.status === "fail" ? "FALHA" : item.status === "na" ? "N/A" : "—"
-              return (
-                <div
-                  key={idx}
-                  className={`rounded-xl border p-2.5 text-xs ${
-                    item.status === "ok"
-                      ? "bg-success-100/20 border-success-500/20"
-                      : item.status === "fail"
-                      ? "bg-danger-100/20 border-danger-500/20"
-                      : "bg-gray-50 border-gray-100"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-navy-900 flex-1">{label}</span>
-                    <span className={`font-bold ml-2 ${
-                      item.status === "ok" ? "text-success-600" :
-                      item.status === "fail" ? "text-danger-600" :
-                      "text-gray-400"
-                    }`}>{statusLabel}</span>
-                  </div>
-                  {item.note && <p className="text-danger-500 mt-1">{item.note}</p>}
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
-      {sale.notes && (
-        <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-8 h-8 rounded-lg bg-warning-100 flex items-center justify-center"><AlertTriangle className="w-4 h-4 text-warning-500" /></div>
-            <h3 className="font-display font-bold text-navy-900 font-syne">Observações</h3>
-          </div>
-          <p className="text-sm text-gray-600">{sale.notes}</p>
-        </div>
-      )}
-
-      <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
-        <h3 className="font-display font-bold text-navy-900 mb-4 font-syne">Documentos para Cliente</h3>
+        <h3 className="font-display font-bold text-navy-900 mb-4 font-syne">Documentos</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Button
             size="lg"
@@ -673,8 +456,8 @@ export default function SaleDetailPage() {
           >
             <FileText className="w-6 h-6 text-navy-900 shrink-0" />
             <div className="text-left">
-              <p className="font-semibold text-navy-900">Laudo de Inspeção</p>
-              <p className="text-xs text-gray-400">Checklist completo do aparelho</p>
+              <p className="font-semibold text-navy-900">Laudo Técnico</p>
+              <p className="text-xs text-gray-400">Checklist completo</p>
             </div>
           </Button>
           <Button
@@ -686,8 +469,8 @@ export default function SaleDetailPage() {
           >
             <ShieldCheck className="w-6 h-6 text-success-500 shrink-0" />
             <div className="text-left">
-              <p className="font-semibold text-navy-900">Certificado de Garantia</p>
-              <p className="text-xs text-gray-400">Termos, cobertura e cuidados</p>
+              <p className="font-semibold text-navy-900">Termo de Garantia</p>
+              <p className="text-xs text-gray-400">Certificado de cobertura</p>
             </div>
           </Button>
         </div>

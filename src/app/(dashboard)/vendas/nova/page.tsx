@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo, useCallback, useEffect, useRef } from "react"
+import { useState, useMemo, useCallback, useEffect, useRef, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -37,7 +37,7 @@ type InventoryProduct = {
 
 const mockInStock: InventoryProduct[] = []
 
-export default function NewSalePage() {
+function NewSaleContent() {
   const [step, setStep] = useState<Step>(1)
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedProduct, setSelectedProduct] = useState<InventoryProduct | null>(null)
@@ -246,19 +246,19 @@ export default function NewSalePage() {
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) return
 
-        const { data: userData } = await supabase
+        const { data: userData } = await (supabase
           .from("users")
           .select("company_id")
           .eq("id", user.id)
-          .single()
+          .single() as any)
 
         if (!userData?.company_id) return
 
-        const { data: existing } = await supabase
+        const { data: existing } = await (supabase
           .from("customers")
           .select("full_name, phone, email, notes")
           .match({ cpf: formatted, company_id: userData.company_id })
-          .maybeSingle()
+          .maybeSingle() as any)
 
         if (existing) {
           setCustomer((prev) => ({
@@ -331,8 +331,8 @@ export default function NewSalePage() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error("Usuário não autenticado")
 
-      const { data: userData } = await supabase
-        .from("users")
+      const { data: userData } = await (supabase
+        .from("users") as any)
         .select("company_id")
         .eq("id", user.id)
         .single()
@@ -346,20 +346,20 @@ export default function NewSalePage() {
       if (customer.name) {
         let searchQuery
         if (customer.cpf && customer.cpf.length >= 14) {
-          searchQuery = supabase
-            .from("customers")
+          searchQuery = ((supabase
+            .from("customers") as any)
             .select("id")
-            .match({ cpf: customer.cpf, company_id: companyId })
+            .match({ cpf: customer.cpf, company_id: companyId }))
         } else if (customer.email) {
-          searchQuery = supabase
-            .from("customers")
+          searchQuery = ((supabase
+            .from("customers") as any)
             .select("id")
-            .match({ email: customer.email, company_id: companyId })
+            .match({ email: customer.email, company_id: companyId }))
         } else {
-          searchQuery = supabase
-            .from("customers")
+          searchQuery = ((supabase
+            .from("customers") as any)
             .select("id")
-            .match({ full_name: customer.name, company_id: companyId })
+            .match({ full_name: customer.name, company_id: companyId }))
         }
 
         const { data: existingCustomer, error: searchError } = await searchQuery.maybeSingle()
@@ -369,18 +369,18 @@ export default function NewSalePage() {
         } else {
           // Create new customer
           const customerNotesValue = customerNotes || customerEditableNotes || null
-          const { data: newCustomer, error: insertError } = await supabase
-            .from("customers")
-            .insert({
-              company_id: companyId,
-              full_name: customer.name,
-              cpf: (customer.cpf && customer.cpf.length >= 14) ? customer.cpf : null,
-              phone: customer.phone || null,
-              email: customer.email || null,
-              notes: customerNotesValue,
-            })
-            .select("id")
-            .single()
+            const { data: newCustomer, error: insertError } = await ((supabase
+              .from("customers") as any)
+              .insert({
+                company_id: companyId,
+                full_name: customer.name,
+                cpf: (customer.cpf && customer.cpf.length >= 14) ? customer.cpf : null,
+                phone: customer.phone || null,
+                email: customer.email || null,
+                notes: customerNotesValue,
+              })
+              .select("id")
+              .single() as any)
 
           if (insertError) {
             console.error("Erro ao criar cliente:", insertError)
@@ -391,8 +391,8 @@ export default function NewSalePage() {
       }
 
       // 2. Register the sale
-      const { data: sale, error: saleError } = await supabase
-        .from("sales")
+      const { data: sale, error: saleError } = await (supabase
+        .from("sales") as any)
         .insert({
           company_id: companyId,
           inventory_id: selectedProduct!.id,
@@ -416,16 +416,16 @@ export default function NewSalePage() {
 
       // 3. Handle trade-in if active (note: inventory status is auto-updated by fn_create_warranty_on_sale trigger)
       if (hasTradeIn && tradeInModels[tradeIn.modelIdx]) {
-        const { error: tradeInError } = await supabase
-          .from("trade_ins")
-          .insert({
-            company_id: companyId,
-            imei: tradeIn.imei || null,
-            grade: tradeIn.grade || null,
-            trade_in_value: parseFloat(tradeIn.value) || 0,
-            status: "received",
-            notes: tradeInModels[tradeIn.modelIdx].name,
-          })
+        const { error: tradeInError } = await ((supabase
+            .from("trade_ins") as any)
+            .insert({
+              company_id: companyId,
+              imei: tradeIn.imei || null,
+              grade: tradeIn.grade || null,
+              trade_in_value: parseFloat(tradeIn.value) || 0,
+              status: "received",
+              notes: tradeInModels[tradeIn.modelIdx].name,
+            }))
 
         if (tradeInError) {
           console.error("Erro ao registrar trade-in:", tradeInError)
@@ -657,11 +657,11 @@ export default function NewSalePage() {
               )}
 
               {/* Color swatches */}
-              {tradeInModel && tradeInModel.colors && (
+              {tradeInModel && (tradeInModel as any).colors && (
                 <div>
                   <label className="block text-xs font-medium text-navy-900 mb-2">Cor</label>
                   <div className="flex flex-wrap gap-2">
-                    {(tradeInModel.colors as any[]).map((c) => (
+                    {(tradeInModel as any).colors.map((c: any) => (
                       <button
                         key={c.name}
                         type="button"
@@ -684,11 +684,11 @@ export default function NewSalePage() {
               )}
 
               {/* Storage or Size chips */}
-              {tradeInModel && tradeInModel.storage && (
+              {tradeInModel && (tradeInModel as any).storage && (
                 <div>
                   <label className="block text-xs font-medium text-navy-900 mb-2">Armazenamento</label>
                   <div className="flex flex-wrap gap-2">
-                    {(tradeInModel.storage as string[]).map((s) => (
+                    {(tradeInModel as any).storage.map((s: any) => (
                       <button
                         key={s}
                         type="button"
@@ -990,5 +990,13 @@ export default function NewSalePage() {
         )}
       </div>
     </div>
+  )
+}
+
+export default function NewSalePage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center p-12 text-gray-400">Carregando formulário...</div>}>
+      <NewSaleContent />
+    </Suspense>
   )
 }

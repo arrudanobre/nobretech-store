@@ -1,26 +1,27 @@
-// Função para registrar a venda no banco de dados
-export const registrarVenda = async (dadosVenda) => {
-    console.log("Registrando venda com dados:", dadosVenda);
-const { data, error } = await supabase
-        .from("vendas")
-        .insert([dadosVenda]);
+import { supabase } from "@/lib/supabase"
 
-if (error) {
-    console.error("Erro ao registrar a venda:", error);
-    throw new Error(error.message);
-} else {
-    console.log("Venda registrada com sucesso:", data);
-}
+// Função para registrar a venda no banco de dados
+export const registrarVenda = async (dadosVenda: any) => {
+    console.log("Registrando venda com dados:", dadosVenda);
+    const { data, error } = await (supabase
+        .from("sales") as any)
+        .insert([dadosVenda]);
 
     if (error) {
         console.error("Erro ao registrar a venda:", error);
-        throw new Error(error.message);  // Lançar erro para tratamento no front-end
+        throw new Error(error.message);
     }
-    return data;  // Retorne os dados da venda caso necessário
+    
+    console.log("Venda registrada com sucesso:", data);
+    return data;
 };
 
 // Função para atualizar o status do aparelho no estoque
-export const atualizarStatusEstoque = async (aparelhoId, status) => {
-    // Implemente a lógica para atualizar o status do estoque
-    // Por exemplo, usando uma API ou uma operação de banco de dados
+export const atualizarStatusEstoque = async (aparelhoId: string, status: string) => {
+    const { error } = await (supabase
+        .from("inventory") as any)
+        .update({ status })
+        .eq("id", aparelhoId);
+    
+    if (error) throw error;
 };
