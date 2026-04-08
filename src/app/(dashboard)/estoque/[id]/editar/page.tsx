@@ -29,6 +29,7 @@ export default function EditProductPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [catalogName, setCatalogName] = useState("")
+  const [isAccessory, setIsAccessory] = useState(false)
   const [formData, setFormData] = useState({
     imei: "",
     serial_number: "",
@@ -83,7 +84,15 @@ export default function EditProductPage() {
       }
 
       const item = items[0]
-      setCatalogName(`IMEI ...${(item.imei || "N/A").slice(-4)}`)
+
+      // Detect accessory (no catalog + condition_notes has "Acessório:" prefix)
+      const isAcc = item.catalog_id === null && item.condition_notes?.includes("Acessório:")
+      setIsAccessory(isAcc)
+
+      if (isAcc) {
+        const accName = item.condition_notes?.replace(/^Acessório:\s*/, "") || "Acessório"
+        setCatalogName(accName)
+      }
 
       setFormData({
         imei: item.imei || "",
@@ -199,7 +208,8 @@ export default function EditProductPage() {
           options={STATUS_OPTIONS}
         />
 
-        {/* IMEI / Serial */}
+        {/* IMEI / Serial — only for devices */}
+        {!isAccessory && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Input
             label="IMEI"
@@ -212,8 +222,10 @@ export default function EditProductPage() {
             onChange={(e) => updateField("serial_number", e.target.value)}
           />
         </div>
+        )}
 
-        {/* Grade / Status */}
+        {/* Grade / Status — only for devices */}
+        {!isAccessory && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-sm font-medium text-navy-900 mb-2">Grade (ABEC)</label>
@@ -234,6 +246,15 @@ export default function EditProductPage() {
             </div>
           </div>
         </div>
+        )}
+
+        {/* Accessory name display */}
+        {isAccessory && catalogName && (
+          <div className="bg-surface rounded-xl p-3">
+            <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Nome do Acessório</p>
+            <p className="text-sm font-medium text-navy-900">{catalogName}</p>
+          </div>
+        )}
 
         {/* Price / Date */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -243,12 +264,40 @@ export default function EditProductPage() {
             value={formData.purchase_price}
             onChange={(e) => updateField("purchase_price", e.target.value)}
           />
-          <Input
-            label="Preço Sugerido (R$)"
-            type="number"
-            value={formData.suggested_price}
-            onChange={(e) => updateField("suggested_price", e.target.value)}
-          />
+          <div className="sm:col-span-2">
+            <div className="flex items-center gap-3 mb-1.5">
+              <label className="text-sm font-medium text-navy-900">Preço Sugerido (R$)</label>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value={formData.suggested_price}
+                onChange={(e) => updateField("suggested_price", e.target.value)}
+                className="w-32 h-8 text-center rounded-lg border border-gray-200 text-sm font-semibold px-2"
+              />
+            </div>
+            {formData.purchase_price && (
+              <div className="space-y-1">
+                <input
+                  type="range"
+                  min="5"
+                  max="100"
+                  value={Math.round(Math.max(5, Math.min(100, (((parseFloat(formData.suggested_price) || 0) / (parseFloat(formData.purchase_price) || 1)) - 1) * 100)))}
+                  onChange={(e) => {
+                    const marginPct = parseInt(e.target.value)
+                    const cost = parseFloat(formData.purchase_price) || 0
+                    const newPrice = Math.ceil(cost * (1 + marginPct / 100))
+                    updateField("suggested_price", newPrice.toString())
+                  }}
+                  className="w-full accent-royal-500"
+                />
+                <div className="flex justify-between text-[10px] text-gray-400">
+                  <span>5%</span>
+                  <span>100%</span>
+                </div>
+              </div>
+            )}
+          </div>
           <Input
             label="Data da Compra"
             type="date"
@@ -257,7 +306,8 @@ export default function EditProductPage() {
           />
         </div>
 
-        {/* Battery / iOS */}
+        {/* Battery / iOS — only for devices */}
+        {!isAccessory && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Input
             label="Saúde da Bateria (%)"
@@ -274,6 +324,7 @@ export default function EditProductPage() {
             onChange={(e) => updateField("ios_version", e.target.value)}
           />
         </div>
+        )}
 
         {/* Notes */}
         <Textarea

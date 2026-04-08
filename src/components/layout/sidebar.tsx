@@ -38,7 +38,7 @@ const staticNavItems: (Omit<NavItem, "badge"> & { badge?: { count?: number; defa
   { label: "Avaliação de Recebimento", href: "/avaliacao", icon: Calculator },
   { label: "Preços de Fornecedores", href: "/precos-fornecedor", icon: ListChecks },
   { label: "Garantias", href: "/garantias", icon: ShieldCheck, badge: { defaultCount: 0, color: "bg-danger-500", source: "db", countKey: "garantias" } },
-  { label: "Problemas", href: "/problemas", icon: AlertTriangle, badge: { defaultCount: 2, color: "bg-warning-500" } },
+  { label: "Problemas", href: "/problemas", icon: AlertTriangle, badge: { defaultCount: 0, color: "bg-warning-500", source: "db", countKey: "problemas" } },
   { label: "Cotações", href: "/cotacoes", icon: FileText },
   { label: "Clientes", href: "/clientes", icon: Users },
   { label: "Fornecedores", href: "/fornecedores", icon: Truck },
@@ -227,12 +227,26 @@ export function DashboardLayout({ children, title }: { children: React.ReactNode
           setCounts((prev) => ({ ...prev, estoque: data?.length ?? 0 }))
         }
 
+        const today = new Date().toISOString().split("T")[0]
         const { data: warrantyData, error: warrantyError } = await (supabase
           .from("warranties") as any)
           .select("id")
-          .eq("status", "expiring_soon")
+          .gte("end_date", today)
+          .neq("status", "expired")
+          .neq("status", "voided")
         if (!warrantyError) {
           setCounts((prev) => ({ ...prev, garantias: warrantyData?.length ?? 0 }))
+        }
+
+        // Contagem de problemas (apenas não fechados)
+        const { data: problemsData } = await (supabase
+          .from("problems") as any)
+          .select("id")
+          .neq("status", "closed")
+        if (!problemsData?.length) {
+          setCounts((prev) => ({ ...prev, problemas: 0 }))
+        } else {
+          setCounts((prev) => ({ ...prev, problemas: problemsData.length }))
         }
       } catch {
         // ignore

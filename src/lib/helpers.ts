@@ -53,10 +53,9 @@ export function buildPriceTable(cost: number, marginPct: number, settings: Parti
   })
 }
 
-/** Calculate profit from sale */
+/** Calculate profit from sale (base: price - cost, sem taxas que sao responsabilidade do metodo) */
 export function calcProfit(salePrice: number, costPrice: number, feePct: number): number {
-  const fee = salePrice * (feePct / 100)
-  return salePrice - fee - costPrice
+  return salePrice - costPrice
 }
 
 /** Format BRL currency */
@@ -298,8 +297,42 @@ export function getAIScoreColor(score: number): string {
 export function getSupabaseThumbnail(url: string | null, width: number = 400): string {
   if (!url) return ""
   if (url.includes('supabase.co')) {
-    // If it's a public URL from Supabase, we can try to append transformation params
     return `${url}?width=${width}&quality=80`
   }
   return url
+}
+
+/**
+ * Centralized product name resolver.
+ * Handles both catalog-based products (iPhones, iPads, etc.)
+ * and accessories or items with missing catalog data.
+ */
+export function getProductName(item: {
+  catalog?: { model?: string; storage?: string; color?: string } | null
+  model?: string | null
+  storage?: string | null
+  color?: string | null
+  name?: string | null
+  condition_notes?: string | null
+  notes?: string | null
+}): string {
+  // iPhone/iPad/etc — uses catalog data
+  if (item.catalog?.model) {
+    return `${item.catalog.model}${item.catalog.storage ? " " + item.catalog.storage : ""}${item.catalog.color ? " " + item.catalog.color : ""}`.trim()
+  }
+  // Fallback: direct fields (e.g. from inventory form)
+  if (item.name) return item.name
+  if (item.model) {
+    const parts = [item.model, item.storage, item.color].filter(Boolean)
+    return parts.join(" ") || "Produto sem nome"
+  }
+  // Accessories — name stored in notes/condition_notes
+  if (item.condition_notes) {
+    // Extract accessory name (format: "Acessório: X" or just the text)
+    const match = item.condition_notes.match(/^Acessório:\s*(.+)$/i)
+    if (match) return match[1].trim()
+    return item.condition_notes
+  }
+  if (item.notes) return item.notes
+  return "Produto"
 }

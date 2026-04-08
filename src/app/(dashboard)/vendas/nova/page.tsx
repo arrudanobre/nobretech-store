@@ -45,6 +45,7 @@ function NewSaleContent() {
   const [customerNotes, setCustomerNotes] = useState("")
   const [customerEditableNotes, setCustomerEditableNotes] = useState("")
   const [existingCustomerFound, setExistingCustomerFound] = useState(false)
+  const [quantity, setQuantity] = useState(1)
   const [salePrice, setSalePrice] = useState("")
   const [paymentMethod, setPaymentMethod] = useState("")
   const [warrantyMonths, setWarrantyMonths] = useState("3")
@@ -53,6 +54,17 @@ function NewSaleContent() {
   const [saleNotes, setSaleNotes] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [tradeInPhotos, setTradeInPhotos] = useState<string[]>([])
+
+  // ── Additional item (upsell / brinde) — selecionado do estoque ──
+  const [hasAdditionalItem, setHasAdditionalItem] = useState(false)
+  const [additionalSelectedItem, setAdditionalSelectedItem] = useState<{
+    itemId: string
+    name: string
+    cost: number
+    type: "upsell" | "free"
+    salePrice: string
+    qty: number
+  } | null>(null)
   const tradeInFileRef = useRef<HTMLInputElement>(null)
   const [inventoryProducts, setInventoryProducts] = useState<any[]>([])
   const [loadingInventory, setLoadingInventory] = useState(true)
@@ -104,14 +116,14 @@ function NewSaleContent() {
       try {
         const { data, error } = await supabase
           .from("inventory")
-          .select("id, imei, purchase_price, suggested_price, battery_health, status, product_catalog(model, variant, storage, color)")
+          .select("id, imei, purchase_price, suggested_price, battery_health, status, catalog:catalog_id(model, variant, storage, color)")
           .eq("status", "in_stock")
           .order("created_at", { ascending: false })
 
         if (error) throw error
 
         const products = (data || []).map((item: any) => {
-          const cat = item.product_catalog || {}
+          const cat = item.catalog || {}
           return {
             id: item.id,
             name: `${cat.model || "Produto"}${cat.variant ? " " + cat.variant : ""}${cat.storage ? " " + cat.storage : ""} ${cat.color || ""}`.trim(),
@@ -137,7 +149,7 @@ function NewSaleContent() {
     const fetchProduct = async () => {
       try {
         const { data: items, error } = await (supabase.from("inventory") as any)
-          .select("id, imei, purchase_price, suggested_price, battery_health, catalog:product_catalog(model, variant, storage, color)")
+          .select("id, imei, purchase_price, suggested_price, battery_health, catalog:catalog_id(model, variant, storage, color)")
           .eq("id", preselectId)
           .single()
 
@@ -218,15 +230,60 @@ function NewSaleContent() {
     return buildPriceTable(parseFloat(salePrice), 0, fees as any)
   }, [selectedProduct, salePrice, fees])
 
-  const profit = useMemo(() => {
+  // Preco unitario e totais
+  const unitPrice = parseFloat(salePrice) || 0
+  const totalBasePrice = unitPrice * quantity
+
+  // Upsell price (brinde não entra no total pago pelo cliente)
+  const upsellTotal = additionalSelectedItem?.type === "upsell"
+    ? (parseFloat(additionalSelectedItem.salePrice) || 0) * (additionalSelectedItem.qty || 1)
+    : 0
+
+  // Total final da venda: produto principal + upsell
+  const finalTotal = totalBasePrice + upsellTotal
+
+  // Lucro base do produto principal (por unidade): independe do método de pagamento
+  const baseProfit = useMemo(() => {
     if (!selectedProduct || !salePrice) return 0
+    return unitPrice - selectedProduct.cost
+  }, [selectedProduct, salePrice, unitPrice])
+
+  // Lucro base TOTAL considerando quantidade
+  const totalBaseProfit = useMemo(() => {
+    return baseProfit * quantity
+  }, [baseProfit, quantity])
+
+  // Lucro adicional (upsell ou brinde)
+  const additionalProfit = useMemo(() => {
+    if (!additionalSelectedItem) return 0
+    if (additionalSelectedItem.type === "upsell") {
+      return (parseFloat(additionalSelectedItem.salePrice) || 0) * (additionalSelectedItem.qty || 1) - additionalSelectedItem.cost * (additionalSelectedItem.qty || 1)
+    }
+    return -additionalSelectedItem.cost * (additionalSelectedItem.qty || 1)
+  }, [additionalSelectedItem])
+
+  // Lucro total: principal + adicionais
+  const totalProfit = useMemo(() => {
+    return totalBaseProfit + additionalProfit
+  }, [totalBaseProfit, additionalProfit])
+
+  // Taxa aplicável ao método selecionado (apenas para exibição)
+  const paymentFee = useMemo(() => {
+    if (!selectedProduct || !salePrice || !paymentMethod) return 0
     const feePct = fees[getFeeKey(paymentMethod)] ?? 0
-    return calcProfit(parseFloat(salePrice), selectedProduct.cost, feePct)
-  }, [selectedProduct, salePrice, paymentMethod, fees])
+    return finalTotal * (feePct / 100)
+  }, [finalTotal, paymentMethod, fees])
+
+  // Quantidade máxima disponível do mesmo modelo (para validação de estoque)
+  const maxAvailableQty = useMemo(() => {
+    if (!selectedProduct) return 1
+    return inventoryProducts.filter(p => p.name === selectedProduct.name).length
+  }, [selectedProduct, inventoryProducts])
 
   const selectProduct = (product: typeof mockInStock[0]) => {
     setSelectedProduct(product)
     setSalePrice(product.suggested.toString())
+    setQuantity(1)
     setStep(2)
   }
 
@@ -308,7 +365,7 @@ function NewSaleContent() {
 
   const canProceed = () => {
     switch (step) {
-      case 1: return !!selectedProduct && !loadingInventory
+      case 1: return !!selectedProduct && !loadingInventory && quantity <= maxAvailableQty
       case 2: return customer.name && validateCPF(customer.cpf)
       case 3: return salePrice && paymentMethod
       case 4: return true
@@ -390,20 +447,20 @@ function NewSaleContent() {
         }
       }
 
-      // 2. Register the sale
+      // 2. Register the sale (sale_price = total including quantity)
       const { data: sale, error: saleError } = await (supabase
         .from("sales") as any)
         .insert({
           company_id: companyId,
           inventory_id: selectedProduct!.id,
           customer_id: customerId,
-          sale_price: parseFloat(salePrice),
+          sale_price: finalTotal,
           payment_method: paymentMethod,
           warranty_months: parseInt(warrantyMonths),
           warranty_start: today,
           warranty_end: warrantyEnd.toISOString().split("T")[0],
           sale_date: today,
-          notes: saleNotes || null,
+          notes: quantity > 1 ? `[${quantity}x ${selectedProduct!.name}]` + (saleNotes ? `\n${saleNotes}` : "") : saleNotes || null,
           has_trade_in: hasTradeIn,
         })
         .select()
@@ -412,6 +469,24 @@ function NewSaleContent() {
       if (saleError) {
         console.error("Erro ao registrar venda:", saleError)
         throw new Error(saleError.message)
+      }
+
+      // 2b. Save additional item (upsell / brinde) with quantity
+      if (additionalSelectedItem) {
+        const qty = additionalSelectedItem.qty || 1
+        const itemSalePrice = additionalSelectedItem.type === "upsell"
+          ? parseFloat(additionalSelectedItem.salePrice) * qty
+          : 0
+
+        await (supabase.from("sales_additional_items") as any).insert({
+          company_id: companyId,
+          sale_id: sale.id,
+          product_id: additionalSelectedItem.itemId,
+          type: additionalSelectedItem.type,
+          name: additionalSelectedItem.name,
+          cost_price: additionalSelectedItem.cost * qty,
+          sale_price: itemSalePrice,
+        })
       }
 
       // 3. Handle trade-in if active (note: inventory status is auto-updated by fn_create_warranty_on_sale trigger)
@@ -542,11 +617,30 @@ function NewSaleContent() {
               <div className="w-10 h-10 rounded-lg bg-royal-100 flex items-center justify-center">
                 <ShoppingCart className="w-5 h-5 text-royal-500" />
               </div>
-              <div>
+              <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-navy-900">{selectedProduct.name}</p>
                 <p className="text-xs text-gray-500">Preço sugerido: {formatBRL(selectedProduct.suggested)}</p>
               </div>
+              <div className="shrink-0 flex items-center gap-1">
+                <label className="text-xs text-gray-500">Qtd:</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={maxAvailableQty}
+                  value={quantity}
+                  onChange={(e) => setQuantity(Math.max(1, Math.min(maxAvailableQty, parseInt(e.target.value) || 0)))}
+                  className="w-14 h-8 text-center rounded-lg border border-gray-200 text-sm font-semibold"
+                />
+              </div>
             </div>
+          )}
+          {selectedProduct && quantity > maxAvailableQty && (
+            <p className="text-xs text-danger-500 font-medium">Quantidade indisponível em estoque (máx: {maxAvailableQty})</p>
+          )}
+          {selectedProduct && unitPrice > 0 && quantity > 1 && (
+            <p className="text-xs text-navy-800 font-medium">
+              Total: {quantity}x {formatBRL(unitPrice)} = {formatBRL(unitPrice * quantity)}
+            </p>
           )}
           {existingCustomerFound && (
             <div className="bg-royal-100/30 rounded-xl p-3 flex items-center gap-2 border border-royal-500/20">
@@ -590,14 +684,20 @@ function NewSaleContent() {
           <h3 className="font-display font-bold text-navy-900 font-syne">Pagamento</h3>
 
           <div>
-            <label className="block text-sm font-medium text-navy-900 mb-1.5">Preço de Venda (R$)</label>
+            <label className="block text-sm font-medium text-navy-900 mb-1.5">Preço de Venda Unitário (R$)</label>
             <Input
               type="number"
               value={salePrice}
               onChange={(e) => setSalePrice(e.target.value)}
             />
-            {profit > 0 && (
-              <p className="text-xs text-success-500 mt-1 font-medium">Lucro estimado: {formatBRL(profit)}</p>
+            {baseProfit > 0 && (
+              <p className="text-xs text-success-500 mt-1 font-medium">Lucro unitário: {formatBRL(baseProfit)}</p>
+            )}
+            {quantity > 1 && totalBasePrice > 0 && (
+              <p className="text-xs text-navy-800 mt-0.5 font-medium">Total: {quantity}x {formatBRL(unitPrice)} = {formatBRL(totalBasePrice)}</p>
+            )}
+            {totalProfit > 0 && (
+              <p className="text-xs text-success-500 mt-0.5 font-medium">Lucro total: {formatBRL(totalProfit)}</p>
             )}
           </div>
 
@@ -791,8 +891,8 @@ function NewSaleContent() {
             <div className="bg-royal-100/50 rounded-xl p-4 space-y-3 border border-royal-500/20">
               <p className="text-sm font-semibold text-navy-900">Resumo da Troca</p>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Aparelho vendido</span>
-                <span className="font-semibold text-navy-900">{formatBRL(parseFloat(salePrice) || 0)}</span>
+                <span className="text-gray-600">Aparelho vendido ({quantity}x)</span>
+                <span className="font-semibold text-navy-900">{formatBRL(finalTotal)}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600">(-) Aparelho recebido</span>
@@ -800,12 +900,12 @@ function NewSaleContent() {
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600">Subtotal</span>
-                <span className="font-semibold text-navy-900">{formatBRL((parseFloat(salePrice) || 0) - (parseFloat(tradeIn.value) || 0))}</span>
+                <span className="font-semibold text-navy-900">{formatBRL(Math.max(0, finalTotal - (parseFloat(tradeIn.value) || 0)))}</span>
               </div>
               {/* Fee info based on selected payment method */}
               {paymentMethod && (() => {
                 const tradeInVal = parseFloat(tradeIn.value) || 0
-                const netPrice = (parseFloat(salePrice) || 0) - tradeInVal
+                const netPrice = finalTotal - tradeInVal
                 const feeKey = getFeeKey(paymentMethod)
                 const feePct = fees[feeKey] ?? 0
                 const feeAdjustedPrice = feePct > 0 ? Math.ceil(netPrice / (1 - feePct / 100)) : netPrice
@@ -839,7 +939,7 @@ function NewSaleContent() {
               {!paymentMethod && (
                 <div className="flex justify-between text-base pt-2 border-t border-royal-500/20">
                   <span className="font-bold text-navy-900">Valor a pagar</span>
-                  <span className="font-bold text-royal-500">{formatBRL((parseFloat(salePrice) || 0) - (parseFloat(tradeIn.value) || 0))}</span>
+                  <span className="font-bold text-royal-500">{formatBRL(Math.max(0, finalTotal - (parseFloat(tradeIn.value) || 0)))}</span>
                 </div>
               )}
               <p className="text-xs text-gray-500 text-center">
@@ -850,14 +950,148 @@ function NewSaleContent() {
             </div>
           )}
 
+          {/* ── Adicionais (Upsell / Brinde) ── */}
+          <div className="bg-surface rounded-xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-navy-900">Adicionais (Upsell / Brinde)</p>
+                <p className="text-xs text-gray-500">Item extra do estoque</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setHasAdditionalItem(!hasAdditionalItem)
+                  if (hasAdditionalItem) setAdditionalSelectedItem(null)
+                }}
+                className={`w-12 h-7 rounded-full transition-colors relative ${hasAdditionalItem ? "bg-royal-500" : "bg-gray-300"}`}
+              >
+                <div className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow transition-transform ${hasAdditionalItem ? "translate-x-5" : "translate-x-0.5"}`} />
+              </button>
+            </div>
+
+            {hasAdditionalItem && (
+              <div className="space-y-3 pt-2 border-t border-gray-200">
+                {/* Select product from inventory */}
+                <div>
+                  <label className="block text-xs font-medium text-navy-900 mb-2">Produto</label>
+                  <select
+                    className="w-full h-11 rounded-xl border border-gray-200 bg-white px-3 text-sm"
+                    value=""
+                    onChange={(e) => {
+                      const inv = inventoryProducts.find(p => p.id === e.target.value)
+                      if (inv) {
+                        setAdditionalSelectedItem({
+                          itemId: inv.id,
+                          name: inv.name,
+                          cost: inv.cost,
+                          type: "upsell",
+                          salePrice: inv.suggested.toString(),
+                          qty: 1,
+                        })
+                      }
+                    }}
+                  >
+                    <option value="">Selecione um produto do estoque</option>
+                    {inventoryProducts.map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} — Custo: {formatBRL(p.cost)} / Sug.: {formatBRL(p.suggested)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {additionalSelectedItem && (
+                  <>
+                    {/* Tipo */}
+                    <div>
+                      <label className="block text-xs font-medium text-navy-900 mb-2">Tipo</label>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setAdditionalSelectedItem((p) => p ? { ...p, type: "upsell" } : p)}
+                          className={`flex-1 py-2 rounded-xl border text-sm font-medium transition-all ${
+                            additionalSelectedItem.type === "upsell"
+                              ? "bg-navy-900 text-white border-navy-900"
+                              : "bg-white text-gray-600 border-gray-200 hover:border-gray-300"
+                          }`}
+                        >
+                          Upsell (pago)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAdditionalSelectedItem((p) => p ? { ...p, type: "free" } : p)}
+                          className={`flex-1 py-2 rounded-xl border text-sm font-medium transition-all ${
+                            additionalSelectedItem.type === "free"
+                              ? "bg-navy-900 text-white border-navy-900"
+                              : "bg-white text-gray-600 border-gray-200 hover:border-gray-300"
+                          }`}
+                        >
+                          Brinde (gratuito)
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Valor — apenas upsell */}
+                    {additionalSelectedItem.type === "upsell" && (
+                      <Input
+                        label="Preço de Venda (R$)"
+                        type="number"
+                        value={additionalSelectedItem.salePrice}
+                        onChange={(e) => setAdditionalSelectedItem((p) => p ? { ...p, salePrice: e.target.value } : p)}
+                      />
+                    )}
+
+                    {/* Quantidade adicional */}
+                    <div className="flex items-center gap-1">
+                      <label className="text-xs text-gray-500">Qtd:</label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={additionalSelectedItem.qty}
+                        onChange={(e) => setAdditionalSelectedItem((p) => p ? { ...p, qty: Math.max(1, parseInt(e.target.value) || 0) } : p)}
+                        className="w-14 h-8 text-center rounded-lg border border-gray-200 text-sm font-semibold"
+                      />
+                    </div>
+
+                    {/* Impacto no lucro */}
+                    {(() => {
+                      const cost = additionalSelectedItem.cost
+                      const qty = additionalSelectedItem.qty
+                      const profit = additionalSelectedItem.type === "upsell"
+                        ? (parseFloat(additionalSelectedItem.salePrice) || 0) * qty - cost * qty
+                        : -cost * qty
+                      const isPositive = profit >= 0
+                      return (
+                        <div className={`rounded-xl p-3 border ${isPositive ? "bg-success-100/20 border-success-500/20" : "bg-danger-100/20 border-danger-500/20"}`}>
+                          <p className={`text-sm font-medium ${isPositive ? "text-success-500" : "text-danger-500"}`}>
+                            {additionalSelectedItem.type === "upsell"
+                              ? `${qty}x ${additionalSelectedItem.name.toUpperCase()} ${profit >= 0 ? "aumentará" : "reduzirá"} seu lucro em ${formatBRL(profit)}`
+                              : `${qty}x ${additionalSelectedItem.name.toUpperCase()} reduzirá seu lucro em ${formatBRL(Math.abs(profit))}`
+                            }
+                          </p>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            Custo do item: {formatBRL(cost)}
+                            {additionalSelectedItem.type === "upsell" && parseFloat(additionalSelectedItem.salePrice) > 0 &&
+                              ` · Venda: ${formatBRL(parseFloat(additionalSelectedItem.salePrice))}`
+                            }
+                          </p>
+                        </div>
+                      )
+                    })()}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Payment method buttons */}
           <div>
             <label className="block text-sm font-medium text-navy-900 mb-2">Forma de Pagamento</label>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {PAYMENT_METHODS.map((pm) => {
                 const tradeInVal = hasTradeIn ? (parseFloat(tradeIn.value) || 0) : 0
-                const netPrice = (parseFloat(salePrice) || 0) - tradeInVal
-                const baseForFees = hasTradeIn ? netPrice : parseFloat(salePrice) || 0
+                const netPrice = finalTotal - tradeInVal
+                const baseForFees = hasTradeIn ? netPrice : finalTotal
                 const feePct = fees[getFeeKey(pm.value)] ?? 0
                 const displayPrice = feePct > 0 ? Math.ceil(baseForFees / (1 - feePct / 100)) : baseForFees
                 const isInstallment = pm.maxInstallments > 1
@@ -944,18 +1178,26 @@ function NewSaleContent() {
             </div>
             <div className="bg-surface rounded-xl p-4">
               <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Financeiro</h4>
-              {hasTradeIn && tradeIn.value && (
+              {quantity > 1 && (
                 <p className="text-sm text-gray-500 line-through">{salePrice ? formatBRL(parseFloat(salePrice)) : "—"}</p>
               )}
               <p className="text-lg font-bold text-navy-900">
                 {salePrice
                   ? formatBRL(
-                      (parseFloat(salePrice) || 0) - (hasTradeIn ? (parseFloat(tradeIn.value) || 0) : 0)
+                      finalTotal - (hasTradeIn ? (parseFloat(tradeIn.value) || 0) : 0)
                     )
                   : "—"}
+                {quantity > 1 && (
+                  <span className="text-sm font-normal text-gray-400 ml-2">({quantity}x)</span>
+                )}
               </p>
               <p className="text-sm text-gray-500">{PAYMENT_METHODS.find((p) => p.value === paymentMethod)?.label}</p>
-              {profit !== undefined && profit > 0 && <p className="text-sm text-success-500 font-semibold">Lucro: {formatBRL(profit)}</p>}
+              {totalBaseProfit > 0 && <p className="text-sm text-success-500 font-semibold">Lucro principal: {formatBRL(totalBaseProfit)}</p>}
+              {additionalSelectedItem && (
+                <p className="text-xs text-navy-800 mt-0.5 font-medium">
+                  Lucro total: {formatBRL(totalProfit)}
+                </p>
+              )}
               {hasTradeIn && (
                 <p className="text-xs text-warning-500 font-medium mt-1">
                   Trade-in: {tradeIn.category && tradeIn.modelIdx ? tradeInModels[tradeIn.modelIdx]?.name || tradeIn.category : "Aparelho"} — {tradeIn.value ? formatBRL(parseFloat(tradeIn.value)) : "—"}
@@ -968,6 +1210,51 @@ function NewSaleContent() {
             <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Garantia</h4>
             <p className="text-sm text-navy-900">{warrantyMonths} meses a partir de hoje</p>
           </div>
+
+          {additionalSelectedItem && (
+            <div className="bg-surface rounded-xl p-4 space-y-3">
+              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Adicionais</h4>
+              <div className="rounded-xl border border-success-500/20 bg-success-100/10 p-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-navy-900">
+                      {additionalSelectedItem.qty > 1 ? `${additionalSelectedItem.qty}x ${additionalSelectedItem.name}` : additionalSelectedItem.name}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      {additionalSelectedItem.type === "upsell" ? "Upsell (pago)" : "Brinde (gratuito)"}
+                      {` · Custo: ${formatBRL(additionalSelectedItem.cost)}`}
+                    </p>
+                  </div>
+                  {additionalSelectedItem.type === "upsell" ? (
+                    <p className="text-sm font-bold text-success-500">
+                      +{formatBRL(parseFloat(additionalSelectedItem.salePrice) * (additionalSelectedItem.qty || 1))}
+                    </p>
+                  ) : (
+                    <span className="text-xs font-medium text-warning-500">Grátis</span>
+                  )}
+                </div>
+              </div>
+              {/* Resumo financeiro */}
+              {salePrice && (
+                <div className="pt-2 border-t border-gray-100 space-y-1 text-sm">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Produto principal</span>
+                    <span className="font-semibold text-navy-900">{formatBRL(totalBasePrice)}</span>
+                  </div>
+                  {additionalSelectedItem.type === "upsell" && (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-500">Upsell</span>
+                      <span className="font-semibold text-success-500">+{formatBRL(parseFloat(additionalSelectedItem.salePrice) * (additionalSelectedItem.qty || 1))}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between text-sm pt-1 border-t border-gray-100">
+                    <span className="font-semibold text-navy-900">Total</span>
+                    <span className="font-bold text-navy-900">{formatBRL(finalTotal)}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 

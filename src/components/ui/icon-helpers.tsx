@@ -96,6 +96,7 @@ export function CategoryIcon({ category, className = "w-5 h-5" }: { category: st
     airpods: "🎧",
     macbook: "💻",
     garmin: "🧭",
+    accessories: "🔌",
   }
   return <span className={className}>{iconMap[category] || "📦"}</span>
 }

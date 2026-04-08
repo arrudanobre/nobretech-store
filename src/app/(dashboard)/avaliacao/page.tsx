@@ -26,6 +26,7 @@ import {
   ArrowUpDown,
   AlertTriangle,
   CheckCircle2,
+  Zap,
 } from "lucide-react"
 
 const categoryIcons: Record<string, React.ElementType> = {
@@ -35,6 +36,7 @@ const categoryIcons: Record<string, React.ElementType> = {
   airpods: Headphones,
   macbook: Monitor,
   garmin: MapPinned,
+  accessories: Zap,
 }
 
 // Fatores de ajuste por estado do aparelho

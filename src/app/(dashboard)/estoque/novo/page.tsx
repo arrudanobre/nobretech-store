@@ -25,6 +25,7 @@ import {
   Headphones,
   Watch,
   MapPinned,
+  Zap,
 } from "lucide-react"
 
 const categoryIcons: Record<string, React.ElementType> = {
@@ -34,6 +35,7 @@ const categoryIcons: Record<string, React.ElementType> = {
   airpods: Headphones,
   macbook: Monitor,
   garmin: MapPinned,
+  accessories: Zap,
 }
 
 type Step = 1 | 2 | 3 | 4 | 5
@@ -57,6 +59,7 @@ export default function AddProductPage() {
     purchase_date: "",
     purchase_price: "",
     margin: "15",
+    quantity: "1",
   })
   const [photos, setPhotos] = useState<string[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -68,7 +71,27 @@ export default function AddProductPage() {
   const { toast } = useToast()
   const router = useRouter()
 
+  const ACCESSORIES_LIST = [
+    "Apple Pencil (1ª geração)",
+    "Apple Pencil (2ª geração)",
+    "Apple Pencil USB-C",
+    "Caneta Stylus Goojodoq",
+    "Caneta Stylus WB",
+    "Cabo Lightning",
+    "Cabo USB-C",
+    "Fonte 5W",
+    "Fonte 12W",
+    "Fonte 20W",
+    "Fonte USB-C genérica",
+    "Capa iPhone",
+    "Película iPhone",
+    "Película iPad"
+  ]
+
   const models = useMemo(() => {
+    if (category === "accessories") {
+      return ACCESSORIES_LIST.map(name => ({ name }))
+    }
     const cat = PRODUCT_CATALOG[category as keyof typeof PRODUCT_CATALOG]
     return cat ? cat.models : []
   }, [category])
@@ -160,22 +183,35 @@ export default function AddProductPage() {
     setPhotos((prev) => prev.filter((_, i) => i !== idx))
   }
 
+// Auto-set storage for accessories (uses selectedModel name as storage)
+  useEffect(() => {
+    if (category === "accessories" && selectedModel) {
+      if (!formData.storage || formData.storage !== selectedModel.name) {
+        setFormData((prev) => ({ ...prev, storage: selectedModel.name, color: "Padrão", grade: "Lacrado" }))
+      }
+    }
+  }, [category, selectedModel?.name])
+
   const canProceed = useMemo(() => {
     switch (step) {
       case 1:
+        if (category === "accessories") {
+          return !!selectedModel
+        }
         return selectedModel && formData.storage && formData.color && formData.grade && formData.imei && formData.serial_number
       case 2:
-        return formData.purchase_price && formData.purchase_date
+        return formData.purchase_price && formData.purchase_date && formData.quantity && parseInt(formData.quantity) >= 1
       case 3:
         return photos.length >= 1
       case 4:
+        if (category === "accessories") return true
         return checklistProgress >= 80
       case 5:
         return true
       default:
         return true
     }
-  }, [step, selectedModel, formData, photos, checklistProgress])
+  }, [step, category, selectedModel, formData, photos, checklistProgress])
 
   const prevStep = () => setStep((s) => Math.max(1, s - 1) as Step)
   const nextStep = () => {
@@ -253,47 +289,53 @@ export default function AddProductPage() {
       if (checklistError) throw checklistError
 
       // Find or create product catalog entry
-      const { data: catalogEntries } = await (supabase
-        .from("product_catalog") as any)
-        .select("id")
-        .eq("category", category)
-        .eq("model", selectedModel.name)
-        .eq("storage", formData.storage)
-        .eq("color", formData.color)
-
+      const isAccessory = category === "accessories"
       let catalogId = null
-      if (catalogEntries && catalogEntries.length > 0) {
-        catalogId = catalogEntries[0].id
-      } else {
-        const { data: newCatalog } = await (supabase.from("product_catalog") as any).insert({
-          category,
-          brand: "Apple",
-          model: selectedModel.name,
-          variant: formData.storage,
-          storage: formData.storage,
-          color: formData.color,
-          color_hex: formData.colorHex,
-        } as any).select("id").single()
+      if (!isAccessory) {
+        const { data: catalogEntries } = await (supabase
+          .from("product_catalog") as any)
+          .select("id")
+          .eq("category", category)
+          .eq("model", selectedModel.name)
+          .eq("storage", formData.storage)
+          .eq("color", formData.color)
 
-        catalogId = (newCatalog as any)?.id
+        if (catalogEntries && catalogEntries.length > 0) {
+          catalogId = catalogEntries[0].id
+        } else {
+          const { data: newCatalog } = await (supabase.from("product_catalog") as any).insert({
+            category,
+            brand: "Apple",
+            model: selectedModel.name,
+            variant: formData.storage,
+            storage: formData.storage,
+            color: formData.color,
+            color_hex: formData.colorHex,
+          } as any).select("id").single()
+
+          catalogId = (newCatalog as any)?.id
+        }
       }
+
+      // Accessory name stored in notes (accessible by getProductName)
+      const accessoryName = isAccessory ? `Acessório: ${selectedModel.name}` : null
 
       // Insert inventory
       const { error: inventoryError } = await (supabase.from("inventory") as any).insert({
         company_id: company.id,
         catalog_id: catalogId,
-        imei: formData.imei,
-        serial_number: formData.serial_number,
-        imei2: formData.imei2 || null,
-        grade: formData.grade,
-        condition_notes: formData.condition_notes || null,
+        imei: isAccessory ? null : (formData.imei || null),
+        serial_number: isAccessory ? null : (formData.serial_number || null),
+        imei2: isAccessory ? null : (formData.imei2 || null),
+        grade: isAccessory ? "Lacrado" : formData.grade,
+        condition_notes: accessoryName || formData.condition_notes || null,
         purchase_price: parseFloat(formData.purchase_price),
         purchase_date: formData.purchase_date,
         suggested_price: suggestedPrice,
         photos: photos.length > 0 ? photos : null,
         ios_version: formData.ios_version || null,
         battery_health: formData.battery_health ? parseInt(formData.battery_health) : null,
-        notes: formData.condition_notes || null,
+        notes: accessoryName || formData.condition_notes || null,
         checklist_id: (checklist as any)?.id,
         status: "in_stock",
       } as any)
@@ -301,7 +343,7 @@ export default function AddProductPage() {
       if (inventoryError) throw inventoryError
 
       toast({
-        title: "Aparelho cadastrado!",
+        title: isAccessory ? "Acessório cadastrado!" : "Aparelho cadastrado!",
         description: "O produto foi salvo no estoque com sucesso.",
         type: "success",
       })
@@ -486,7 +528,8 @@ export default function AddProductPage() {
             </>
           )}
 
-          {/* Grade */}
+          {/* Grade — não aplicável para acessórios */}
+          {category !== "accessories" && (
           <div>
             <label className="block text-sm font-medium text-navy-900 mb-2">Grade (ABEC)</label>
             <div className="flex gap-2">
@@ -505,43 +548,48 @@ export default function AddProductPage() {
               ))}
             </div>
           </div>
+          )}
 
-          {/* IMEI, Serial, iOS, Battery */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Input
-              label="IMEI 1"
-              placeholder="15 dígitos"
-              value={formData.imei}
-              onChange={(e) => updateField("imei", e.target.value.replace(/\D/g, "").slice(0, 15))}
-            />
-            <Input
-              label="IMEI 2 (Dual SIM)"
-              placeholder="Opcional"
-              value={formData.imei2}
-              onChange={(e) => updateField("imei2", e.target.value.replace(/\D/g, "").slice(0, 15))}
-            />
-            <Input
-              label="Nº de Série"
-              placeholder="Serial Number"
-              value={formData.serial_number}
-              onChange={(e) => updateField("serial_number", e.target.value)}
-            />
-            <Input
-              label="Versão do Software"
-              placeholder="Ex: 18.3, watchOS 10"
-              value={formData.ios_version}
-              onChange={(e) => updateField("ios_version", e.target.value)}
-            />
-            <Input
-              label="Saúde da Bateria (%)"
-              placeholder="Ex: 94"
-              type="number"
-              min="0"
-              max="100"
-              value={formData.battery_health}
-              onChange={(e) => updateField("battery_health", e.target.value)}
-            />
-          </div>
+          {category !== "accessories" && (
+            <>
+              {/* IMEI, Serial, iOS, Battery */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <Input
+                  label="IMEI 1"
+                  placeholder="15 dígitos"
+                  value={formData.imei}
+                  onChange={(e) => updateField("imei", e.target.value.replace(/\D/g, "").slice(0, 15))}
+                />
+                <Input
+                  label="IMEI 2 (Dual SIM)"
+                  placeholder="Opcional"
+                  value={formData.imei2}
+                  onChange={(e) => updateField("imei2", e.target.value.replace(/\D/g, "").slice(0, 15))}
+                />
+                <Input
+                  label="Nº de Série"
+                  placeholder="Serial Number"
+                  value={formData.serial_number}
+                  onChange={(e) => updateField("serial_number", e.target.value)}
+                />
+                <Input
+                  label="Versão do Software"
+                  placeholder="Ex: 18.3, watchOS 10"
+                  value={formData.ios_version}
+                  onChange={(e) => updateField("ios_version", e.target.value)}
+                />
+                <Input
+                  label="Saúde da Bateria (%)"
+                  placeholder="Ex: 94"
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={formData.battery_health}
+                  onChange={(e) => updateField("battery_health", e.target.value)}
+                />
+              </div>
+            </>
+          )}
 
           <Textarea
             label="Observações de Condição"
@@ -580,6 +628,21 @@ export default function AddProductPage() {
               placeholder="0,00"
               value={formData.purchase_price}
               onChange={(e) => updateField("purchase_price", e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-navy-900 mb-1.5">Quantidade em Estoque</label>
+            <Input
+              type="number"
+              min="1"
+              max="999"
+              placeholder="1"
+              value={formData.quantity}
+              onChange={(e) => {
+                const val = Math.min(999, Math.max(1, parseInt(e.target.value) || 1)).toString()
+                updateField("quantity", val)
+              }}
             />
           </div>
 
@@ -696,6 +759,14 @@ export default function AddProductPage() {
       {/* ── Step 4: Checklist ──────────────────────────── */}
       {step === 4 && (
         <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm space-y-4">
+          {category === "accessories" ? (
+            <div className="flex flex-col items-center justify-center py-8 text-center">
+              <Check className="w-12 h-12 text-success-500 mb-3" />
+              <h3 className="font-display font-bold text-navy-900 font-syne">Checklist não necessário</h3>
+              <p className="text-sm text-gray-500 mt-1">Produtos lacrados e acessórios não exigem inspeção.</p>
+            </div>
+          ) : (
+            <>
           <div className="flex items-center justify-between">
             <h3 className="font-display font-bold text-navy-900 font-syne">
               Checklist — {productName || category}
@@ -782,6 +853,8 @@ export default function AddProductPage() {
               </div>
             ))}
           </div>
+          </>
+          )}
         </div>
       )}
 

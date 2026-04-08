@@ -29,6 +29,7 @@ export default function SaleDetailPage() {
   const [product, setProduct] = useState<any>(null)
   const [checklist, setChecklist] = useState<any[]>([])
   const [generatingPdf, setGeneratingPdf] = useState(false)
+  const [additionalItems, setAdditionalItems] = useState<any[]>([])
 
   useEffect(() => {
     const fetchSale = async () => {
@@ -53,7 +54,7 @@ export default function SaleDetailPage() {
         if ((data as any)?.inventory_id) {
           const { data: p, error: invErr } = await (supabase
             .from("inventory") as any)
-            .select("*, product_catalog(*)")
+            .select("*, catalog:catalog_id(*)")
             .eq("id", (data as any).inventory_id)
             .single()
 
@@ -72,6 +73,15 @@ export default function SaleDetailPage() {
               }
             }
           }
+        }
+
+        // Fetch additional items
+        if (id) {
+          const { data: addItems } = await (supabase
+            .from("sales_additional_items") as any)
+            .select("*")
+            .eq("sale_id", id)
+          if (addItems) setAdditionalItems(addItems)
         }
       } catch (err) {
         toast({ title: "Venda não encontrada", type: "error" })
@@ -134,7 +144,7 @@ export default function SaleDetailPage() {
         currentPage++
       }
 
-      const fileName = `laudo-${product.product_catalog?.model || "aparelho"}-${product.imei?.slice(-4) || product.id.slice(0, 8)}.pdf`
+      const fileName = `laudo-${product.catalog?.model || "aparelho"}-${product.imei?.slice(-4) || product.id.slice(0, 8)}.pdf`
       pdf.save(fileName)
       toast({ title: "Laudo gerado!", type: "success" })
     } catch (err) {
@@ -216,7 +226,7 @@ export default function SaleDetailPage() {
       if (type === "report") {
         drawHeader("Laudo de Inspeção Técnica")
 
-        const catalog = product?.product_catalog || product?.catalog || {}
+        const catalog = product?.catalog || {}
         const fullModel = `${catalog.model || "—"}${catalog.variant ? " " + catalog.variant : ""} ${catalog.storage || ""} ${catalog.color || ""}`.trim()
 
         drawSection("Dados do Aparelho")
@@ -308,7 +318,7 @@ export default function SaleDetailPage() {
       if (type === "warranty") {
         drawHeader("Certificado de Garantia")
 
-        const catalog = product?.product_catalog || product?.catalog || {}
+        const catalog = product?.catalog || {}
         const fullModel = `${catalog.model || "—"}${catalog.variant ? " " + catalog.variant : ""} ${catalog.storage || ""} ${catalog.color || ""}`.trim()
 
         y += 4
@@ -435,7 +445,7 @@ export default function SaleDetailPage() {
   if (loading) return <div className="flex items-center justify-center h-64"><p className="text-gray-400">Carregando...</p></div>
   if (!sale) return null
 
-  const catalog = product?.product_catalog || product?.catalog || {}
+  const catalog = product?.catalog || {}
   const fullModel = `${catalog.model || "—"}${catalog.variant ? " " + catalog.variant : ""} ${catalog.storage || ""} ${catalog.color || ""}`.trim()
   const okCount = checklist.filter((i: any) => i.status === "ok").length
   const failCount = checklist.filter((i: any) => i.status === "fail").length
@@ -560,6 +570,67 @@ export default function SaleDetailPage() {
         </div>
       )}
 
+      {/* Additional Items (Upsell / Brinde) */}
+      {additionalItems.length > 0 && (
+        <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-8 h-8 rounded-lg bg-royal-100 flex items-center justify-center"><CreditCard className="w-4 h-4 text-royal-500" /></div>
+            <h3 className="font-display font-bold text-navy-900 font-syne">Itens Adicionais</h3>
+          </div>
+          <div className="space-y-2">
+            {additionalItems.map((item) => {
+              const isUpsell = item.type === "upsell"
+              const profit = Number(item.profit || 0)
+              return (
+                <div key={item.id} className={`rounded-xl p-3 border ${isUpsell ? "bg-success-100/10 border-success-500/10" : "bg-danger-100/10 border-danger-500/10"}`}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-navy-900">{item.name}</p>
+                      <p className="text-xs text-gray-500">
+                        {isUpsell ? "Upsell (pago)" : "Brinde (gratuito)"} · Custo: {formatBRL(item.cost_price)}
+                        {isUpsell && item.sale_price ? ` · Venda: ${formatBRL(item.sale_price)}` : null}
+                      </p>
+                    </div>
+                    <span className={`text-sm font-bold ${profit >= 0 ? "text-success-500" : "text-danger-500"}`}>
+                      {profit >= 0 ? "+" : ""}{formatBRL(profit)}
+                    </span>
+                  </div>
+                </div>
+              )
+            })}
+            {/* Lucro total */}
+            {(() => {
+              const addProfit = additionalItems.reduce((sum, i) => sum + Number(i.profit || 0), 0)
+              const mainCost = product?.purchase_price || 0
+              const mainProfit = Number(sale?.sale_price || 0) - mainCost
+              const totalProfit = mainProfit + addProfit
+              return (
+                <div className="pt-2 border-t border-gray-100 mt-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Lucro principal</span>
+                    <span className={`font-semibold ${mainProfit >= 0 ? "text-success-500" : "text-danger-500"}`}>
+                      {formatBRL(mainProfit)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Impacto adicionais</span>
+                    <span className={`font-semibold ${addProfit >= 0 ? "text-success-500" : "text-danger-500"}`}>
+                      {addProfit >= 0 ? "+" : ""}{formatBRL(addProfit)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-sm pt-2 border-t border-gray-100">
+                    <span className="font-semibold text-navy-900">Lucro total</span>
+                    <span className={`font-bold ${totalProfit >= 0 ? "text-success-500" : "text-danger-500"}`}>
+                      {formatBRL(totalProfit)}
+                    </span>
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+        </div>
+      )}
+
       <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
         <h3 className="font-display font-bold text-navy-900 mb-4 font-syne">Documentos da Venda</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -612,7 +683,7 @@ export default function SaleDetailPage() {
                 ["Grade", product?.grade || "N/D"],
                 ["Bateria", product?.battery_health ? `${product.battery_health}%` : "N/D"],
                 ["Software", product?.ios_version || "N/D"],
-                ["Cor", product?.product_catalog?.color || "N/D"],
+                ["Cor", product?.catalog?.color || "N/D"],
               ].map(([label, value]) => (
                 <div key={label}>
                   <p style={{ fontSize: "10px", color: "#9CA3AF", margin: 0, textTransform: "uppercase", letterSpacing: "1px" }}>{label}</p>

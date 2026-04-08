@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { CategoryIcon } from "@/components/ui/icon-helpers"
-import { formatBRL, daysBetween, getSupabaseThumbnail } from "@/lib/helpers"
+import { formatBRL, daysBetween, getSupabaseThumbnail, getProductName } from "@/lib/helpers"
 import { CATEGORIES, GRADES } from "@/lib/constants"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/toaster"
@@ -27,6 +27,7 @@ interface InventoryItem {
   battery_health?: number
   ios_version?: string
   condition_notes?: string
+  notes?: string
   catalog?: any
   product_catalog?: any
   sales?: any
@@ -138,7 +139,7 @@ export default function InventoryPage() {
     const matchStatus = activeStatus === "all" || item.status === activeStatus
     const matchGrade = activeGrade === "all" ? true : item.grade === activeGrade
     const matchSearch = search
-      ? (item.catalog?.model || "").toLowerCase().includes(search.toLowerCase()) ||
+      ? getProductName(item).toLowerCase().includes(search.toLowerCase()) ||
         (item.imei || "").includes(search) ||
         false
       : true
@@ -281,9 +282,11 @@ export default function InventoryPage() {
           {filtered.map((item: any) => {
             const status = statusLabels[item.status as any] || { label: item.status, badge: "gray" as const }
             const gradeInfo = GRADES.find((g) => g.value === item.grade)
-            const days = daysBetween(item.purchase_date)
+            const isSold = item.status === "sold"
+            const saleDateVal = isSold && item.sales?.[0] ? item.sales[0].sale_date : undefined
+            const days = daysBetween(item.purchase_date, saleDateVal)
             const cat = item.catalog || item.product_catalog
-            const catalogName = cat ? `${cat.model}${cat.variant ? " " + cat.variant : ""}` : "Sem catálogo"
+            const catalogName = getProductName(item)
             const catalogStorage = cat?.storage || ""
             const catalogColor = cat?.color || ""
             

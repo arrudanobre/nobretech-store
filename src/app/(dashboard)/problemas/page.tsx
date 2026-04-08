@@ -87,6 +87,28 @@ export default function ProblemsPage() {
 
   const fetchProblems = async () => {
     try {
+      // Test basic auth
+      const { data: { user } } = await supabase.auth.getUser()
+      console.log("[Problemas] Auth user:", user?.id, user?.email)
+
+      if (!user) {
+        console.error("[Problemas] Usuário não autenticado")
+        setLoading(false)
+        return
+      }
+
+      const { data: userData } = await (supabase.from("users") as any).select("company_id").eq("id", user.id).single()
+      console.log("[Problemas] User company_id:", userData?.company_id)
+
+      // Fetch without joins first to isolate RLS issue
+      const { data: rawData, error: rawError } = await (supabase
+        .from("problems") as any)
+        .select("*")
+
+      console.log("[Problemas] Raw query - data length:", rawData?.length, "error:", rawError)
+      if (rawError) console.error("[Problemas] Raw query error:", rawError)
+
+      // Now try with joins
       const { data, error } = await (supabase
         .from("problems") as any)
         .select(`
@@ -94,10 +116,14 @@ export default function ProblemsPage() {
           customers(full_name, cpf, phone),
           inventory(
             imei,
-            product_catalog(model, variant, storage, color)
+            catalog:catalog_id(model, variant, storage, color)
           )
         `)
         .order("reported_date", { ascending: false })
+
+      console.log("[Problemas] Full query - data length:", data?.length, "error:", error)
+      if (error) console.error("[Problemas] Full query error:", error)
+
       if (error) throw error
       setProblems(data || [])
     } catch (err: any) {
@@ -377,7 +403,7 @@ export default function ProblemsPage() {
     let matchUrgency = true
     if (urgencyFilter === "critical") matchUrgency = urgency >= 2
     if (urgencyFilter === "expiring") matchUrgency = urgency > 0 && urgency <= 2
-    const productName = p.inventory?.product_catalog?.model || ""
+    const productName = p.inventory?.catalog?.model || ""
     const customerName = p.customers?.full_name || ""
     const matchSearch = !search ||
       productName.toLowerCase().includes(search.toLowerCase()) ||
@@ -490,7 +516,7 @@ export default function ProblemsPage() {
           {filtered.map((p) => {
             const status = statusLabels[p.status]
             const inv = p.inventory
-            const cat = inv?.product_catalog || {}
+            const cat = inv?.catalog || {}
             const daysSince = getDaysSinceReport(p.reported_date)
             const isEditing = editingProblem === p.id
             const isDeleteAlert = deleteConfirm === p.id

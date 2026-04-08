@@ -2,6 +2,7 @@ export const PRODUCT_CATALOG = {
   iphone: {
     label: 'iPhone',
     icon: 'smartphone',
+    // Modelos ordenados do mais antigo (2021) ao mais novo (2025)
     models: [
       {
         name: 'iPhone 13',
@@ -218,8 +219,8 @@ export const PRODUCT_CATALOG = {
     icon: 'tablet',
     models: [
       {
-        name: 'iPad (10ª geração)',
-        colors: [{ name: 'Azul', hex: '#D5E5F0' }, { name: 'Rosa', hex: '#FFD1DC' }, { name: 'Amarelo', hex: '#F2E88A' }, { name: 'Prateado', hex: '#E5E7EB' }],
+        name: 'iPad (9ª geração)',
+        colors: [{ name: 'Cinza Espacial', hex: '#374151' }, { name: 'Prateado', hex: '#E5E7EB' }],
         storage: ['64GB', '256GB'],
       },
       {
@@ -228,14 +229,14 @@ export const PRODUCT_CATALOG = {
         storage: ['64GB', '256GB'],
       },
       {
+        name: 'iPad (10ª geração)',
+        colors: [{ name: 'Azul', hex: '#D5E5F0' }, { name: 'Rosa', hex: '#FFD1DC' }, { name: 'Amarelo', hex: '#F2E88A' }, { name: 'Prateado', hex: '#E5E7EB' }],
+        storage: ['64GB', '256GB'],
+      },
+      {
         name: 'iPad (A16)',
         colors: [{ name: 'Azul', hex: '#D5E5F0' }, { name: 'Rosa', hex: '#FFD1DC' }, { name: 'Amarelo', hex: '#F2E88A' }, { name: 'Prateado', hex: '#E5E7EB' }],
         storage: ['128GB', '256GB'],
-      },
-      {
-        name: 'iPad mini (A17 Pro)',
-        colors: [{ name: 'Cinza Espacial', hex: '#374151' }, { name: 'Azul', hex: '#A0B4D0' }, { name: 'Roxo', hex: '#B0A0C0' }, { name: 'Estelar', hex: '#F5E6D3' }],
-        storage: ['128GB', '256GB', '512GB'],
       },
       {
         name: 'iPad Air 11" (M2)',
@@ -248,16 +249,6 @@ export const PRODUCT_CATALOG = {
         storage: ['128GB', '256GB', '512GB', '1TB'],
       },
       {
-        name: 'iPad Air 11" (M3)',
-        colors: [{ name: 'Cinza Espacial', hex: '#374151' }, { name: 'Estelar', hex: '#F5E6D3' }, { name: 'Azul', hex: '#D5E5F0' }, { name: 'Roxo', hex: '#C4B5D0' }],
-        storage: ['128GB', '256GB', '512GB', '1TB'],
-      },
-      {
-        name: 'iPad Air 13" (M3)',
-        colors: [{ name: 'Cinza Espacial', hex: '#374151' }, { name: 'Estelar', hex: '#F5E6D3' }, { name: 'Azul', hex: '#D5E5F0' }, { name: 'Roxo', hex: '#C4B5D0' }],
-        storage: ['128GB', '256GB', '512GB', '1TB'],
-      },
-      {
         name: 'iPad Pro 11" (M4)',
         colors: [{ name: 'Cinza Espacial', hex: '#374151' }, { name: 'Prateado', hex: '#F5F5F5' }],
         storage: ['256GB', '512GB', '1TB', '2TB'],
@@ -266,6 +257,21 @@ export const PRODUCT_CATALOG = {
         name: 'iPad Pro 13" (M4)',
         colors: [{ name: 'Cinza Espacial', hex: '#374151' }, { name: 'Prateado', hex: '#F5F5F5' }],
         storage: ['256GB', '512GB', '1TB', '2TB'],
+      },
+      {
+        name: 'iPad mini (A17 Pro)',
+        colors: [{ name: 'Cinza Espacial', hex: '#374151' }, { name: 'Azul', hex: '#A0B4D0' }, { name: 'Roxo', hex: '#B0A0C0' }, { name: 'Estelar', hex: '#F5E6D3' }],
+        storage: ['128GB', '256GB', '512GB'],
+      },
+      {
+        name: 'iPad Air 11" (M3)',
+        colors: [{ name: 'Cinza Espacial', hex: '#374151' }, { name: 'Estelar', hex: '#F5E6D3' }, { name: 'Azul', hex: '#D5E5F0' }, { name: 'Roxo', hex: '#C4B5D0' }],
+        storage: ['128GB', '256GB', '512GB', '1TB'],
+      },
+      {
+        name: 'iPad Air 13" (M3)',
+        colors: [{ name: 'Cinza Espacial', hex: '#374151' }, { name: 'Estelar', hex: '#F5E6D3' }, { name: 'Azul', hex: '#D5E5F0' }, { name: 'Roxo', hex: '#C4B5D0' }],
+        storage: ['128GB', '256GB', '512GB', '1TB'],
       },
       {
         name: 'iPad Pro 11" (M5)',
@@ -299,29 +305,24 @@ export const PRODUCT_CATALOG = {
         colors: [{ name: 'Cinza Espacial', hex: '#374151' }, { name: 'Prateado', hex: '#E5E7EB' }, { name: 'Estelar', hex: '#F5E6D3' }, { name: '(PRODUCT)RED', hex: '#E8001C' }],
       },
       {
-        name: 'Apple Watch Series 9',
-        sizes: ['41mm', '45mm'],
-        colors: [{ name: 'Cinza Espacial', hex: '#374151' }, { name: 'Prateado', hex: '#E5E7EB' }, { name: 'Rosa', hex: '#FFD1DC' }, { name: 'Estelar', hex: '#F5E6D3' }],
-      },
-      {
-        name: 'Apple Watch Series 10',
-        sizes: ['42mm', '46mm'],
-        colors: [{ name: 'Cinza Espacial', hex: '#374151' }, { name: 'Prateado', hex: '#E5E7EB' }, { name: 'Ouro Rosa', hex: '#F5D0A0' }],
-      },
-      {
-        name: 'Apple Watch Series 11',
-        sizes: ['42mm', '46mm'],
-        colors: [{ name: 'Cinza Espacial', hex: '#374151' }, { name: 'Prateado', hex: '#E5E7EB' }, { name: 'Ouro Rosa', hex: '#F5D0A0' }, { name: 'Preto', hex: '#1F2937' }],
-      },
-      {
         name: 'Apple Watch Ultra',
         sizes: ['49mm'],
         colors: [{ name: 'Titânio Natural', hex: '#C0C0C0' }],
       },
       {
+        name: 'Apple Watch Series 9',
+        sizes: ['41mm', '45mm'],
+        colors: [{ name: 'Cinza Espacial', hex: '#374151' }, { name: 'Prateado', hex: '#E5E7EB' }, { name: 'Rosa', hex: '#FFD1DC' }, { name: 'Estelar', hex: '#F5E6D3' }],
+      },
+      {
         name: 'Apple Watch Ultra 2',
         sizes: ['49mm'],
         colors: [{ name: 'Titânio Natural', hex: '#C0C0C0' }],
+      },
+      {
+        name: 'Apple Watch Series 10',
+        sizes: ['42mm', '46mm'],
+        colors: [{ name: 'Cinza Espacial', hex: '#374151' }, { name: 'Prateado', hex: '#E5E7EB' }, { name: 'Ouro Rosa', hex: '#F5D0A0' }],
       },
       {
         name: 'Apple Watch Ultra 3',
@@ -340,6 +341,10 @@ export const PRODUCT_CATALOG = {
     icon: 'headphones',
     models: [
       {
+        name: 'AirPods Max',
+        colors: [{ name: 'Cinza Espacial', hex: '#374151' }, { name: 'Prateado', hex: '#E5E7EB' }, { name: 'Azul', hex: '#5BA4CF' }, { name: 'Verde', hex: '#4E7662' }, { name: 'Rosa', hex: '#FFD1DC' }],
+      },
+      {
         name: 'AirPods (3ª geração)',
         colors: [{ name: 'Branco', hex: '#FFFFFF' }],
       },
@@ -356,22 +361,19 @@ export const PRODUCT_CATALOG = {
         colors: [{ name: 'Branco', hex: '#FFFFFF' }],
       },
       {
-        name: 'AirPods Pro 3',
-        colors: [{ name: 'Branco', hex: '#FFFFFF' }],
-      },
-      {
-        name: 'AirPods Max',
-        colors: [{ name: 'Cinza Espacial', hex: '#374151' }, { name: 'Prateado', hex: '#E5E7EB' }, { name: 'Azul', hex: '#5BA4CF' }, { name: 'Verde', hex: '#4E7662' }, { name: 'Rosa', hex: '#FFD1DC' }],
-      },
-      {
         name: 'AirPods Max 2',
         colors: [{ name: 'Cinza Espacial', hex: '#374151' }, { name: 'Azul Meia-noite', hex: '#1E3A5F' }, { name: 'Rosa', hex: '#FFD1DC' }, { name: 'Prateado', hex: '#E5E7EB' }],
+      },
+      {
+        name: 'AirPods Pro 3',
+        colors: [{ name: 'Branco', hex: '#FFFFFF' }],
       },
     ],
   },
   macbook: {
     label: 'MacBook',
     icon: 'monitor',
+    // Modelos ordenados cronologicamente (mais antigo → mais novo)
     models: [
       {
         name: 'MacBook Air M1',
@@ -450,39 +452,52 @@ export const PRODUCT_CATALOG = {
       },
     ],
   },
-  garmin: {
-    label: 'Garmin',
-    icon: 'navigation',
+  accessories: {
+    label: 'Acessórios',
+    icon: 'zap',
+    // Acessórios diversos - lista fixa de nomes (sem campos técnicos)
     models: [
       {
-        name: 'Garmin Forerunner 255',
-        sizes: ['42mm', '46mm'],
-        colors: [{ name: 'Preto', hex: '#000000' }, { name: 'Azul', hex: '#0071E3' }],
+        name: 'Apple Pencil (1ª geração)',
       },
       {
-        name: 'Garmin Forerunner 955',
-        sizes: ['46mm'],
-        colors: [{ name: 'Preto', hex: '#000000' }],
+        name: 'Apple Pencil (2ª geração)',
       },
       {
-        name: 'Garmin Fenix 7',
-        sizes: ['42mm', '47mm', '51mm'],
-        colors: [{ name: 'Cinza', hex: '#6B7280' }, { name: 'Preto', hex: '#000000' }],
+        name: 'Apple Pencil USB-C',
       },
       {
-        name: 'Garmin Fenix 7X',
-        sizes: ['51mm'],
-        colors: [{ name: 'Preto', hex: '#000000' }, { name: 'Cinza', hex: '#6B7280' }],
+        name: 'Caneta Stylus Goojodoq',
       },
       {
-        name: 'Garmin Epix',
-        sizes: ['42mm', '47mm'],
-        colors: [{ name: 'Preto', hex: '#000000' }],
+        name: 'Caneta Stylus WB',
       },
       {
-        name: 'Garmin Venu 2',
-        sizes: ['40mm', '45mm'],
-        colors: [{ name: 'Preto', hex: '#000000' }, { name: 'Azul', hex: '#0071E3' }],
+        name: 'Cabo Lightning',
+      },
+      {
+        name: 'Cabo USB-C',
+      },
+      {
+        name: 'Fonte 5W',
+      },
+      {
+        name: 'Fonte 12W',
+      },
+      {
+        name: 'Fonte 20W',
+      },
+      {
+        name: 'Fonte USB-C genérica',
+      },
+      {
+        name: 'Capa iPhone',
+      },
+      {
+        name: 'Película iPhone',
+      },
+      {
+        name: 'Película iPad',
       },
     ],
   },
@@ -522,6 +537,7 @@ export const CATEGORIES = [
   { value: 'airpods', label: 'AirPods' },
   { value: 'macbook', label: 'MacBook' },
   { value: 'garmin', label: 'Garmin' },
+  { value: 'accessories', label: 'Acessórios' },
 ] as const
 
 export const CHECKLIST_TEMPLATES: Record<string, { id: string; label: string; status: 'ok' | 'fail' | 'na'; note?: string }[]> = {
@@ -626,5 +642,15 @@ export const CHECKLIST_TEMPLATES: Record<string, { id: string; label: string; st
       { id: 'garmin_strap', label: 'Pulseira/cinta em boas condições', status: 'na', note: '' },
       { id: 'garmin_reset', label: 'Reset de fábrica realizado', status: 'na', note: '' },
       { id: 'garmin_firmware', label: 'Firmware atualizado', status: 'na', note: '' },
+    ],
+    accessories: [
+      { id: 'ac_display', label: 'Tela/Display - Sem riscos, trincos ou manchas', status: 'na', note: '' },
+      { id: 'ac_buttons', label: 'Botões e controles funcionando', status: 'na', note: '' },
+      { id: 'ac_battery', label: 'Bateria (se aplicável) - Carregando e segurando carga', status: 'na', note: '' },
+      { id: 'ac_charging', label: 'Porta de carregamento/conectores funcionando', status: 'na', note: '' },
+      { id: 'ac_connectivity', label: 'Conectividade (Bluetooth/Wi-Fi se aplicável)', status: 'na', note: '' },
+      { id: 'ac_sound', label: 'Áudio e microfone funcionando', status: 'na', note: '' },
+      { id: 'ac_physical', label: 'Estado físico - Sem amassados, riscos ou danos visíveis', status: 'na', note: '' },
+      { id: 'ac_functionality', label: 'Funcionalidade geral - Executando sua função principal', status: 'na', note: '' },
     ],
   }

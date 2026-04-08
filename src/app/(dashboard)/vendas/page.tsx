@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
-import { formatBRL, formatDate, daysBetween } from "@/lib/helpers"
+import { formatBRL, formatDate, daysBetween, getProductName } from "@/lib/helpers"
 import { supabase } from "@/lib/supabase"
 import { Plus, Search } from "lucide-react"
 
@@ -30,7 +30,8 @@ export default function SalesPage() {
               imei,
               status,
               catalog:catalog_id (id, brand, model, variant, storage, color)
-            )
+            ),
+            sales_additional_items (type, cost_price, sale_price, profit)
           `)
           .order("sale_date", { ascending: false })
           .limit(50)
@@ -52,7 +53,7 @@ export default function SalesPage() {
   }, [])
 
   const filtered = sales.filter((s) => {
-    const productName = s.inventory?.catalog?.model || ""
+    const productName = getProductName(s.inventory || {}) || ""
     const customerName = s.customers?.full_name || ""
     return (
       !search ||
@@ -106,9 +107,18 @@ export default function SalesPage() {
         <div className="space-y-2">
           {filtered.map((s) => {
             const customerName = s.customers?.full_name || "—"
-            const catalog = s.inventory?.catalog || {}
-            const productName = `${catalog.model || "Produto"} ${catalog.variant || ""} ${catalog.storage || ""} ${catalog.color || ""}`.trim()
+            const productName = getProductName(s.inventory || {})
             const warrantyDays = daysBetween(s.warranty_end)
+            // sale_price stored may be total (qty * unit) or unit. Parse notes for qty hint.
+            const salePrice = Number(s.sale_price) || 0
+            const costPrice = s.inventory?.purchase_price || 0
+            // Detect quantity from notes format "[Nx ...]"
+            const notes = s.notes || ""
+            const qtyMatch = notes.match(/^\[(\d+)x/)
+            const qty = qtyMatch ? parseInt(qtyMatch[1]) : 1
+            const baseProfit = salePrice - (costPrice * qty)
+            const additionalProfit = (s.sales_additional_items || []).reduce((sum: number, item: any) => sum + Number(item.profit || 0), 0)
+            const totalProfit = baseProfit + additionalProfit
 
             return (
               <button
@@ -136,6 +146,11 @@ export default function SalesPage() {
                   >
                     Garantia: {Math.max(0, warrantyDays)} dias
                   </Badge>
+                  {totalProfit !== 0 && (
+                    <Badge variant={totalProfit > 0 ? "green" : "red"} dot>
+                      Lucro: {totalProfit > 0 ? "+" : ""}{formatBRL(totalProfit)}
+                    </Badge>
+                  )}
                 </div>
               </button>
             )

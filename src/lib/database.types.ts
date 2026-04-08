@@ -661,6 +661,42 @@ export interface Database {
           created_at?: string | null;
         };
       };
+      sales_additional_items: {
+        Row: {
+          id: string;
+          company_id: string | null;
+          sale_id: string | null;
+          product_id: string | null;
+          type: string;
+          name: string;
+          cost_price: number;
+          sale_price: number | null;
+          profit: number;
+          created_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          company_id?: string | null;
+          sale_id?: string | null;
+          product_id?: string | null;
+          type: string;
+          name: string;
+          cost_price: number;
+          sale_price?: number | null;
+          created_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          company_id?: string | null;
+          sale_id?: string | null;
+          product_id?: string | null;
+          type?: string;
+          name?: string;
+          cost_price?: number;
+          sale_price?: number | null;
+          created_at?: string | null;
+        };
+      };
     };
     Views: Record<never, never>;
     Functions: Record<never, never>;

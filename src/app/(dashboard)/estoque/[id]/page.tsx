@@ -213,8 +213,9 @@ export default function ProductDetailPage() {
     )
   }
 
-  const catalogName = product.catalog
+  const catalogName = product.catalog?.model
     ? `${product.catalog.model}${product.catalog.variant ? " " + product.catalog.variant : ""}`
+    : product.condition_notes ? product.condition_notes.replace(/^Acessório:\s*/, "")
     : product.imei
       ? `Dispositivo IMEI ...${product.imei.slice(-4)}`
       : "Sem catálogo"
@@ -229,7 +230,7 @@ export default function ProductDetailPage() {
   const progress = total > 0 ? Math.round((passed / total) * 100) : 0
 
   const catalogCategory = product.catalog?.category || ""
-  const categoryLabel = CATEGORIES.find((c) => c.value === catalogCategory)?.label || "Produto"
+  const categoryLabel = CATEGORIES.find((c) => c.value === catalogCategory)?.label || "Acessório"
 
   // Calc Promo Limits for Cash/PIX (minimalista)
   const promoLimit10 = buildPriceTable(product.purchase_price, 10, settings || {}).find(p => p.method === 'pix')?.price || 0
