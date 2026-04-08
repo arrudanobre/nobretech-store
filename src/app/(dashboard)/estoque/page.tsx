@@ -29,6 +29,7 @@ interface InventoryItem {
   condition_notes?: string
   catalog?: any
   product_catalog?: any
+  sales?: any
   created_at: string
 }
 
@@ -54,7 +55,7 @@ export default function InventoryPage() {
     try {
       const { data, error } = await (supabase
         .from("inventory") as any)
-        .select("*, product_catalog(id, category, model, variant, storage, color, brand, year)")
+        .select("*, product_catalog(id, category, model, variant, storage, color, brand, year), sales(sale_price)")
         .order("created_at", { ascending: false })
 
       if (error) {
@@ -241,6 +242,18 @@ export default function InventoryPage() {
             const catalogName = cat ? `${cat.model}${cat.variant ? " " + cat.variant : ""}` : "Sem catálogo"
             const catalogStorage = cat?.storage || ""
             const catalogColor = cat?.color || ""
+            
+            const sale = item.sales?.[0] || item.sales
+            const salePrice = sale?.sale_price
+
+            let salePriceColor = "text-navy-900"
+            if (salePrice && item.suggested_price) {
+              if (salePrice >= item.suggested_price) {
+                salePriceColor = "text-emerald-600"
+              } else if (salePrice < item.suggested_price * 0.85) {
+                salePriceColor = "text-red-600"
+              }
+            }
 
             return (
               <div
@@ -306,12 +319,22 @@ export default function InventoryPage() {
                       <p className="text-xs text-gray-500">Custo</p>
                       <p className="text-sm font-bold text-navy-900">{formatBRL(item.purchase_price)}</p>
                     </div>
-                    {item.suggested_price && (
-                      <div className="text-right">
-                        <p className="text-xs text-gray-500">Sugerido</p>
-                        <p className="text-sm font-bold text-royal-500">{formatBRL(item.suggested_price)}</p>
-                      </div>
-                    )}
+                    <div className="text-right">
+                      {item.suggested_price && (
+                        <div className={item.status === "sold" ? "mb-1" : ""}>
+                          <p className="text-[10px] text-gray-400 leading-tight">Sugerido</p>
+                          <p className={`font-bold ${item.status === "sold" ? "text-xs text-gray-400" : "text-sm text-royal-500"}`}>
+                            {formatBRL(item.suggested_price)}
+                          </p>
+                        </div>
+                      )}
+                      {item.status === "sold" && salePrice && (
+                        <div className="pt-1 border-t border-gray-50">
+                          <p className="text-[10px] text-gray-500 leading-tight">Venda</p>
+                          <p className={`text-sm font-bold ${salePriceColor}`}>{formatBRL(salePrice)}</p>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {/* Status */}

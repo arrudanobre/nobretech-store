@@ -37,6 +37,8 @@ export default function ProductDetailPage() {
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([])
   const [priceTable, setPriceTable] = useState<any[]>([])
   const [generatingPdf, setGeneratingPdf] = useState(false)
+  const [settings, setSettings] = useState<any>(null)
+  const [saleData, setSaleData] = useState<any>(null)
 
   const fetchProduct = useCallback(async () => {
     if (!productId) return
@@ -80,7 +82,54 @@ export default function ProductDetailPage() {
       }
 
       if (p.purchase_price) {
-        setPriceTable(buildPriceTable(p.purchase_price, 15, {}))
+        // 1. Fetch settings from DB with robust mapping
+        const { data: setts } = await (supabase.from("financial_settings") as any).select("*").limit(1)
+        
+        // Use EXACT SAME defaults as FinancePage for consistency
+        const defaults = {
+          pix: 0, cash: 0, debit: 1.47,
+          credit_1x: 3.26, credit_2x: 11.77, credit_3x: 13.03, credit_4x: 13.13,
+          credit_5x: 15.37, credit_6x: 15.38, credit_7x: 17.12, credit_8x: 17.12,
+          credit_9x: 19.17, credit_10x: 19.82, credit_11x: 19.82, credit_12x: 20.78,
+          default_margin_pct: 15
+        }
+
+        let activeSettings = { ...defaults }
+
+        if (setts && setts[0]) {
+          const s = setts[0]
+          activeSettings = {
+            pix: s.pix_fee_pct ?? defaults.pix,
+            cash: s.cash_discount_pct ?? defaults.cash,
+            debit: s.debit_fee_pct ?? defaults.debit,
+            credit_1x: s.credit_1x_fee_pct ?? defaults.credit_1x,
+            credit_2x: s.credit_2x_fee_pct ?? defaults.credit_2x,
+            credit_3x: s.credit_3x_fee_pct ?? defaults.credit_3x,
+            credit_4x: s.credit_4x_fee_pct ?? defaults.credit_4x,
+            credit_5x: s.credit_5x_fee_pct ?? defaults.credit_5x,
+            credit_6x: s.credit_6x_fee_pct ?? defaults.credit_6x,
+            credit_7x: s.credit_7x_fee_pct ?? defaults.credit_7x,
+            credit_8x: s.credit_8x_fee_pct ?? defaults.credit_8x,
+            credit_9x: s.credit_9x_fee_pct ?? defaults.credit_9x,
+            credit_10x: s.credit_10x_fee_pct ?? defaults.credit_10x,
+            credit_11x: s.credit_11x_fee_pct ?? defaults.credit_11x,
+            credit_12x: s.credit_12x_fee_pct ?? defaults.credit_12x,
+            default_margin_pct: s.default_margin_pct ?? defaults.default_margin_pct,
+          } as any
+        }
+        
+        setSettings(activeSettings)
+
+        // 2. Fetch sale price if sold
+        if (p.status === "sold") {
+          const { data: sd } = await (supabase.from("sales") as any)
+            .select("*")
+            .eq("inventory_id", p.id)
+            .limit(1)
+          if (sd && sd[0]) setSaleData(sd[0])
+        }
+
+        setPriceTable(buildPriceTable(p.purchase_price, activeSettings.default_margin_pct, activeSettings))
       }
     } catch (err: any) {
       console.error("Unexpected error:", err?.message || err)
@@ -182,6 +231,19 @@ export default function ProductDetailPage() {
   const catalogCategory = product.catalog?.category || ""
   const categoryLabel = CATEGORIES.find((c) => c.value === catalogCategory)?.label || "Produto"
 
+  // Calc Promo Limits for Cash/PIX (minimalista)
+  const promoLimit10 = buildPriceTable(product.purchase_price, 10, settings || {}).find(p => p.method === 'pix')?.price || 0
+  const promoLimit5 = buildPriceTable(product.purchase_price, 5, settings || {}).find(p => p.method === 'pix')?.price || 0
+
+  let salePerformanceColor = "text-navy-900"
+  if (saleData?.sale_price && product.suggested_price) {
+    if (saleData.sale_price >= product.suggested_price) {
+      salePerformanceColor = "text-emerald-600"
+    } else if (saleData.sale_price < product.suggested_price * 0.85) {
+      salePerformanceColor = "text-red-600"
+    }
+  }
+
   return (
     <div className="space-y-4 animate-fade-in">
       {/* Header */}
@@ -270,27 +332,67 @@ export default function ProductDetailPage() {
         </div>
 
         {/* Price Table */}
-        <div className="bg-card rounded-2xl border border-gray-100 shadow-sm">
+        <div className="bg-card rounded-2xl border border-gray-100 shadow-sm flex flex-col">
           <h3 className="font-display font-bold text-navy-900 p-4 pb-2 font-syne">Preços Sugeridos</h3>
-          <div className="px-4 pb-4">
-            <div className="flex items-baseline gap-2 mb-3">
-              <span className="text-sm text-gray-500">Custo:</span>
-              <span className="text-lg font-bold text-navy-900">{formatBRL(product.purchase_price)}</span>
+          <div className="px-4 pb-4 flex-1">
+            <div className="grid grid-cols-2 gap-4 mb-4 pb-4 border-b border-gray-50">
+              <div>
+                <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Custo</p>
+                <p className="text-base font-bold text-navy-900">{formatBRL(product.purchase_price)}</p>
+              </div>
+              <div>
+                {product.status === "sold" && saleData ? (
+                  <>
+                    <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Vendido por</p>
+                    <p className={`text-base font-bold ${salePerformanceColor}`}>{formatBRL(saleData.sale_price)}</p>
+                    <p className={`text-[9px] font-bold mt-0.5 ${saleData.sale_price >= product.purchase_price ? "text-emerald-600" : "text-red-600"}`}>
+                      {saleData.sale_price >= product.purchase_price ? "+" : ""} {formatBRL(saleData.sale_price - product.purchase_price)} lucro
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Sugerido</p>
+                    <p className="text-lg font-bold text-royal-500 leading-none">{formatBRL(product.suggested_price || 0)}</p>
+                    {product.suggested_price && (
+                      <p className="text-[9px] text-emerald-600 font-bold mt-1.5">
+                        + {formatBRL(product.suggested_price - product.purchase_price)} lucro
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
-            {product.suggested_price && (
-              <div className="flex items-baseline gap-2 mb-3">
-                <span className="text-sm text-gray-500">Sugerido:</span>
-                <span className="text-lg font-bold text-royal-500">{formatBRL(product.suggested_price)}</span>
+
+            {product.status !== "sold" && promoLimit5 > 0 && (
+              <div className="mb-6 relative">
+                <div className="absolute -left-1 top-1/2 -translate-y-1/2 w-1 h-8 bg-royal-500 rounded-full" />
+                <div className="bg-royal-50/80 border border-royal-100 rounded-xl p-3 shadow-sm">
+                  <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-2">Simulador de Promoção</p>
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Mínimo (10%)</p>
+                      <p className="text-base font-bold text-navy-900">{formatBRL(promoLimit10)}</p>
+                      <p className="text-[9px] text-emerald-600 font-bold mt-0.5">+ {formatBRL(promoLimit10 - product.purchase_price)} lucro</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Crítico (5%)</p>
+                      <p className="text-base font-bold text-danger-600">{formatBRL(promoLimit5)}</p>
+                      <p className="text-[9px] text-emerald-600 font-bold mt-0.5">+ {formatBRL(promoLimit5 - product.purchase_price)} lucro</p>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
+
             <div className="space-y-1">
+              <p className="text-[10px] text-gray-400 uppercase font-bold mb-2">Tabela de Parcelamento</p>
               {priceTable.map((row: any) => (
-                <div key={row.method} className="flex justify-between text-sm py-1.5">
+                <div key={row.method} className="flex justify-between text-sm py-1.5 border-b border-gray-50/50 last:border-0">
                   <span className="text-gray-600">{row.label}</span>
                   <span className="font-semibold text-navy-900">
                     {formatBRL(row.price)}
                     {row.installments > 1 && (
-                      <span className="text-xs text-gray-400 ml-1">
+                      <span className="text-[10px] text-gray-400 ml-1 font-normal">
                         ({row.installments}x {formatBRL(row.installmentValue)})
                       </span>
                     )}

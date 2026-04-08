@@ -32,13 +32,13 @@ import {
 import Link from "next/link"
 
 const CATEGORY_COLORS: Record<string, string> = {
-  iPhone: "#3A6BC4",
-  iPad: "#3ABF82",
-  "Apple Watch": "#C9A84C",
-  AirPods: "#E05C5C",
-  MacBook: "#8B5CF6",
-  Garmin: "#06B6D4",
-  Outros: "#94a3b8",
+  iPhone: "#3B82F6", // Royal Blue
+  iPad: "#10B981", // Emerald
+  "Apple Watch": "#F59E0B", // Amber
+  AirPods: "#EF4444", // Rose
+  MacBook: "#8B5CF6", // Violet
+  Garmin: "#06B6D4", // Cyan
+  Outros: "#64748B", // Slate
 }
 
 const MONTHS_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
@@ -177,10 +177,26 @@ export default function DashboardPage() {
 
       const catRaw = (salesCategoryRes.data as any[]) ?? []
       const catCount: Record<string, number> = {}
+      
+      const formatCat = (c: string) => {
+        const m: Record<string, string> = {
+          iphone: "iPhone",
+          ipad: "iPad",
+          applewatch: "Apple Watch",
+          airpods: "AirPods",
+          macbook: "MacBook",
+          garmin: "Garmin",
+        }
+        const low = c.toLowerCase()
+        return m[low] || c.charAt(0).toUpperCase() + c.slice(1)
+      }
+
       catRaw.forEach((s: any) => {
-        const cat = s.inventory?.catalog?.category ?? "Outros"
-        catCount[cat] = (catCount[cat] ?? 0) + 1
+        const raw = s.inventory?.catalog?.category ?? "Outros"
+        const formatted = formatCat(raw)
+        catCount[formatted] = (catCount[formatted] ?? 0) + 1
       })
+
       const total = Object.values(catCount).reduce((a, b) => a + b, 0) || 1
       setCategoryData(
         Object.entries(catCount).map(([name, count]) => ({
@@ -328,8 +344,10 @@ export default function DashboardPage() {
                     data={categoryData}
                     innerRadius={55}
                     outerRadius={80}
-                    paddingAngle={3}
+                    paddingAngle={8}
+                    cornerRadius={10}
                     dataKey="value"
+                    stroke="none"
                   >
                     {categoryData.map((entry, i) => (
                       <Cell key={i} fill={entry.color} />
