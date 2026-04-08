@@ -124,8 +124,9 @@ export default function DashboardPage() {
           .limit(5),
 
         (supabase.from("problems") as any)
-          .select("priority, tags, customer:customer_id(full_name), inventory:inventory_id(catalog:catalog_id(model))")
+          .select("priority, tags, status, customers(full_name), inventory(product_catalog(model))")
           .neq("status", "resolved")
+          .neq("status", "closed")
           .order("created_at", { ascending: false })
           .limit(6),
 
@@ -203,9 +204,9 @@ export default function DashboardPage() {
       setProblemsCount(problems.length)
       setOpenProblems(
         problems.map((p: any) => ({
-          customer: p.customer?.full_name ?? "—",
-          product: p.inventory?.catalog?.model ?? "—",
-          tag: p.tags?.[0] ?? "outro",
+          customer: p.customers?.full_name ?? "—",
+          product: p.inventory?.product_catalog?.model ?? "—",
+          tag: Array.isArray(p.tags) && p.tags.length > 0 ? p.tags[0] : "outro",
           priority: p.priority ?? "medium",
         }))
       )
