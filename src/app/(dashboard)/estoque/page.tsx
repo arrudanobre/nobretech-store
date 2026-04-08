@@ -28,6 +28,7 @@ interface InventoryItem {
   ios_version?: string
   condition_notes?: string
   catalog?: any
+  product_catalog?: any
   created_at: string
 }
 
@@ -53,7 +54,7 @@ export default function InventoryPage() {
     try {
       const { data, error } = await (supabase
         .from("inventory") as any)
-        .select("id, catalog_id, imei, serial_number, grade, status, purchase_price, suggested_price, purchase_date, photos, battery_health, ios_version, condition_notes, created_at")
+        .select("*, product_catalog(id, category, model, variant, storage, color, brand, year)")
         .order("created_at", { ascending: false })
 
       if (error) {
@@ -61,7 +62,14 @@ export default function InventoryPage() {
         return
       }
 
-      const items = (data || []) as unknown as InventoryItem[]
+      const items = (data || []) as unknown as any[]
+      
+      // Safety: ensure product_catalog is mapped to catalog if it exists
+      items.forEach(item => {
+        if (!item.catalog && item.product_catalog) {
+          item.catalog = item.product_catalog;
+        }
+      });
 
       // Collect all catalog_ids and fetch them in one query
       const catalogIds = [...new Set(items.map((i: InventoryItem) => i.catalog_id).filter(Boolean))]
@@ -225,13 +233,14 @@ export default function InventoryPage() {
       {/* Product Cards Grid */}
       {!loading && filtered.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-          {filtered.map((item) => {
+          {filtered.map((item: any) => {
             const status = statusLabels[item.status as any] || { label: item.status, badge: "gray" as const }
             const gradeInfo = GRADES.find((g) => g.value === item.grade)
             const days = daysBetween(item.purchase_date)
-            const catalogName = item.catalog ? `${item.catalog.model}${item.catalog.variant ? " " + item.catalog.variant : ""}` : "Sem catálogo"
-            const catalogStorage = item.catalog?.storage || ""
-            const catalogColor = item.catalog?.color || ""
+            const cat = item.catalog || item.product_catalog
+            const catalogName = cat ? `${cat.model}${cat.variant ? " " + cat.variant : ""}` : "Sem catálogo"
+            const catalogStorage = cat?.storage || ""
+            const catalogColor = cat?.color || ""
 
             return (
               <div
@@ -271,7 +280,7 @@ export default function InventoryPage() {
                   ) : (
                     <div className="bg-gradient-to-br from-gray-100 to-gray-200 w-full h-full flex items-center justify-center">
                       <span className="text-4xl">
-                        {item.catalog ? <CategoryIcon category={item.catalog.category} className="!w-8 !h-8" /> : "📦"}
+                        {item.catalog || item.product_catalog ? <CategoryIcon category={(item.catalog || item.product_catalog).category} className="!w-8 !h-8" /> : "📦"}
                       </span>
                     </div>
                   )}
