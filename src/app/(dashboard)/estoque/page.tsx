@@ -45,6 +45,7 @@ export default function InventoryPage() {
   const [search, setSearch] = useState("")
   const [activeCategory, setActiveCategory] = useState("all")
   const [activeStatus, setActiveStatus] = useState("all")
+  const [activeGradeGroup, setActiveGradeGroup] = useState("all")
   const [items, setItems] = useState<InventoryItem[]>([])
   const [loading, setLoading] = useState(true)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -113,12 +114,17 @@ export default function InventoryPage() {
   const filtered = items.filter((item) => {
     const matchCategory = activeCategory === "all" || item.catalog?.category === activeCategory
     const matchStatus = activeStatus === "all" || item.status === activeStatus
+    const matchGradeGroup = activeGradeGroup === "all"
+      ? true
+      : activeGradeGroup === "lacrado"
+        ? item.grade === "Lacrado"
+        : (item.grade && item.grade !== "Lacrado")
     const matchSearch = search
       ? (item.catalog?.model || "").toLowerCase().includes(search.toLowerCase()) ||
         (item.imei || "").includes(search) ||
         false
       : true
-    return matchCategory && matchStatus && matchSearch
+    return matchCategory && matchStatus && matchSearch && matchGradeGroup
   })
 
   const inStockCount = items.filter((i) => i.status === "in_stock").length
@@ -160,32 +166,69 @@ export default function InventoryPage() {
             <option value="under_repair">Em reparo</option>
           </select>
         </div>
-        {/* Category tabs */}
-        <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-          <button
-            onClick={() => setActiveCategory("all")}
-            className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-              activeCategory === "all"
-                ? "bg-navy-900 text-white border-navy-900"
-                : "bg-white text-gray-600 border-gray-200 hover:border-navy-900"
-            }`}
-          >
-            Todos
-          </button>
-          {CATEGORIES.map((c) => (
+        {/* Filter Tabs */}
+        <div className="flex flex-col gap-3">
+          {/* Grade/Condition Filters */}
+          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide border-b border-gray-50 pb-2">
             <button
-              key={c.value}
-              onClick={() => setActiveCategory(c.value)}
-              className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors flex items-center gap-1.5 ${
-                activeCategory === c.value
-                  ? "bg-navy-900 text-white border-navy-900"
-                  : "bg-white text-gray-600 border-gray-200 hover:border-navy-900"
+              onClick={() => setActiveGradeGroup("all")}
+              className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold border transition-all ${
+                activeGradeGroup === "all"
+                  ? "bg-navy-900 text-white border-navy-900 shadow-sm"
+                  : "bg-white text-gray-400 border-gray-100 hover:border-gray-300"
               }`}
             >
-              <CategoryIcon category={c.value} className="!w-3.5 !h-3.5" />
-              {c.label}
+              Todos
             </button>
-          ))}
+            <button
+              onClick={() => setActiveGradeGroup("lacrado")}
+              className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold border transition-all flex items-center gap-1.5 ${
+                activeGradeGroup === "lacrado"
+                  ? "bg-royal-600 text-white border-royal-600 shadow-sm"
+                  : "bg-white text-gray-500 border-gray-100 hover:border-royal-200"
+              }`}
+            >
+              <span>📦</span> Lacrados
+            </button>
+            <button
+              onClick={() => setActiveGradeGroup("seminovo")}
+              className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold border transition-all flex items-center gap-1.5 ${
+                activeGradeGroup === "seminovo"
+                  ? "bg-emerald-600 text-white border-emerald-600 shadow-sm"
+                  : "bg-white text-gray-500 border-gray-100 hover:border-emerald-200"
+              }`}
+            >
+              <span>✨</span> Seminovos (ABEC)
+            </button>
+          </div>
+
+          {/* Category tabs */}
+          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+            <button
+              onClick={() => setActiveCategory("all")}
+              className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold border transition-all ${
+                activeCategory === "all"
+                  ? "bg-navy-900 text-white border-navy-900 shadow-sm"
+                  : "bg-white text-gray-400 border-gray-100 hover:border-gray-200"
+              }`}
+            >
+              Toda Loja
+            </button>
+            {CATEGORIES.map((c) => (
+              <button
+                key={c.value}
+                onClick={() => setActiveCategory(c.value)}
+                className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold border transition-all flex items-center gap-1.5 ${
+                  activeCategory === c.value
+                    ? "bg-navy-900 text-white border-navy-900 shadow-sm"
+                    : "bg-white text-gray-500 border-gray-100 hover:border-navy-900"
+                }`}
+              >
+                <CategoryIcon category={c.value} className="!w-3.5 !h-3.5" />
+                {c.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
