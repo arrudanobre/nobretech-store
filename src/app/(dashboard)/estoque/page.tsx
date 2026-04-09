@@ -27,6 +27,7 @@ interface InventoryItem {
   quantity?: number
   type?: "own" | "supplier"
   supplier_name?: string | null
+  foto_url?: string | null
   photos?: string[]
   battery_health?: number
   ios_version?: string
@@ -85,7 +86,7 @@ export default function InventoryPage() {
           quantity,
           type,
           supplier_name,
-          photos,
+          foto_url:photos->0,
           battery_health,
           ios_version,
           condition_notes,
@@ -226,7 +227,7 @@ export default function InventoryPage() {
   const getCardImageSrc = useCallback(
     (item: InventoryItem) => {
       if (imageErrors[item.id]) return PLACEHOLDER_IMG
-      return getThumbSrc(item.photos?.[0]) || PLACEHOLDER_IMG
+      return getThumbSrc(item.foto_url || undefined) || PLACEHOLDER_IMG
     },
     [imageErrors, getThumbSrc],
   )
@@ -406,7 +407,7 @@ export default function InventoryPage() {
                 <Link href={`/estoque/${item.id}`} className="block">
                 {/* Photo (Optimized: Single Image with Lazy Loading) */}
                 <div className="aspect-[4/3] relative bg-gray-50">
-                  {item.photos && item.photos.length > 0 ? (
+                  {item.foto_url ? (
                     <div className="relative w-full h-full overflow-hidden">
                       <img
                         src={getCardImageSrc(item)}
@@ -449,7 +450,7 @@ export default function InventoryPage() {
                           Cadastro incompleto
                         </span>
                       )}
-                      {item.photos.length > 1 && (
+                      {false && (
                         <div className="absolute bottom-2 right-2 bg-black/60 text-white text-[9px] px-1.5 py-0.5 rounded-md font-medium backdrop-blur-sm">
                           1 / {item.photos.length}
                         </div>
