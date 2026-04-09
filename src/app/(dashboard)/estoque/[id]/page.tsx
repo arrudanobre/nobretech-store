@@ -6,7 +6,7 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { CategoryIcon } from "@/components/ui/icon-helpers"
-import { formatBRL, daysBetween, buildPriceTable } from "@/lib/helpers"
+import { formatBRL, daysBetween, buildPriceTable, getInventoryStatusMeta, getComputedInventoryStatus, getTradeInOriginLabel, isPendingInventoryStatus } from "@/lib/helpers"
 import { CATEGORIES, GRADES, CHECKLIST_TEMPLATES } from "@/lib/constants"
 import { supabase } from "@/lib/supabase"
 import { ArrowLeft, Edit3, ShoppingCart, Loader2, Download, CheckCircle2, XCircle, MinusCircle } from "lucide-react"
@@ -18,13 +18,6 @@ interface ChecklistItem {
   note?: string
 }
 
-const statusLabels: Record<string, { label: string; badge: "green" | "red" | "yellow" | "gray" }> = {
-  in_stock: { label: "Disponível", badge: "green" },
-  sold: { label: "Vendido", badge: "gray" },
-  under_repair: { label: "Em reparo", badge: "red" },
-  returned: { label: "Devolvido", badge: "red" },
-  trade_in_received: { label: "Trade-In", badge: "yellow" },
-}
 
 export default function ProductDetailPage() {
   const router = useRouter()
@@ -222,6 +215,9 @@ export default function ProductDetailPage() {
 
   const days = daysBetween(product.purchase_date)
   const gradeInfo = GRADES.find((g) => g.value === product.grade)
+  const computedStatus = getComputedInventoryStatus(product || {})
+  const statusMeta = getInventoryStatusMeta(computedStatus)
+  const originLabel = getTradeInOriginLabel(product?.origin)
 
   const passed = checklistItems.filter((i) => i.status === "ok").length
   const failed = checklistItems.filter((i) => i.status === "fail").length
@@ -280,15 +276,25 @@ export default function ProductDetailPage() {
       {/* Badges */}
       <div className="flex flex-wrap gap-2">
         {product.grade && <span className={`px-2.5 py-1 rounded-lg text-xs font-bold ${gradeInfo?.color}`}>{product.grade}</span>}
-        <Badge variant={statusLabels[product.status]?.badge || "gray"} dot>
-          {statusLabels[product.status]?.label || product.status}
+        <Badge variant={statusMeta.badge} dot>
+          {statusMeta.label}
         </Badge>
         {days > 30 ? (
           <Badge variant="red">{days} dias em estoque</Badge>
         ) : (
           <Badge variant="blue">{days} dias em estoque</Badge>
         )}
+        <Badge variant="gray">Origem: {originLabel}</Badge>
       </div>
+
+      {isPendingInventoryStatus(computedStatus) && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 flex items-center justify-between">
+          <p className="text-sm text-amber-800">Cadastro incompleto. Finalize os dados obrigatórios para ativar a venda.</p>
+          <Link href={`/estoque/${productId}/editar`}>
+            <Button variant="outline" size="sm">Finalizar cadastro</Button>
+          </Link>
+        </div>
+      )}
 
       {/* Photos */}
       {product.photos && product.photos.length > 0 ? (

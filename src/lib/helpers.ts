@@ -336,3 +336,261 @@ export function getProductName(item: {
   if (item.notes) return item.notes
   return "Produto"
 }
+
+export function getAdditionalItemDisplayName(itemName: string | null | undefined): string {
+  if (!itemName || itemName === "Produto") {
+    return "Item adicional"
+  }
+  return itemName
+}
+
+const TRADE_IN_GRADE_FACTORS: Record<string, number> = {
+  "A+": 0.92,
+  "A": 0.85,
+  "A-": 0.78,
+  "B+": 0.68,
+  "B": 0.58,
+}
+
+export type DeviceValueInput = {
+  grade?: string
+  batteryHealth?: number
+  manualValue?: number
+  matchingPrices?: Array<{ price?: number | null }>
+}
+
+export type DeviceValueResult = {
+  avgPrice: number
+  minPrice: number
+  maxPrice: number
+  gradeFactor: number
+  batteryFactor: number
+  suggestedValue: number
+  roundedValue: number
+  effectiveValue: number
+  priceCount: number
+  hasReferencePrices: boolean
+}
+
+export function getTradeInBatteryFactor(health?: number): number {
+  if (!health) return 0.95
+  if (health >= 95) return 1.0
+  if (health >= 90) return 0.97
+  if (health >= 85) return 0.93
+  if (health >= 80) return 0.88
+  if (health >= 70) return 0.82
+  return 0.75
+}
+
+export function calculateDeviceValue(data: DeviceValueInput): DeviceValueResult {
+  const prices = (data.matchingPrices || [])
+    .map((p) => Number(p.price || 0))
+    .filter((p) => Number.isFinite(p) && p > 0)
+
+  const priceCount = prices.length
+  const hasReferencePrices = priceCount > 0
+  const avgPrice = hasReferencePrices ? prices.reduce((sum, p) => sum + p, 0) / priceCount : 0
+  const minPrice = hasReferencePrices ? Math.min(...prices) : 0
+  const maxPrice = hasReferencePrices ? Math.max(...prices) : 0
+
+  const gradeFactor = TRADE_IN_GRADE_FACTORS[data.grade || ""] ?? 0.7
+  const batteryFactor = getTradeInBatteryFactor(data.batteryHealth)
+
+  const basePrice = hasReferencePrices
+    ? (data.grade ? avgPrice : avgPrice * 0.8)
+    : 0
+
+  const suggestedValue = Math.round(basePrice * batteryFactor)
+  const roundedValue = Math.floor(suggestedValue / 10) * 10
+  const effectiveValue = Number(data.manualValue || 0) > 0 ? Number(data.manualValue) : roundedValue
+
+  return {
+    avgPrice,
+    minPrice,
+    maxPrice,
+    gradeFactor,
+    batteryFactor,
+    suggestedValue,
+    roundedValue,
+    effectiveValue,
+    priceCount,
+    hasReferencePrices,
+  }
+}
+
+export function normalizeInventoryStatus(status?: string | null): string {
+  if (status === "in_stock") return "active"
+  if (status === "trade_in_received") return "pending"
+  return status || "pending"
+}
+
+export function isInventoryReadyForSale(item: {
+  purchase_price?: number | null
+  purchase_date?: string | null
+  grade?: string | null
+  imei?: string | null
+  serial_number?: string | null
+  catalog_id?: string | null
+  notes?: string | null
+  condition_notes?: string | null
+}): boolean {
+  const hasPrice = Number(item.purchase_price || 0) > 0
+  const hasDate = Boolean(item.purchase_date)
+  const hasGrade = Boolean(item.grade)
+  const hasIdentity = Boolean(item.imei || item.serial_number)
+  const hasProductIdentity = Boolean(item.catalog_id || (item.notes || "").trim() || (item.condition_notes || "").trim())
+
+  return hasPrice && hasDate && hasGrade && hasIdentity && hasProductIdentity
+}
+
+export function getComputedInventoryStatus(item: {
+  status?: string | null
+  purchase_price?: number | null
+  purchase_date?: string | null
+  grade?: string | null
+  imei?: string | null
+  serial_number?: string | null
+  catalog_id?: string | null
+  notes?: string | null
+  condition_notes?: string | null
+}): "pending" | "active" | "sold" | "returned" | "under_repair" {
+  const normalized = normalizeInventoryStatus(item.status)
+  if (normalized === "sold" || normalized === "returned" || normalized === "under_repair") {
+    return normalized
+  }
+  return isInventoryReadyForSale(item) ? "active" : "pending"
+}
+
+export function getInventoryStatusMeta(status?: string | null): { label: string; badge: "green" | "red" | "yellow" | "gray" } {
+  switch (normalizeInventoryStatus(status)) {
+    case "active":
+      return { label: "Ativo", badge: "green" }
+    case "pending":
+      return { label: "Cadastro incompleto", badge: "yellow" }
+    case "sold":
+      return { label: "Vendido", badge: "gray" }
+    case "under_repair":
+      return { label: "Em reparo", badge: "red" }
+    case "returned":
+      return { label: "Devolvido", badge: "red" }
+    default:
+      return { label: status || "—", badge: "gray" }
+  }
+}
+
+export function isActiveInventoryStatus(status?: string | null): boolean {
+  return normalizeInventoryStatus(status) === "active"
+}
+
+export function isPendingInventoryStatus(status?: string | null): boolean {
+  return normalizeInventoryStatus(status) === "pending"
+}
+
+export function getTradeInSummaryStatus(status?: string | null): string {
+  const normalized = normalizeInventoryStatus(status)
+  if (normalized === "pending") return "Pendente de cadastro"
+  if (normalized === "active") return "Ativo"
+  return normalized || "—"
+}
+
+export function getTradeInDisplayName(input: {
+  model?: string
+  storage?: string
+  color?: string
+  fallback?: string
+}): string {
+  const parts = [input.model, input.storage, input.color].filter(Boolean)
+  if (parts.length > 0) return parts.join(" ")
+  return input.fallback || "Aparelho recebido"
+}
+
+export function formatTradeInSuggestedRange(value: number): string {
+  if (!value || value <= 0) return formatBRL(0)
+  const min = Math.floor((value * 0.92) / 10) * 10
+  const max = Math.ceil((value * 1.08) / 10) * 10
+  return `${formatBRL(min)} – ${formatBRL(max)}`
+}
+
+export function getTradeInGradeLabel(grade?: string): string {
+  const map: Record<string, string> = {
+    "A+": "Excelente — quase novo",
+    "A": "Muito bom — marcas mínimas",
+    "A-": "Bom — riscos leves visíveis",
+    "B+": "Regular — marcas de uso visíveis",
+    "B": "Ruim — sinais evidentes de uso",
+  }
+  return map[grade || ""] || ""
+}
+
+export function buildTradeInNotes(data: {
+  model?: string
+  storage?: string
+  color?: string
+  grade?: string
+  batteryHealth?: number
+  imei?: string
+  notes?: string
+}): string {
+  const base = getTradeInDisplayName({ model: data.model, storage: data.storage, color: data.color })
+  const parts = [
+    data.grade ? `Grade ${data.grade}` : "",
+    data.batteryHealth ? `Bateria ${data.batteryHealth}%` : "",
+    data.imei ? `IMEI ${data.imei}` : "",
+    data.notes || "",
+  ].filter(Boolean)
+  return [base, ...parts].join(" · ")
+}
+
+export function mapLegacyInventoryStatusToLifecycle(status?: string | null): string {
+  return normalizeInventoryStatus(status)
+}
+
+export function mapLifecycleToLegacyCompatibleStatus(status?: string | null): string {
+  if (status === "active") return "in_stock"
+  if (status === "pending") return "trade_in_received"
+  return status || "in_stock"
+}
+
+export function shouldCountAsActiveStock(item: { status?: string | null; type?: string | null }): boolean {
+  return (item.type || "own") === "own" && isActiveInventoryStatus(item.status)
+}
+
+export function getTradeInOriginLabel(origin?: string | null): string {
+  if (origin === "trade_in") return "Trade-in"
+  if (origin === "return") return "Retorno"
+  return "Compra"
+}
+
+export function isTradeInOrigin(origin?: string | null): boolean {
+  return (origin || "") === "trade_in"
+}
+
+export function getTradeInInitialStatus(item: {
+  purchase_price?: number | null
+  purchase_date?: string | null
+  grade?: string | null
+  imei?: string | null
+  serial_number?: string | null
+  catalog_id?: string | null
+  notes?: string | null
+  condition_notes?: string | null
+}): "pending" | "active" {
+  return isInventoryReadyForSale(item) ? "active" : "pending"
+}
+
+export function parseTradeInManualValue(raw?: string | number | null): number {
+  const n = Number(raw || 0)
+  return Number.isFinite(n) ? n : 0
+}
+
+export function sanitizePhotoArray(photos?: string[] | null): string[] {
+  return (photos || []).filter((url) => typeof url === "string" && url.length > 0)
+}
+
+export function hasSaleTradeInLink(sale: { has_trade_in?: boolean | null; trade_in_id?: string | null }): boolean {
+  return Boolean(sale.has_trade_in && sale.trade_in_id)
+}
+
+export function getSaleTradeInStatusText(status?: string | null): string {
+  return getTradeInSummaryStatus(status)
+}

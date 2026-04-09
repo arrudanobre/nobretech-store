@@ -194,6 +194,10 @@ export interface Database {
           purchase_price: number;
           purchase_date: string;
           supplier_id: string | null;
+          type: string | null;
+          supplier_name: string | null;
+          origin: string | null;
+          source_sale_id: string | null;
           suggested_price: number | null;
           status: string | null;
           checklist_id: string | null;
@@ -216,6 +220,10 @@ export interface Database {
           purchase_price: number;
           purchase_date: string;
           supplier_id?: string | null;
+          type?: string | null;
+          supplier_name?: string | null;
+          origin?: string | null;
+          source_sale_id?: string | null;
           suggested_price?: number | null;
           status?: string | null;
           checklist_id?: string | null;
@@ -238,6 +246,10 @@ export interface Database {
           purchase_price?: number;
           purchase_date?: string;
           supplier_id?: string | null;
+          type?: string | null;
+          supplier_name?: string | null;
+          origin?: string | null;
+          source_sale_id?: string | null;
           suggested_price?: number | null;
           status?: string | null;
           checklist_id?: string | null;
@@ -350,6 +362,9 @@ export interface Database {
           warranty_start: string | null;
           warranty_end: string | null;
           warranty_pdf_url: string | null;
+          source_type: string | null;
+          supplier_name: string | null;
+          supplier_cost: number | null;
           sale_date: string;
           notes: string | null;
           created_at: string | null;
@@ -369,6 +384,9 @@ export interface Database {
           warranty_start?: string | null;
           warranty_end?: string | null;
           warranty_pdf_url?: string | null;
+          source_type?: string | null;
+          supplier_name?: string | null;
+          supplier_cost?: number | null;
           sale_date?: string;
           notes?: string | null;
           created_at?: string | null;
@@ -388,6 +406,9 @@ export interface Database {
           warranty_start?: string | null;
           warranty_end?: string | null;
           warranty_pdf_url?: string | null;
+          source_type?: string | null;
+          supplier_name?: string | null;
+          supplier_cost?: number | null;
           sale_date?: string;
           notes?: string | null;
           created_at?: string | null;

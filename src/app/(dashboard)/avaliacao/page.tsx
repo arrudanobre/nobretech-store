@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { supabase } from "@/lib/supabase"
-import { formatBRL, buildPriceTable, calcProfit, getFeeKey } from "@/lib/helpers"
+import { formatBRL, buildPriceTable, calcProfit, getFeeKey, getProductName, calculateDeviceValue, getTradeInGradeLabel } from "@/lib/helpers"
 import { PRODUCT_CATALOG, CATEGORIES, GRADES, PAYMENT_METHODS } from "@/lib/constants"
 import {
   Smartphone,
@@ -39,26 +39,6 @@ const categoryIcons: Record<string, React.ElementType> = {
   accessories: Zap,
 }
 
-// Fatores de ajuste por estado do aparelho
-// Quanto pior o estado, menor o fator (pagamos menos)
-const gradeFactors: Record<string, { factor: number; label: string }> = {
-  "A+": { factor: 0.92, label: "Excelente — quase novo" },
-  "A": { factor: 0.85, label: "Muito bom — marcas mínimas" },
-  "A-": { factor: 0.78, label: "Bom — riscos leves visíveis" },
-  "B+": { factor: 0.68, label: "Regular — marcas de uso visíveis" },
-  "B": { factor: 0.58, label: "Ruim — sinais evidentes de uso" },
-}
-
-// Fator por saúde da bateria
-const batteryFactor = (health: number | undefined): number => {
-  if (!health) return 0.95
-  if (health >= 95) return 1.0
-  if (health >= 90) return 0.97
-  if (health >= 85) return 0.93
-  if (health >= 80) return 0.88
-  if (health >= 70) return 0.82
-  return 0.75
-}
 
 export default function TradeInEvalPage() {
   const [category, setCategory] = useState("")
@@ -96,12 +76,20 @@ export default function TradeInEvalPage() {
       try {
         const { data } = await supabase
           .from("inventory")
-          .select("id, imei, purchase_price, suggested_price, battery_health, status, product_catalog(model, variant, storage, color)")
+          .select("id, imei, purchase_price, suggested_price, battery_health, status, condition_notes, notes, product_catalog(model, variant, storage, color)")
           .order("created_at", { ascending: false })
         if (data) {
           const items = data.map((item: any) => ({
             id: item.id,
-            name: `${item.product_catalog?.model || "Produto"}${item.product_catalog?.variant ? " " + item.product_catalog.variant : ""}${item.product_catalog?.storage ? " " + item.product_catalog.storage : ""} ${item.product_catalog?.color || ""}`.trim(),
+            name: getProductName({
+              catalog: item.product_catalog,
+              name: item.name,
+              condition_notes: item.condition_notes,
+              notes: item.notes,
+              model: item.model,
+              storage: item.storage,
+              color: item.color,
+            }),
             costPrice: item.purchase_price || 0,
             suggestedPrice: item.suggested_price || 0,
             battery: item.battery_health || 0,
@@ -192,49 +180,31 @@ export default function TradeInEvalPage() {
     return Math.max(...matchingPrices.map((p: any) => Number(p.price)))
   }, [matchingPrices])
 
-  // Cálculo da avaliação
+  // Cálculo da avaliação (lógica compartilhada)
   const evaluation = useMemo(() => {
     if (!selectedModel) return null
 
-    const gf = gradeFactors[grade]?.factor ?? 0.70
-    const bf = batteryFactor(batteryHealth ? parseInt(batteryHealth) : undefined)
+    const result = calculateDeviceValue({
+      grade,
+      batteryHealth: batteryHealth ? parseInt(batteryHealth) : undefined,
+      manualValue: manualTradeInValue !== "" ? Number(manualTradeInValue) : undefined,
+      matchingPrices: matchingPrices.map((p: any) => ({ price: Number(p.price) })),
+    })
 
-    // Se temos preços da MESMA grade, usamos direto sem fator de grade
-    // Se não temos preços da mesma grade, aplicamos o fator de grade
-    const hasGradeSpecificPrices = grade && matchingPrices.length > 0
-
-    let basePrice: number
-    if (hasGradeSpecificPrices) {
-      // Preços já são da grade certa — usa média direto
-      basePrice = avgSupplierPrice
-    } else if (matchingPrices.length > 0 && !grade) {
-      // Sem grade selecionada — aplica fator padrão
-      basePrice = avgSupplierPrice * 0.80
-    } else {
-      basePrice = 0
-    }
-
-    if (basePrice === 0) return null
-
-    // Preço sugerido de compra (trade-in) = base * bateria
-    // (já está ajustado pela grade pois os preços são por grade)
-    const tradeInValue = basePrice * bf
-
-    // Arredondar para baixo (praticidade)
-    const rounded = Math.floor(tradeInValue / 10) * 10
+    if (result.roundedValue <= 0) return null
 
     return {
-      avgPrice: matchingPrices.length > 0 ? avgSupplierPrice : 0,
-      minPrice: matchingPrices.length > 0 ? minSupplierPrice : 0,
-      maxPrice: matchingPrices.length > 0 ? maxSupplierPrice : 0,
-      gradeFactor: gf,
-      batteryFactor: bf,
-      tradeInValue: Math.round(tradeInValue),
-      tradeInRounded: rounded,
-      priceCount: matchingPrices.length,
-      hasGradePrices: hasGradeSpecificPrices,
+      avgPrice: result.avgPrice,
+      minPrice: result.minPrice,
+      maxPrice: result.maxPrice,
+      gradeFactor: result.gradeFactor,
+      batteryFactor: result.batteryFactor,
+      tradeInValue: result.suggestedValue,
+      tradeInRounded: result.roundedValue,
+      priceCount: result.priceCount,
+      hasGradePrices: Boolean(grade) && result.hasReferencePrices,
     }
-  }, [selectedModel, avgSupplierPrice, minSupplierPrice, maxSupplierPrice, matchingPrices.length, grade, batteryHealth])
+  }, [selectedModel, grade, batteryHealth, manualTradeInValue, matchingPrices])
 
   const effectiveTradeInValue = useMemo(() => {
     if (manualTradeInValue !== "" && !isNaN(Number(manualTradeInValue))) {
@@ -487,7 +457,7 @@ export default function TradeInEvalPage() {
               ))}
             </div>
             {grade && (
-              <p className="text-xs text-gray-400 mt-1">{gradeFactors[grade]?.label}</p>
+              <p className="text-xs text-gray-400 mt-1">{getTradeInGradeLabel(grade)}</p>
             )}
           </div>
 

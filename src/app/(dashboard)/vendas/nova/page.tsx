@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
-import { buildPriceTable, calcPrice, calcProfit, formatBRL, maskCPF, formatPhone, validateCPF, getFeeKey, getProductName } from "@/lib/helpers"
+import { buildPriceTable, calcPrice, calcProfit, formatBRL, maskCPF, formatPhone, validateCPF, getFeeKey, getProductName, getAdditionalItemDisplayName, calculateDeviceValue, formatTradeInSuggestedRange, getTradeInSummaryStatus, getComputedInventoryStatus } from "@/lib/helpers"
+import { atualizarStatusEstoque } from "@/services/vendaService"
 import { PAYMENT_METHODS, CATEGORIES, PRODUCT_CATALOG, GRADES } from "@/lib/constants"
 import { useToast } from "@/components/ui/toaster"
 import { CategoryIcon } from "@/components/ui/icon-helpers"
@@ -33,8 +34,469 @@ type InventoryProduct = {
   cost: number
   suggested: number
   battery: number
+  type?: "own" | "supplier"
+  supplier_name?: string | null
 }
 
+type TradeInState = {
+  category: string
+  modelIdx: number
+  storage: string
+  color: string
+  imei: string
+  grade: string
+  batteryHealth: string
+  value: string
+}
+
+type TradeInCalculation = {
+  matches: Array<{ price: number }>
+  evaluation: ReturnType<typeof calculateDeviceValue> | null
+  suggestedDisplay: string
+}
+
+const EMPTY_TRADE_IN: TradeInState = {
+  category: "",
+  modelIdx: 0,
+  storage: "",
+  color: "",
+  imei: "",
+  grade: "",
+  batteryHealth: "",
+  value: "",
+}
+
+const calculateTradeInValue = (
+  tradeIn: TradeInState,
+  tradeInModel: any,
+  hasTradeIn: boolean,
+  inventoryProducts: any[]
+): TradeInCalculation => {
+  if (!hasTradeIn || !tradeInModel || !tradeIn.category) {
+    return { matches: [], evaluation: null, suggestedDisplay: formatBRL(0) }
+  }
+
+  const matches = inventoryProducts
+    .filter((p: any) => p.name?.includes(tradeInModel.name))
+    .map((p: any) => ({ price: p.cost }))
+
+  const evaluation = calculateDeviceValue({
+    grade: tradeIn.grade,
+    batteryHealth: tradeIn.batteryHealth ? parseInt(tradeIn.batteryHealth) : undefined,
+    manualValue: tradeIn.value ? Number(tradeIn.value) : undefined,
+    matchingPrices: matches,
+  })
+
+  const suggestedDisplay = evaluation
+    ? formatTradeInSuggestedRange(evaluation.roundedValue)
+    : formatBRL(0)
+
+  return { matches, evaluation, suggestedDisplay }
+}
+
+const sanitizeTradeInImei = (value: string): string => value.replace(/\D/g, "").slice(0, 15)
+
+const parseTradeInModelIndex = (value: string): number => {
+  const parsed = parseInt(value)
+  return Number.isNaN(parsed) ? 0 : parsed
+}
+
+const resolveTradeInInventoryStatus = (
+  tradeIn: TradeInState,
+  tradeInModel: any,
+  saleNotes: string
+) => {
+  return getComputedInventoryStatus({
+    status: "pending",
+    purchase_price: Number(tradeIn.value || 0),
+    purchase_date: new Date().toISOString().split("T")[0],
+    grade: tradeIn.grade || null,
+    imei: tradeIn.imei || null,
+    serial_number: null,
+    catalog_id: null,
+    notes: tradeInModel?.name || null,
+    condition_notes: saleNotes || null,
+  })
+}
+
+const getTradeInStatusText = (
+  tradeIn: TradeInState,
+  tradeInModel: any,
+  saleNotes: string
+) => getTradeInSummaryStatus(resolveTradeInInventoryStatus(tradeIn, tradeInModel, saleNotes))
+
+const createTradeInInventoryItem = async (params: {
+  companyId: string
+  saleId: string
+  tradeInValue: number
+  status: string
+  tradeInModelName: string
+  imei: string
+  grade: string
+  saleNotes: string
+}) => {
+  const { data, error } = await (supabase.from("inventory") as any).insert({
+    company_id: params.companyId,
+    catalog_id: null,
+    imei: params.imei || null,
+    serial_number: null,
+    grade: params.grade || null,
+    condition_notes: params.saleNotes || null,
+    purchase_price: params.tradeInValue,
+    purchase_date: new Date().toISOString().split("T")[0],
+    type: "own",
+    supplier_name: null,
+    origin: "trade_in",
+    source_sale_id: params.saleId,
+    suggested_price: null,
+    photos: null,
+    notes: params.tradeInModelName,
+    quantity: 1,
+    status: params.status,
+  }).select("id,status").single()
+
+  if (error) {
+    console.error("Erro ao criar item de estoque trade-in:", error)
+    return null
+  }
+
+  return data
+}
+
+const handleTradeInChange = (
+  setTradeIn: React.Dispatch<React.SetStateAction<TradeInState>>,
+  partial: Partial<TradeInState>
+) => {
+  setTradeIn((prev) => ({ ...prev, ...partial }))
+}
+
+const handleTradeInCategoryChange = (
+  setTradeIn: React.Dispatch<React.SetStateAction<TradeInState>>,
+  category: string
+) => {
+  setTradeIn((prev) => ({ ...prev, category, modelIdx: 0 }))
+}
+
+const handleTradeInModelChange = (
+  setTradeIn: React.Dispatch<React.SetStateAction<TradeInState>>,
+  modelIdx: number
+) => {
+  setTradeIn((prev) => ({ ...prev, modelIdx }))
+}
+
+const handleTradeInImeiChange = (
+  setTradeIn: React.Dispatch<React.SetStateAction<TradeInState>>,
+  value: string
+) => {
+  setTradeIn((prev) => ({ ...prev, imei: sanitizeTradeInImei(value) }))
+}
+
+const uploadTradeInPhotos = async (
+  tradeInPhotos: string[],
+  companyId: string,
+  saleId: string
+): Promise<string[]> => {
+  const uploadedUrls: string[] = []
+
+  for (let i = 0; i < tradeInPhotos.length; i++) {
+    const photoData = tradeInPhotos[i]
+    if (!photoData?.startsWith("data:")) continue
+
+    const [meta, base64] = photoData.split(",")
+    const mimeMatch = meta.match(/data:(.*);base64/)
+    const mimeType = mimeMatch?.[1] || "image/jpeg"
+    const ext = mimeType.split("/")[1] || "jpg"
+
+    const binary = atob(base64)
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+    const blob = new Blob([bytes], { type: mimeType })
+
+    const filePath = `${companyId}/tradeins/${saleId}-${Date.now()}-${i}.${ext}`
+
+    const { error: uploadError } = await supabase.storage
+      .from("inventory")
+      .upload(filePath, blob, {
+        contentType: mimeType,
+        upsert: true,
+      })
+
+    if (uploadError) continue
+
+    const { data: publicData } = supabase.storage.from("inventory").getPublicUrl(filePath)
+    if (publicData?.publicUrl) uploadedUrls.push(publicData.publicUrl)
+  }
+
+  return uploadedUrls
+}
+
+const updateSaleTradeInLink = async (saleId: string, tradeInId: string) => {
+  const { error } = await (supabase.from("sales") as any)
+    .update({ trade_in_id: tradeInId })
+    .eq("id", saleId)
+
+  if (error) {
+    console.error("Erro ao vincular trade-in à venda:", error)
+  }
+}
+
+const updateTradeInWithInventoryLink = async (tradeInId: string, inventoryId?: string | null) => {
+  if (!inventoryId) return
+  const { error } = await (supabase.from("trade_ins") as any)
+    .update({ linked_inventory_id: inventoryId, status: "added_to_stock" })
+    .eq("id", tradeInId)
+
+  if (error) {
+    console.error("Erro ao vincular trade-in ao estoque:", error)
+  }
+}
+
+const toggleTradeIn = (
+  hasTradeIn: boolean,
+  setHasTradeIn: React.Dispatch<React.SetStateAction<boolean>>
+) => {
+  setHasTradeIn(!hasTradeIn)
+}
+
+const toggleAdditionalItem = (
+  hasAdditionalItem: boolean,
+  setHasAdditionalItem: React.Dispatch<React.SetStateAction<boolean>>,
+  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
+    itemId: string
+    name: string
+    cost: number
+    type: "upsell" | "free"
+    salePrice: string
+    qty: number
+  } | null>>
+) => {
+  setHasAdditionalItem(!hasAdditionalItem)
+  if (hasAdditionalItem) setAdditionalSelectedItem(null)
+}
+
+const selectAdditionalInventoryItem = (
+  inventoryProducts: any[],
+  value: string,
+  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
+    itemId: string
+    name: string
+    cost: number
+    type: "upsell" | "free"
+    salePrice: string
+    qty: number
+  } | null>>
+) => {
+  const inv = inventoryProducts.find(p => p.id === value)
+  if (!inv) return
+
+  setAdditionalSelectedItem({
+    itemId: inv.id,
+    name: inv.name,
+    cost: inv.cost,
+    type: "upsell",
+    salePrice: inv.suggested.toString(),
+    qty: 1,
+  })
+}
+
+const setAdditionalType = (
+  type: "upsell" | "free",
+  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
+    itemId: string
+    name: string
+    cost: number
+    type: "upsell" | "free"
+    salePrice: string
+    qty: number
+  } | null>>
+) => {
+  setAdditionalSelectedItem((p) => p ? { ...p, type } : p)
+}
+
+const setAdditionalSalePrice = (
+  salePrice: string,
+  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
+    itemId: string
+    name: string
+    cost: number
+    type: "upsell" | "free"
+    salePrice: string
+    qty: number
+  } | null>>
+) => {
+  setAdditionalSelectedItem((p) => p ? { ...p, salePrice } : p)
+}
+
+const setAdditionalQty = (
+  qty: number,
+  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
+    itemId: string
+    name: string
+    cost: number
+    type: "upsell" | "free"
+    salePrice: string
+    qty: number
+  } | null>>
+) => {
+  setAdditionalSelectedItem((p) => p ? { ...p, qty: Math.max(1, qty || 0) } : p)
+}
+
+const setAdditionalTypeWithState = (
+  type: "upsell" | "free",
+  additionalSelectedItem: {
+    itemId: string
+    name: string
+    cost: number
+    type: "upsell" | "free"
+    salePrice: string
+    qty: number
+  } | null,
+  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
+    itemId: string
+    name: string
+    cost: number
+    type: "upsell" | "free"
+    salePrice: string
+    qty: number
+  } | null>>
+) => {
+  if (!additionalSelectedItem) return
+  setAdditionalType(type, setAdditionalSelectedItem)
+}
+
+const setAdditionalQtyWithState = (
+  qty: number,
+  additionalSelectedItem: {
+    itemId: string
+    name: string
+    cost: number
+    type: "upsell" | "free"
+    salePrice: string
+    qty: number
+  } | null,
+  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
+    itemId: string
+    name: string
+    cost: number
+    type: "upsell" | "free"
+    salePrice: string
+    qty: number
+  } | null>>
+) => {
+  if (!additionalSelectedItem) return
+  setAdditionalQty(qty, setAdditionalSelectedItem)
+}
+
+const setAdditionalSalePriceWithState = (
+  salePrice: string,
+  additionalSelectedItem: {
+    itemId: string
+    name: string
+    cost: number
+    type: "upsell" | "free"
+    salePrice: string
+    qty: number
+  } | null,
+  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
+    itemId: string
+    name: string
+    cost: number
+    type: "upsell" | "free"
+    salePrice: string
+    qty: number
+  } | null>>
+) => {
+  if (!additionalSelectedItem) return
+  setAdditionalSalePrice(salePrice, setAdditionalSelectedItem)
+}
+
+const selectAdditionalInventoryItemWithState = (
+  inventoryProducts: any[],
+  value: string,
+  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
+    itemId: string
+    name: string
+    cost: number
+    type: "upsell" | "free"
+    salePrice: string
+    qty: number
+  } | null>>
+) => {
+  selectAdditionalInventoryItem(inventoryProducts, value, setAdditionalSelectedItem)
+}
+
+const toggleAdditionalItemWithState = (
+  hasAdditionalItem: boolean,
+  setHasAdditionalItem: React.Dispatch<React.SetStateAction<boolean>>,
+  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
+    itemId: string
+    name: string
+    cost: number
+    type: "upsell" | "free"
+    salePrice: string
+    qty: number
+  } | null>>
+) => {
+  toggleAdditionalItem(hasAdditionalItem, setHasAdditionalItem, setAdditionalSelectedItem)
+}
+
+const toggleTradeInWithState = (
+  hasTradeIn: boolean,
+  setHasTradeIn: React.Dispatch<React.SetStateAction<boolean>>
+) => {
+  toggleTradeIn(hasTradeIn, setHasTradeIn)
+}
+
+const handleTradeInCategoryChangeWithState = (
+  setTradeIn: React.Dispatch<React.SetStateAction<TradeInState>>,
+  category: string
+) => {
+  handleTradeInCategoryChange(setTradeIn, category)
+}
+
+const handleTradeInModelChangeWithState = (
+  setTradeIn: React.Dispatch<React.SetStateAction<TradeInState>>,
+  modelIdx: number
+) => {
+  handleTradeInModelChange(setTradeIn, modelIdx)
+}
+
+const handleTradeInImeiChangeWithState = (
+  setTradeIn: React.Dispatch<React.SetStateAction<TradeInState>>,
+  value: string
+) => {
+  handleTradeInImeiChange(setTradeIn, value)
+}
+
+const handleTradeInSimpleChangeWithState = (
+  setTradeIn: React.Dispatch<React.SetStateAction<TradeInState>>,
+  partial: Partial<TradeInState>
+) => {
+  handleTradeInChange(setTradeIn, partial)
+}
+
+const getTradeInCalculation = (
+  tradeIn: TradeInState,
+  tradeInModel: any,
+  hasTradeIn: boolean,
+  inventoryProducts: any[]
+) => calculateTradeInValue(tradeIn, tradeInModel, hasTradeIn, inventoryProducts)
+
+const getTradeInStatus = (
+  tradeIn: TradeInState,
+  tradeInModel: any,
+  saleNotes: string
+) => resolveTradeInInventoryStatus(tradeIn, tradeInModel, saleNotes)
+
+const getTradeInStatusLabel = (
+  tradeIn: TradeInState,
+  tradeInModel: any,
+  saleNotes: string
+) => getTradeInStatusText(tradeIn, tradeInModel, saleNotes)
+
+const createInventoryItemForTradeIn = createTradeInInventoryItem
+const uploadPhotosForTradeIn = uploadTradeInPhotos
+const linkSaleTradeIn = updateSaleTradeInLink
+const linkTradeInInventory = updateTradeInWithInventoryLink
 const mockInStock: InventoryProduct[] = []
 
 function NewSaleContent() {
@@ -47,10 +509,13 @@ function NewSaleContent() {
   const [existingCustomerFound, setExistingCustomerFound] = useState(false)
   const [quantity, setQuantity] = useState(1)
   const [salePrice, setSalePrice] = useState("")
+  const [salePriceInput, setSalePriceInput] = useState("")
+  const [isSalePriceManual, setIsSalePriceManual] = useState(false)
+  const [supplierCostInput, setSupplierCostInput] = useState("")
   const [paymentMethod, setPaymentMethod] = useState("")
   const [warrantyMonths, setWarrantyMonths] = useState("3")
   const [hasTradeIn, setHasTradeIn] = useState(false)
-  const [tradeIn, setTradeIn] = useState({ category: "", modelIdx: 0, storage: "", color: "", imei: "", grade: "", value: "" })
+  const [tradeIn, setTradeIn] = useState({ category: "", modelIdx: 0, storage: "", color: "", imei: "", grade: "", batteryHealth: "", value: "" })
   const [saleNotes, setSaleNotes] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [tradeInPhotos, setTradeInPhotos] = useState<string[]>([])
@@ -81,6 +546,14 @@ function NewSaleContent() {
   const preselectId = searchParams.get("product")
   const tradeinParam = searchParams.get("tradein")
 
+  const handleTradeInChange = useCallback((partial: Partial<TradeInState>) => {
+    setTradeIn((prev) => ({ ...prev, ...partial }))
+  }, [])
+
+  const calculateTradeInValue = useCallback(() => {
+    return parseFloat(tradeIn.value) || 0
+  }, [tradeIn.value])
+
   // Pre-fill trade-in from evaluation page
   useEffect(() => {
     if (!tradeinParam) return
@@ -98,6 +571,7 @@ function NewSaleContent() {
             color: data.color || "",
             imei: data.imei || "",
             grade: data.grade || "",
+            batteryHealth: data.batteryHealth || "",
             value: data.suggestedValue?.toString() || "",
           })
           if (data.notes) setSaleNotes(data.notes)
@@ -116,8 +590,8 @@ function NewSaleContent() {
       try {
         const { data, error } = await supabase
           .from("inventory")
-          .select("id, imei, purchase_price, suggested_price, battery_health, status, condition_notes, catalog:catalog_id(model, variant, storage, color)")
-          .eq("status", "in_stock")
+          .select("id, imei, purchase_price, suggested_price, battery_health, status, condition_notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color)")
+          .in("status", ["active", "in_stock"] as any)
           .order("created_at", { ascending: false })
 
         if (error) throw error
@@ -130,6 +604,8 @@ function NewSaleContent() {
             cost: item.purchase_price || 0,
             suggested: item.suggested_price || 0,
             battery: item.battery_health || 0,
+            type: item.type || "own",
+            supplier_name: item.supplier_name || null,
           }
         })
         setInventoryProducts(products)
@@ -148,7 +624,7 @@ function NewSaleContent() {
     const fetchProduct = async () => {
       try {
         const { data: items, error } = await (supabase.from("inventory") as any)
-          .select("id, imei, purchase_price, suggested_price, battery_health, condition_notes, catalog:catalog_id(model, variant, storage, color)")
+          .select("id, imei, purchase_price, suggested_price, battery_health, condition_notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color)")
           .eq("id", preselectId)
           .single()
 
@@ -169,9 +645,14 @@ function NewSaleContent() {
           cost: items.purchase_price || 0,
           suggested: items.suggested_price || 0,
           battery: items.battery_health || 0,
+          type: items.type || "own",
+          supplier_name: items.supplier_name || null,
         }
+        const initialPrice = product.suggested.toString()
         setSelectedProduct(product)
-        setSalePrice(product.suggested.toString())
+        setSalePrice(initialPrice)
+        setSalePriceInput(initialPrice)
+        setIsSalePriceManual(false)
         setStep(2)
       } catch {
         toast({ title: "Erro ao carregar produto", type: "error" })
@@ -242,8 +723,10 @@ function NewSaleContent() {
   // Lucro base do produto principal (por unidade): independe do método de pagamento
   const baseProfit = useMemo(() => {
     if (!selectedProduct || !salePrice) return 0
-    return unitPrice - selectedProduct.cost
-  }, [selectedProduct, salePrice, unitPrice])
+    const supplierCost = parseFloat(supplierCostInput) || 0
+    const effectiveCost = selectedProduct.type === "supplier" ? supplierCost : selectedProduct.cost
+    return unitPrice - effectiveCost
+  }, [selectedProduct, salePrice, unitPrice, supplierCostInput])
 
   // Lucro base TOTAL considerando quantidade
   const totalBaseProfit = useMemo(() => {
@@ -277,9 +760,37 @@ function NewSaleContent() {
     return inventoryProducts.filter(p => p.name === selectedProduct.name).length
   }, [selectedProduct, inventoryProducts])
 
+  const commitSalePriceInput = useCallback(() => {
+    const parsed = parseFloat(salePriceInput)
+    if (!parsed || parsed <= 0) {
+      setSalePriceInput(salePrice || "")
+      setIsSalePriceManual(false)
+      return
+    }
+    setSalePrice(parsed.toString())
+    setSalePriceInput(parsed.toString())
+    setIsSalePriceManual(false)
+  }, [salePriceInput, salePrice])
+
+  const handleSalePriceKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault()
+      commitSalePriceInput()
+    }
+  }, [commitSalePriceInput])
+
+  useEffect(() => {
+    if (!isSalePriceManual) {
+      setSalePriceInput(salePrice)
+    }
+  }, [salePrice, isSalePriceManual])
+
   const selectProduct = (product: typeof mockInStock[0]) => {
+    const initialPrice = product.suggested.toString()
     setSelectedProduct(product)
-    setSalePrice(product.suggested.toString())
+    setSalePrice(initialPrice)
+    setSalePriceInput(initialPrice)
+    setIsSalePriceManual(false)
     setQuantity(1)
     setStep(2)
   }
@@ -338,6 +849,144 @@ function NewSaleContent() {
 
   const tradeInModel = tradeInModels[tradeIn.modelIdx] || null
 
+  const tradeInSupplierMatches = useMemo(() => {
+    if (!tradeIn.category || !tradeInModel) return [] as any[]
+    return inventoryProducts.filter((p: any) => p.name?.includes(tradeInModel.name))
+      .map((p: any) => ({ price: p.cost }))
+  }, [tradeIn.category, tradeInModel, inventoryProducts])
+
+  const tradeInEvaluation = useMemo(() => {
+    if (!hasTradeIn || !tradeInModel) return null
+    return calculateDeviceValue({
+      grade: tradeIn.grade,
+      batteryHealth: tradeIn.batteryHealth ? parseInt(tradeIn.batteryHealth) : undefined,
+      manualValue: tradeIn.value ? Number(tradeIn.value) : undefined,
+      matchingPrices: tradeInSupplierMatches,
+    })
+  }, [hasTradeIn, tradeInModel, tradeIn.grade, tradeIn.batteryHealth, tradeIn.value, tradeInSupplierMatches])
+
+  const tradeInSuggestedDisplay = useMemo(() => {
+    if (!tradeInEvaluation) return formatBRL(0)
+    return formatTradeInSuggestedRange(tradeInEvaluation.roundedValue)
+  }, [tradeInEvaluation])
+
+  useEffect(() => {
+    if (!hasTradeIn || !tradeInEvaluation) return
+    if (!tradeIn.value) {
+      setTradeIn((prev) => ({ ...prev, value: String(tradeInEvaluation.roundedValue || "") }))
+    }
+  }, [hasTradeIn, tradeInEvaluation])
+
+  const getTradeInInventoryStatus = useCallback(() => {
+    const inferred = getComputedInventoryStatus({
+      status: "pending",
+      purchase_price: Number(tradeIn.value || 0),
+      purchase_date: new Date().toISOString().split("T")[0],
+      grade: tradeIn.grade || null,
+      imei: tradeIn.imei || null,
+      serial_number: null,
+      catalog_id: null,
+      notes: tradeInModel?.name || null,
+      condition_notes: saleNotes || null,
+    })
+    return inferred
+  }, [tradeIn.value, tradeIn.grade, tradeIn.imei, tradeInModel, saleNotes])
+
+  const getTradeInInventoryStatusText = useCallback(() => {
+    return getTradeInSummaryStatus(getTradeInInventoryStatus())
+  }, [getTradeInInventoryStatus])
+
+  const uploadTradeInPhotos = useCallback(async (companyId: string, saleId: string): Promise<string[]> => {
+    const uploadedUrls: string[] = []
+
+    for (let i = 0; i < tradeInPhotos.length; i++) {
+      const photoData = tradeInPhotos[i]
+      if (!photoData?.startsWith("data:")) continue
+
+      const [meta, base64] = photoData.split(",")
+      const mimeMatch = meta.match(/data:(.*);base64/)
+      const mimeType = mimeMatch?.[1] || "image/jpeg"
+      const ext = mimeType.split("/")[1] || "jpg"
+
+      const binary = atob(base64)
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+      const blob = new Blob([bytes], { type: mimeType })
+
+      const filePath = `${companyId}/tradeins/${saleId}-${Date.now()}-${i}.${ext}`
+
+      const { error: uploadError } = await supabase.storage
+        .from("inventory")
+        .upload(filePath, blob, {
+          contentType: mimeType,
+          upsert: true,
+        })
+
+      if (uploadError) continue
+
+      const { data: publicData } = supabase.storage.from("inventory").getPublicUrl(filePath)
+      if (publicData?.publicUrl) uploadedUrls.push(publicData.publicUrl)
+    }
+
+    return uploadedUrls
+  }, [tradeInPhotos])
+
+  const createTradeInInventoryItem = useCallback(async (params: {
+    companyId: string
+    saleId: string
+    tradeInValue: number
+    status: string
+  }) => {
+    if (!tradeInModel) return null
+
+    const { data, error } = await (supabase.from("inventory") as any).insert({
+      company_id: params.companyId,
+      catalog_id: null,
+      imei: tradeIn.imei || null,
+      serial_number: null,
+      grade: tradeIn.grade || null,
+      condition_notes: saleNotes || null,
+      purchase_price: params.tradeInValue,
+      purchase_date: new Date().toISOString().split("T")[0],
+      type: "own",
+      supplier_name: null,
+      origin: "trade_in",
+      source_sale_id: params.saleId,
+      suggested_price: null,
+      photos: null,
+      notes: tradeInModel.name,
+      quantity: 1,
+      status: params.status,
+    }).select("id,status").single()
+
+    if (error) {
+      console.error("Erro ao criar item de estoque trade-in:", error)
+      return null
+    }
+
+    return data
+  }, [tradeIn, tradeInModel, saleNotes])
+
+  const updateSaleTradeInLink = useCallback(async (saleId: string, tradeInId: string) => {
+    const { error } = await (supabase.from("sales") as any)
+      .update({ trade_in_id: tradeInId })
+      .eq("id", saleId)
+
+    if (error) {
+      console.error("Erro ao vincular trade-in à venda:", error)
+    }
+  }, [])
+
+  const updateTradeInWithInventoryLink = useCallback(async (tradeInId: string, inventoryId?: string | null) => {
+    if (!inventoryId) return
+    const { error } = await (supabase.from("trade_ins") as any)
+      .update({ linked_inventory_id: inventoryId, status: "added_to_stock" })
+      .eq("id", tradeInId)
+
+    if (error) {
+      console.error("Erro ao vincular trade-in ao estoque:", error)
+    }
+  }, [])
+
   const handleTradeInPhotos = () => {
     tradeInFileRef.current?.click()
   }
@@ -364,7 +1013,7 @@ function NewSaleContent() {
     switch (step) {
       case 1: return !!selectedProduct && !loadingInventory && quantity <= maxAvailableQty
       case 2: return customer.name && validateCPF(customer.cpf)
-      case 3: return salePrice && paymentMethod
+      case 3: return salePrice && paymentMethod && (selectedProduct?.type !== "supplier" || !!supplierCostInput)
       case 4: return true
       case 5: return true
       default: return false
@@ -456,6 +1105,9 @@ function NewSaleContent() {
           warranty_months: parseInt(warrantyMonths),
           warranty_start: today,
           warranty_end: warrantyEnd.toISOString().split("T")[0],
+          source_type: selectedProduct?.type || "own",
+          supplier_name: selectedProduct?.type === "supplier" ? (selectedProduct.supplier_name || null) : null,
+          supplier_cost: selectedProduct?.type === "supplier" ? (parseFloat(supplierCostInput) || 0) : null,
           sale_date: today,
           notes: quantity > 1 ? `[${quantity}x ${selectedProduct!.name}]` + (saleNotes ? `\n${saleNotes}` : "") : saleNotes || null,
           has_trade_in: hasTradeIn,
@@ -484,23 +1136,65 @@ function NewSaleContent() {
           cost_price: additionalSelectedItem.cost * qty,
           sale_price: itemSalePrice,
         })
+
+        // Update inventory status for additional item
+        try {
+          // First verify the item is still in stock
+          const { data: inventoryItem, error: checkError } = await (supabase
+            .from("inventory") as any)
+            .select("status")
+            .eq("id", additionalSelectedItem.itemId)
+            .single()
+
+          if (checkError) {
+            console.error("Erro ao verificar estoque do item adicional:", checkError)
+          } else if (inventoryItem?.status !== "in_stock") {
+            console.warn(`Item adicional ${additionalSelectedItem.itemId} não está mais em estoque. Status: ${inventoryItem?.status}`)
+            // We still proceed, but log a warning
+          }
+
+          await atualizarStatusEstoque(additionalSelectedItem.itemId, "sold")
+        } catch (invError) {
+          console.error("Erro ao atualizar estoque do item adicional:", invError)
+          // Não fazemos throw aqui para não quebrar o fluxo principal
+          // Mas registramos o erro para debug
+        }
       }
 
-      // 3. Handle trade-in if active (note: inventory status is auto-updated by fn_create_warranty_on_sale trigger)
+      // 3. Handle trade-in if active
       if (hasTradeIn && tradeInModels[tradeIn.modelIdx]) {
-        const { error: tradeInError } = await ((supabase
-            .from("trade_ins") as any)
-            .insert({
-              company_id: companyId,
-              imei: tradeIn.imei || null,
-              grade: tradeIn.grade || null,
-              trade_in_value: parseFloat(tradeIn.value) || 0,
-              status: "received",
-              notes: tradeInModels[tradeIn.modelIdx].name,
-            }))
+        const tradeInValue = parseFloat(tradeIn.value) || 0
+        const uploadedTradeInPhotos = await uploadTradeInPhotos(companyId, sale.id)
+
+        const { data: tradeInRow, error: tradeInError } = await ((supabase
+          .from("trade_ins") as any)
+          .insert({
+            company_id: companyId,
+            imei: tradeIn.imei || null,
+            grade: tradeIn.grade || null,
+            trade_in_value: tradeInValue,
+            status: "received",
+            photos: uploadedTradeInPhotos.length > 0 ? uploadedTradeInPhotos : null,
+            notes: tradeInModels[tradeIn.modelIdx].name,
+            condition_notes: saleNotes || null,
+          })
+          .select("id")
+          .single())
 
         if (tradeInError) {
           console.error("Erro ao registrar trade-in:", tradeInError)
+        } else if (tradeInRow?.id) {
+          await updateSaleTradeInLink(sale.id, tradeInRow.id)
+
+          const inferredStatus = getTradeInInventoryStatus()
+          const inventoryTradeIn = await createTradeInInventoryItem({
+            companyId,
+            saleId: sale.id,
+            tradeInValue,
+            status: inferredStatus,
+          })
+
+          await updateTradeInWithInventoryLink(tradeInRow.id, inventoryTradeIn?.id)
         }
       }
 
@@ -593,6 +1287,9 @@ function NewSaleContent() {
                     <p className="text-xs text-gray-500">
                       {p.imei ? `IMEI: ${p.imei}` : "—"} · Bateria {p.battery}%
                     </p>
+                    {p.type === "supplier" && (
+                      <p className="text-xs text-gray-500">Fornecedor{p.supplier_name ? `: ${p.supplier_name}` : ""}</p>
+                    )}
                   </div>
                   <div className="text-right">
                     <p className="text-sm font-bold text-navy-900">{formatBRL(p.suggested)}</p>
@@ -684,9 +1381,27 @@ function NewSaleContent() {
             <label className="block text-sm font-medium text-navy-900 mb-1.5">Preço de Venda Unitário (R$)</label>
             <Input
               type="number"
-              value={salePrice}
-              onChange={(e) => setSalePrice(e.target.value)}
+              value={salePriceInput}
+              onChange={(e) => {
+                setIsSalePriceManual(true)
+                setSalePriceInput(e.target.value)
+              }}
+              onBlur={commitSalePriceInput}
+              onKeyDown={handleSalePriceKeyDown}
             />
+            {selectedProduct?.type === "supplier" && (
+              <div className="mt-2">
+                <Input
+                  label="Custo do fornecedor"
+                  type="number"
+                  value={supplierCostInput}
+                  onChange={(e) => setSupplierCostInput(e.target.value)}
+                />
+              </div>
+            )}
+            {selectedProduct?.type === "supplier" && selectedProduct.supplier_name && (
+              <p className="text-xs text-gray-500 mt-1">Fornecedor: {selectedProduct.supplier_name}</p>
+            )}
             {baseProfit > 0 && (
               <p className="text-xs text-success-500 mt-1 font-medium">Lucro unitário: {formatBRL(baseProfit)}</p>
             )}
@@ -725,7 +1440,7 @@ function NewSaleContent() {
                     <button
                       key={c.value}
                       type="button"
-                      onClick={() => { setTradeIn((p) => ({ ...p, category: c.value })); setTradeIn((p) => ({ ...p, modelIdx: 0 })); }}
+                      onClick={() => handleTradeInChange({ category: c.value, modelIdx: 0 })}
                       className={`shrink-0 flex flex-col items-center gap-1 px-4 py-2 rounded-xl border transition-colors min-w-[70px] ${
                         tradeIn.category === c.value
                           ? "bg-navy-900 text-white border-navy-900"
@@ -744,7 +1459,7 @@ function NewSaleContent() {
                 <select
                   className="w-full h-11 rounded-xl border border-gray-200 bg-white px-3 text-sm"
                   value={tradeIn.modelIdx}
-                  onChange={(e) => setTradeIn((p) => ({ ...p, modelIdx: parseInt(e.target.value) }))}
+                  onChange={(e) => handleTradeInChange({ modelIdx: parseInt(e.target.value) })}
                 >
                   <option value="">Selecione o modelo</option>
                   {tradeInModels.map((m, i) => (
@@ -762,7 +1477,7 @@ function NewSaleContent() {
                       <button
                         key={c.name}
                         type="button"
-                        onClick={() => setTradeIn((p) => ({ ...p, color: c.name }))}
+                        onClick={() => handleTradeInChange({ color: c.name })}
                         className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-medium transition-all ${
                           tradeIn.color === c.name
                             ? "border-royal-500 ring-2 ring-royal-500/20"
@@ -789,7 +1504,7 @@ function NewSaleContent() {
                       <button
                         key={s}
                         type="button"
-                        onClick={() => setTradeIn((p) => ({ ...p, storage: s }))}
+                        onClick={() => handleTradeInChange({ storage: s })}
                         className={`px-4 py-2 rounded-xl border text-sm font-medium transition-all ${
                           tradeIn.storage === s
                             ? "bg-navy-900 text-white border-navy-900"
@@ -810,7 +1525,7 @@ function NewSaleContent() {
                       <button
                         key={s}
                         type="button"
-                        onClick={() => setTradeIn((p) => ({ ...p, storage: s }))}
+                        onClick={() => handleTradeInChange({ storage: s })}
                         className={`px-4 py-2 rounded-xl border text-sm font-medium transition-all ${
                           tradeIn.storage === s
                             ? "bg-navy-900 text-white border-navy-900"
@@ -825,17 +1540,17 @@ function NewSaleContent() {
               )}
 
               {/* IMEI */}
-              <Input label="IMEI do Aparelho Recebido" value={tradeIn.imei} onChange={(e) => setTradeIn((p) => ({ ...p, imei: e.target.value.replace(/\D/g, "").slice(0, 15) }))} />
+              <Input label="IMEI do Aparelho Recebido" value={tradeIn.imei} onChange={(e) => handleTradeInChange({ imei: e.target.value.replace(/\D/g, "").slice(0, 15) })} />
 
               {/* Grade */}
               <div>
-                <label className="block text-xs font-medium text-navy-900 mb-2">Grade</label>
+                <label className="block text-xs font-medium text-navy-900 mb-2">Estado geral</label>
                 <div className="flex gap-2">
                   {GRADES.map((g) => (
                     <button
                       key={g.value}
                       type="button"
-                      onClick={() => setTradeIn((p) => ({ ...p, grade: g.value }))}
+                      onClick={() => handleTradeInChange({ grade: g.value })}
                       className={`flex-1 py-2 rounded-xl border text-sm font-bold transition-all ${
                         tradeIn.grade === g.value
                           ? g.color + " border-current"
@@ -846,6 +1561,25 @@ function NewSaleContent() {
                     </button>
                   ))}
                 </div>
+              </div>
+
+              <Input
+                label="Bateria (%)"
+                type="number"
+                min="0"
+                max="100"
+                value={tradeIn.batteryHealth}
+                onChange={(e) => handleTradeInChange({ batteryHealth: e.target.value })}
+              />
+
+              <div className="rounded-xl border border-gray-200 bg-white p-3 space-y-1">
+                <p className="text-xs text-gray-500">Valor sugerido</p>
+                <p className="text-sm font-semibold text-navy-900">{tradeInSuggestedDisplay}</p>
+                {tradeInEvaluation && (
+                  <p className="text-[11px] text-gray-500">
+                    {tradeInEvaluation.priceCount > 0 ? `${tradeInEvaluation.priceCount} referências` : "Sem referências"}
+                  </p>
+                )}
               </div>
 
               {/* Photos */}
@@ -879,7 +1613,8 @@ function NewSaleContent() {
               </div>
 
               {/* Trade-in value */}
-              <Input label="Valor da Avaliação (R$)" type="number" value={tradeIn.value} onChange={(e) => setTradeIn((p) => ({ ...p, value: e.target.value }))} />
+              <Input label="Valor da Avaliação (R$)" type="number" value={tradeIn.value} onChange={(e) => handleTradeInChange({ value: e.target.value })} />
+              <p className="text-xs text-gray-500">Você pode aceitar o valor sugerido ou ajustar manualmente.</p>
             </div>
           )}
 
@@ -893,15 +1628,15 @@ function NewSaleContent() {
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600">(-) Aparelho recebido</span>
-                <span className="font-semibold text-danger-500">- {formatBRL(parseFloat(tradeIn.value) || 0)}</span>
+                <span className="font-semibold text-danger-500">- {formatBRL(calculateTradeInValue())}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600">Subtotal</span>
-                <span className="font-semibold text-navy-900">{formatBRL(Math.max(0, finalTotal - (parseFloat(tradeIn.value) || 0)))}</span>
+                <span className="font-semibold text-navy-900">{formatBRL(Math.max(0, finalTotal - calculateTradeInValue()))}</span>
               </div>
               {/* Fee info based on selected payment method */}
               {paymentMethod && (() => {
-                const tradeInVal = parseFloat(tradeIn.value) || 0
+                const tradeInVal = calculateTradeInValue()
                 const netPrice = finalTotal - tradeInVal
                 const feeKey = getFeeKey(paymentMethod)
                 const feePct = fees[feeKey] ?? 0
@@ -936,7 +1671,7 @@ function NewSaleContent() {
               {!paymentMethod && (
                 <div className="flex justify-between text-base pt-2 border-t border-royal-500/20">
                   <span className="font-bold text-navy-900">Valor a pagar</span>
-                  <span className="font-bold text-royal-500">{formatBRL(Math.max(0, finalTotal - (parseFloat(tradeIn.value) || 0)))}</span>
+                  <span className="font-bold text-royal-500">{formatBRL(Math.max(0, finalTotal - calculateTradeInValue()))}</span>
                 </div>
               )}
               <p className="text-xs text-gray-500 text-center">
@@ -991,7 +1726,7 @@ function NewSaleContent() {
                     <option value="">Selecione um produto do estoque</option>
                     {inventoryProducts.map(p => (
                       <option key={p.id} value={p.id}>
-                        {p.name} — Custo: {formatBRL(p.cost)} / Sug.: {formatBRL(p.suggested)}
+                        {getAdditionalItemDisplayName(p.name)} — Custo: {formatBRL(p.cost)} / Sug.: {formatBRL(p.suggested)}
                       </option>
                     ))}
                   </select>
@@ -1062,8 +1797,8 @@ function NewSaleContent() {
                         <div className={`rounded-xl p-3 border ${isPositive ? "bg-success-100/20 border-success-500/20" : "bg-danger-100/20 border-danger-500/20"}`}>
                           <p className={`text-sm font-medium ${isPositive ? "text-success-500" : "text-danger-500"}`}>
                             {additionalSelectedItem.type === "upsell"
-                              ? `${qty}x ${additionalSelectedItem.name.toUpperCase()} ${profit >= 0 ? "aumentará" : "reduzirá"} seu lucro em ${formatBRL(profit)}`
-                              : `${qty}x ${additionalSelectedItem.name.toUpperCase()} reduzirá seu lucro em ${formatBRL(Math.abs(profit))}`
+                              ? `${qty}x ${getAdditionalItemDisplayName(additionalSelectedItem.name).toUpperCase()} ${profit >= 0 ? "aumentará" : "reduzirá"} seu lucro em ${formatBRL(profit)}`
+                              : `${qty}x ${getAdditionalItemDisplayName(additionalSelectedItem.name).toUpperCase()} reduzirá seu lucro em ${formatBRL(Math.abs(profit))}`
                             }
                           </p>
                           <p className="text-xs text-gray-500 mt-0.5">
@@ -1086,7 +1821,7 @@ function NewSaleContent() {
             <label className="block text-sm font-medium text-navy-900 mb-2">Forma de Pagamento</label>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {PAYMENT_METHODS.map((pm) => {
-                const tradeInVal = hasTradeIn ? (parseFloat(tradeIn.value) || 0) : 0
+                const tradeInVal = hasTradeIn ? calculateTradeInValue() : 0
                 const netPrice = finalTotal - tradeInVal
                 const baseForFees = hasTradeIn ? netPrice : finalTotal
                 const feePct = fees[getFeeKey(pm.value)] ?? 0
@@ -1181,7 +1916,7 @@ function NewSaleContent() {
               <p className="text-lg font-bold text-navy-900">
                 {salePrice
                   ? formatBRL(
-                      finalTotal - (hasTradeIn ? (parseFloat(tradeIn.value) || 0) : 0)
+                      finalTotal - (hasTradeIn ? calculateTradeInValue() : 0)
                     )
                   : "—"}
                 {quantity > 1 && (
@@ -1197,7 +1932,7 @@ function NewSaleContent() {
               )}
               {hasTradeIn && (
                 <p className="text-xs text-warning-500 font-medium mt-1">
-                  Trade-in: {tradeIn.category && tradeIn.modelIdx ? tradeInModels[tradeIn.modelIdx]?.name || tradeIn.category : "Aparelho"} — {tradeIn.value ? formatBRL(parseFloat(tradeIn.value)) : "—"}
+                  Trade-in: {tradeIn.category && tradeIn.modelIdx ? tradeInModels[tradeIn.modelIdx]?.name || tradeIn.category : "Aparelho"} — {tradeIn.value ? formatBRL(parseFloat(tradeIn.value)) : "—"} · {getTradeInInventoryStatusText()}
                 </p>
               )}
             </div>

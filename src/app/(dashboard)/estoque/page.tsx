@@ -1,12 +1,13 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import Link from "next/link"
+import Image from "next/image"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { CategoryIcon } from "@/components/ui/icon-helpers"
-import { formatBRL, daysBetween, getSupabaseThumbnail, getProductName } from "@/lib/helpers"
+import { formatBRL, daysBetween, getSupabaseThumbnail, getProductName, getInventoryStatusMeta, getComputedInventoryStatus, isPendingInventoryStatus } from "@/lib/helpers"
 import { CATEGORIES, GRADES } from "@/lib/constants"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/toaster"
@@ -23,6 +24,9 @@ interface InventoryItem {
   purchase_price: number
   suggested_price?: number
   purchase_date: string
+  quantity?: number
+  type?: "own" | "supplier"
+  supplier_name?: string | null
   photos?: string[]
   battery_health?: number
   ios_version?: string
@@ -34,13 +38,6 @@ interface InventoryItem {
   created_at: string
 }
 
-const statusLabels: Record<string, { label: string; badge: "green" | "red" | "yellow" | "gray" }> = {
-  in_stock: { label: "Disponível", badge: "green" },
-  sold: { label: "Vendido", badge: "gray" },
-  under_repair: { label: "Em reparo", badge: "red" },
-  returned: { label: "Devolvido", badge: "red" },
-  trade_in_received: { label: "Trade-In", badge: "yellow" },
-}
 
 export default function InventoryPage() {
   const [search, setSearch] = useState("")
@@ -49,41 +46,114 @@ export default function InventoryPage() {
   const [activeGrade, setActiveGrade] = useState("all")
   const [items, setItems] = useState<InventoryItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
+  const [page, setPage] = useState(1)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const { toast } = useToast()
   const { refresh: refreshBadge } = useBadgeCount()
 
-  const fetchInventory = useCallback(async () => {
+  const pageRef = useRef(1)
+  const hasFetchedRef = useRef(false)
+
+  const fetchInventory = useCallback(async (loadMore = false) => {
+    const currentPage = loadMore ? pageRef.current + 1 : 1
+    const itemsPerPage = 20
+
     try {
-      const { data, error } = await (supabase
+      if (loadMore) {
+        setLoadingMore(true)
+      } else {
+        setLoading(true)
+      }
+
+      const from = (currentPage - 1) * itemsPerPage
+      const to = from + itemsPerPage - 1
+
+      const { data: inventoryData, error: inventoryError } = await (supabase
         .from("inventory") as any)
         .select(`
-          *,
-          catalog:catalog_id (id, category, model, variant, storage, color, brand, year),
-          sales(sale_price)
+          id,
+          catalog_id,
+          imei,
+          serial_number,
+          grade,
+          status,
+          purchase_price,
+          suggested_price,
+          purchase_date,
+          quantity,
+          type,
+          supplier_name,
+          photos,
+          battery_health,
+          ios_version,
+          condition_notes,
+          notes,
+          created_at
         `)
         .order("created_at", { ascending: false })
-        .limit(100)
+        .range(from, to)
+        .limit(itemsPerPage)
 
-      if (error) throw error
-      setItems(data || [])
+      if (inventoryError) throw inventoryError
+
+      const catalogIds = Array.from(new Set((inventoryData || []).map((item: any) => item.catalog_id).filter(Boolean)))
+
+      let catalogsById: Record<string, any> = {}
+      if (catalogIds.length > 0) {
+        const { data: catalogsData, error: catalogError } = await (supabase
+          .from("product_catalog") as any)
+          .select("id, category, model, variant, storage, color, brand, year")
+          .in("id", catalogIds)
+
+        if (catalogError) throw catalogError
+
+        catalogsById = (catalogsData || []).reduce((acc: Record<string, any>, catalog: any) => {
+          acc[catalog.id] = catalog
+          return acc
+        }, {})
+      }
+
+      const hydratedData = (inventoryData || []).map((item: any) => ({
+        ...item,
+        catalog: item.catalog_id ? catalogsById[item.catalog_id] || null : null,
+      }))
+
+      if (loadMore) {
+        setItems(prev => [...prev, ...hydratedData])
+        setPage(currentPage)
+        pageRef.current = currentPage
+      } else {
+        setItems(hydratedData)
+        setPage(1)
+        pageRef.current = 1
+      }
+
+      setHasMore(hydratedData.length === itemsPerPage)
     } catch (err: any) {
-      console.error("Erro detalhado ao carregar estoque:", {
-        message: err?.message,
-        details: err?.details,
-        hint: err?.hint,
-        code: err?.code
+      console.error("Erro ao carregar estoque:", err?.message)
+      const isTimeout = err?.message?.includes("statement timeout")
+
+      toast({
+        title: isTimeout ? "Consulta demorou demais" : "Erro ao carregar estoque",
+        description: isTimeout
+          ? "A busca de estoque excedeu o tempo limite. Tente refinar filtros e recarregar."
+          : "Não foi possível carregar os dados. Tente novamente.",
+        type: "error",
       })
     } finally {
       setLoading(false)
+      setLoadingMore(false)
       refreshBadge()
     }
-  }, [])
+  }, [toast, refreshBadge])
 
   useEffect(() => {
-    fetchInventory()
-  }, [fetchInventory])
-
+    if (hasFetchedRef.current) return
+    hasFetchedRef.current = true
+    fetchInventory(false)
+  }, [])
   const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
@@ -134,19 +204,35 @@ export default function InventoryPage() {
     }
   }
 
-  const filtered = items.filter((item) => {
-    const matchCategory = activeCategory === "all" || item.catalog?.category === activeCategory
-    const matchStatus = activeStatus === "all" || item.status === activeStatus
-    const matchGrade = activeGrade === "all" ? true : item.grade === activeGrade
-    const matchSearch = search
-      ? getProductName(item).toLowerCase().includes(search.toLowerCase()) ||
-        (item.imei || "").includes(search) ||
-        false
-      : true
-    return matchCategory && matchStatus && matchSearch && matchGrade
-  })
+  const filtered = useMemo(() => {
+    return items.filter((item) => {
+      const matchCategory = activeCategory === "all" || item.catalog?.category === activeCategory
+      const matchStatus = activeStatus === "all" || item.status === activeStatus
+      const matchGrade = activeGrade === "all" ? true : item.grade === activeGrade
+      const matchSearch = search
+        ? getProductName(item).toLowerCase().includes(search.toLowerCase()) ||
+          (item.imei || "").includes(search) ||
+          false
+        : true
+      return matchCategory && matchStatus && matchSearch && matchGrade
+    })
+  }, [items, activeCategory, activeStatus, activeGrade, search])
 
-  const inStockCount = items.filter((i) => i.status === "in_stock").length
+  const inStockCount = useMemo(() => items.filter((i) => getComputedInventoryStatus(i) === "active").length, [items])
+
+  const getThumbSrc = useCallback((photo?: string) => (photo ? getSupabaseThumbnail(photo, 300) : ""), [])
+  const [imageErrors, setImageErrors] = useState<Record<string, boolean>>({})
+  const PLACEHOLDER_IMG = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='225' viewBox='0 0 300 225'%3E%3Crect width='300' height='225' fill='%23f3f4f6'/%3E%3Cpath d='M120 95h60v35h-60z' fill='%23d1d5db'/%3E%3Ccircle cx='135' cy='110' r='6' fill='%23e5e7eb'/%3E%3Cpath d='M90 165l45-40 32 26 20-18 23 32H90z' fill='%23d1d5db'/%3E%3C/svg%3E"
+  const getCardImageSrc = useCallback(
+    (item: InventoryItem) => {
+      if (imageErrors[item.id]) return PLACEHOLDER_IMG
+      return getThumbSrc(item.photos?.[0]) || PLACEHOLDER_IMG
+    },
+    [imageErrors, getThumbSrc],
+  )
+  const handleImageError = useCallback((id: string) => {
+    setImageErrors((prev) => (prev[id] ? prev : { ...prev, [id]: true }))
+  }, [])
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -249,7 +335,7 @@ export default function InventoryPage() {
       {loading && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
           {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
-            <div key={i} className="bg-card rounded-2xl border border-gray-100 p-3 h-[380px] animate-pulse">
+            <div key={i} className="bg-card rounded-2xl border border-gray-100 p-3 animate-pulse">
               <div className="aspect-[4/3] bg-gray-100 rounded-xl mb-3" />
               <div className="h-4 bg-gray-100 rounded w-3/4 mb-2" />
               <div className="h-3 bg-gray-100 rounded w-1/2 mb-4" />
@@ -257,6 +343,27 @@ export default function InventoryPage() {
                 <div className="h-8 bg-gray-50 rounded w-20" />
                 <div className="h-8 bg-gray-50 rounded w-20" />
               </div>
+              {/* Status badge skeleton */}
+              <div className="h-6 bg-gray-50 rounded w-16 mt-2" />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Loading more state */}
+      {loadingMore && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 mt-3">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="bg-card rounded-2xl border border-gray-100 p-3 animate-pulse">
+              <div className="aspect-[4/3] bg-gray-100 rounded-xl mb-3" />
+              <div className="h-4 bg-gray-100 rounded w-3/4 mb-2" />
+              <div className="h-3 bg-gray-100 rounded w-1/2 mb-4" />
+              <div className="flex justify-between mt-auto">
+                <div className="h-8 bg-gray-50 rounded w-20" />
+                <div className="h-8 bg-gray-50 rounded w-20" />
+              </div>
+              {/* Status badge skeleton */}
+              <div className="h-6 bg-gray-50 rounded w-16 mt-2" />
             </div>
           ))}
         </div>
@@ -280,27 +387,16 @@ export default function InventoryPage() {
       {!loading && filtered.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
           {filtered.map((item: any) => {
-            const status = statusLabels[item.status as any] || { label: item.status, badge: "gray" as const }
+            const computedStatus = getComputedInventoryStatus(item)
+            const status = getInventoryStatusMeta(computedStatus)
             const gradeInfo = GRADES.find((g) => g.value === item.grade)
-            const isSold = item.status === "sold"
-            const saleDateVal = isSold && item.sales?.[0] ? item.sales[0].sale_date : undefined
-            const days = daysBetween(item.purchase_date, saleDateVal)
+            const isSold = computedStatus === "sold"
+            const days = daysBetween(item.purchase_date)
             const cat = item.catalog || item.product_catalog
             const catalogName = getProductName(item)
             const catalogStorage = cat?.storage || ""
             const catalogColor = cat?.color || ""
-            
-            const sale = item.sales?.[0] || item.sales
-            const salePrice = sale?.sale_price
 
-            let salePriceColor = "text-navy-900"
-            if (salePrice && item.suggested_price) {
-              if (salePrice >= item.suggested_price) {
-                salePriceColor = "text-emerald-600"
-              } else if (salePrice < item.suggested_price * 0.85) {
-                salePriceColor = "text-red-600"
-              }
-            }
 
             return (
               <div
@@ -312,21 +408,22 @@ export default function InventoryPage() {
                 <div className="aspect-[4/3] relative bg-gray-50">
                   {item.photos && item.photos.length > 0 ? (
                     <div className="relative w-full h-full overflow-hidden">
-                      <img 
-                        src={getSupabaseThumbnail(item.photos[0], 600)} 
+                      <img
+                        src={getCardImageSrc(item)}
                         alt={catalogName}
                         loading="lazy"
                         decoding="async"
+                        onError={() => handleImageError(item.id)}
                         className="w-full h-full object-cover"
                       />
-                      {item.status === "sold" && (
+                      {computedStatus === "sold" && (
                         <div className="absolute inset-0 bg-black/40 flex items-center justify-center z-10 transition-colors group-hover:bg-black/20">
                           <span className="bg-white text-navy-900 px-3 py-1 rounded-lg text-xs font-bold shadow-lg -rotate-12">
                             VENDIDO
                           </span>
                         </div>
                       )}
-                      {item.status === "under_repair" && (
+                      {computedStatus === "under_repair" && (
                         <div className="absolute inset-0 bg-red-900/10 flex items-center justify-center z-10">
                           <span className="bg-danger-500 text-white px-3 py-1 rounded-lg text-xs font-bold shadow-lg">
                             EM REPARO
@@ -338,9 +435,18 @@ export default function InventoryPage() {
                           {item.grade}
                         </span>
                       )}
-                      {days > 30 && item.status === "in_stock" && (
+                      {days > 30 && computedStatus === "active" && (
                         <span className="absolute top-2 left-2 bg-danger-500 text-white px-2 py-0.5 rounded-md text-[9px] font-bold z-10 shadow-sm">
                           {days} dias
+                        </span>
+                      )}
+                      {(() => {
+                        const isAccessory = item.notes?.includes("Acessório:") || item.condition_notes?.includes("Acessório:")
+                        const isIncomplete = !isAccessory && !item.imei && !item.serial_number
+                        return isIncomplete
+                      })() && (
+                        <span className="absolute bottom-2 left-2 bg-amber-50 text-amber-700 px-2 py-0.5 rounded-md text-[10px] font-medium z-10 border border-amber-200">
+                          Cadastro incompleto
                         </span>
                       )}
                       {item.photos.length > 1 && (
@@ -367,6 +473,13 @@ export default function InventoryPage() {
                   <p className="text-xs text-gray-500 truncate">
                     {[catalogStorage, catalogColor].filter(Boolean).join(" · ")}
                   </p>
+                  <p className="text-xs text-gray-500 mt-1">{item.type === "supplier" ? "Fornecedor" : "Em estoque"}</p>
+                  {item.type === "supplier" && item.supplier_name && (
+                    <p className="text-xs text-gray-500">{item.supplier_name}</p>
+                  )}
+                  {item.type !== "supplier" && (
+                    <p className="text-xs text-gray-500 mt-1">Estoque: {Math.max(1, item.quantity || 1)}</p>
+                  )}
                   {/* Battery / iOS for phones */}
                   {item.battery_health && (
                     <p className="text-[11px] text-gray-400 mt-1">
@@ -390,18 +503,15 @@ export default function InventoryPage() {
                           </p>
                         </div>
                       )}
-                      {item.status === "sold" && salePrice && (
-                        <div className="pt-1 border-t border-gray-50">
-                          <p className="text-[10px] text-gray-500 leading-tight">Venda</p>
-                          <p className={`text-sm font-bold ${salePriceColor}`}>{formatBRL(salePrice)}</p>
-                        </div>
-                      )}
                     </div>
                   </div>
 
                   {/* Status */}
                   <div className="mt-2">
                     <Badge variant={status.badge} dot>{status.label}</Badge>
+                    {isPendingInventoryStatus(computedStatus) && (
+                      <p className="text-[11px] text-amber-700 mt-1">Finalizar cadastro</p>
+                    )}
                   </div>
                 </div>
                 </Link>
@@ -423,7 +533,34 @@ export default function InventoryPage() {
             )
           })}
         </div>
-      )}
+        )}
+
+        {!loading && filtered.length > 0 && hasMore && (
+          <div className="mt-6 text-center">
+            <Button
+              variant="outline"
+              onClick={() => fetchInventory(true)}
+              disabled={loadingMore}
+              className="px-6"
+            >
+              {loadingMore ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Carregando...
+                </>
+              ) : (
+                'Carregar mais'
+              )}
+            </Button>
+          </div>
+        )}
+
+        {/* Mostrando quando não há mais itens */}
+        {!loading && filtered.length > 0 && !hasMore && (
+          <div className="mt-6 text-center">
+            <p className="text-sm text-gray-500">Todos os itens foram carregados.</p>
+          </div>
+        )}
     </div>
   )
 }
@@ -450,7 +587,15 @@ function PhotoCarousel({ photos, alt, children }: { photos: string[]; alt: strin
   if (!hasMultiple) {
     return (
       <div className="relative w-full h-full">
-        <img src={photos[0]} alt={alt} className="w-full h-full object-cover" />
+        <Image
+          src={getSupabaseThumbnail(photos[0], 600)}
+          alt={alt}
+          width={400}
+          height={300}
+          className="w-full h-full object-cover"
+          style={{ objectFit: 'cover' }}
+          unoptimized={!getSupabaseThumbnail(photos[0], 600).includes('supabase.co')}
+        />
         {children}
       </div>
     )
@@ -459,17 +604,25 @@ function PhotoCarousel({ photos, alt, children }: { photos: string[]; alt: strin
   return (
     <div className="relative w-full h-full select-none">
       {/* Current photo */}
-      <img
-        src={photos[current]}
+      <Image
+        src={getSupabaseThumbnail(photos[current], 600)}
         alt={alt}
+        width={400}
+        height={300}
         className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-250 ${isTransitioning ? "opacity-0" : "opacity-100"}`}
+        style={{ objectFit: 'cover' }}
+        unoptimized={!getSupabaseThumbnail(photos[current], 600).includes('supabase.co')}
       />
       {/* Next photo (crossfade layer) */}
       {isTransitioning && (
-        <img
-          src={photos[next!]}
+        <Image
+          src={getSupabaseThumbnail(photos[next!], 600)}
           alt={alt}
+          width={400}
+          height={300}
           className="absolute inset-0 w-full h-full object-cover opacity-100"
+          style={{ objectFit: 'cover' }}
+          unoptimized={!getSupabaseThumbnail(photos[next!], 600).includes('supabase.co')}
         />
       )}
 

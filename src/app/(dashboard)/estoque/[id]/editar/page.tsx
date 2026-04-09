@@ -9,15 +9,16 @@ import { Select } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/toaster"
 import { supabase } from "@/lib/supabase"
-import { CATEGORIES, GRADES } from "@/lib/constants"
+import { GRADES } from "@/lib/constants"
 import { ArrowLeft, Loader2, Save, Camera, X } from "lucide-react"
+import { getComputedInventoryStatus, mapLifecycleToLegacyCompatibleStatus } from "@/lib/helpers"
 
 const STATUS_OPTIONS = [
-  { value: "in_stock", label: "Disponível" },
+  { value: "active", label: "Ativo" },
+  { value: "pending", label: "Cadastro incompleto" },
   { value: "sold", label: "Vendido" },
   { value: "under_repair", label: "Em reparo" },
   { value: "returned", label: "Devolvido" },
-  { value: "trade_in_received", label: "Trade-In" },
 ]
 
 export default function EditProductPage() {
@@ -41,6 +42,9 @@ export default function EditProductPage() {
     battery_health: "",
     ios_version: "",
     condition_notes: "",
+    quantity: "1",
+    type: "own",
+    supplier_name: "",
   })
   const [photos, setPhotos] = useState<string[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -105,6 +109,9 @@ export default function EditProductPage() {
         battery_health: item.battery_health?.toString() || "",
         ios_version: item.ios_version || "",
         condition_notes: item.condition_notes || "",
+        quantity: item.quantity?.toString() || "1",
+        type: item.type || "own",
+        supplier_name: item.supplier_name || "",
       })
 
       if (item.photos && Array.isArray(item.photos)) {
@@ -139,17 +146,32 @@ export default function EditProductPage() {
   const handleSave = async () => {
     setSaving(true)
     try {
+      const computedLifecycleStatus = getComputedInventoryStatus({
+        status: formData.status,
+        purchase_price: parseFloat(formData.purchase_price) || 0,
+        purchase_date: formData.purchase_date || null,
+        grade: formData.grade || null,
+        imei: formData.imei || null,
+        serial_number: formData.serial_number || null,
+        catalog_id: null,
+        notes: formData.condition_notes || null,
+        condition_notes: formData.condition_notes || null,
+      })
+
       const updateData: Record<string, any> = {
         imei: formData.imei || null,
         serial_number: formData.serial_number || null,
         grade: formData.grade || null,
-        status: formData.status,
+        status: mapLifecycleToLegacyCompatibleStatus(computedLifecycleStatus),
         purchase_price: parseFloat(formData.purchase_price) || 0,
         suggested_price: formData.suggested_price ? parseFloat(formData.suggested_price) : null,
         purchase_date: formData.purchase_date,
         battery_health: formData.battery_health ? parseInt(formData.battery_health) : null,
         ios_version: formData.ios_version || null,
         condition_notes: formData.condition_notes || null,
+        quantity: formData.type === "own" ? Math.max(1, parseInt(formData.quantity) || 1) : 1,
+        type: formData.type,
+        supplier_name: formData.type === "supplier" ? (formData.supplier_name || null) : null,
         photos: photos.length > 0 ? photos : null,
       }
 
@@ -256,6 +278,26 @@ export default function EditProductPage() {
           </div>
         )}
 
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Select
+            label="Origem do produto"
+            value={formData.type}
+            onChange={(e) => updateField("type", e.target.value)}
+            options={[
+              { label: "Estoque próprio", value: "own" },
+              { label: "Fornecedor", value: "supplier" },
+            ]}
+          />
+          {formData.type === "supplier" ? (
+            <Input
+              label="Nome do fornecedor"
+              placeholder="Opcional"
+              value={formData.supplier_name}
+              onChange={(e) => updateField("supplier_name", e.target.value)}
+            />
+          ) : null}
+        </div>
+
         {/* Price / Date */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Input
@@ -304,6 +346,17 @@ export default function EditProductPage() {
             value={formData.purchase_date}
             onChange={(e) => updateField("purchase_date", e.target.value)}
           />
+          {formData.type === "own" ? (
+            <Input
+              label="Quantidade em Estoque"
+              type="number"
+              min="1"
+              value={formData.quantity}
+              onChange={(e) => updateField("quantity", Math.max(1, parseInt(e.target.value) || 1).toString())}
+            />
+          ) : (
+            <p className="text-xs text-gray-500 self-center">Produto virtual de fornecedor (não compõe estoque próprio).</p>
+          )}
         </div>
 
         {/* Battery / iOS — only for devices */}

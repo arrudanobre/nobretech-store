@@ -56,6 +56,8 @@ export default function AddProductPage() {
     battery_health: "",
     condition_notes: "",
     supplier_id: "",
+    type: "own",
+    supplier_name: "",
     purchase_date: "",
     purchase_price: "",
     margin: "15",
@@ -97,6 +99,8 @@ export default function AddProductPage() {
   }, [category])
 
   const selectedModel = models[modelIdx]
+  const [suggestedPriceInput, setSuggestedPriceInput] = useState("")
+  const [isEditingSuggestedPrice, setIsEditingSuggestedPrice] = useState(false)
 
   const priceTable = useMemo(() => {
     const cost = parseFloat(formData.purchase_price)
@@ -114,6 +118,36 @@ export default function AddProductPage() {
   const updateField = useCallback((field: string, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
   }, [])
+
+  const commitSuggestedPrice = useCallback(() => {
+    const currentSuggested = priceTable[0]?.price || 0
+    const parsedPrice = parseFloat(suggestedPriceInput)
+    const cost = parseFloat(formData.purchase_price) || 0
+
+    if (!cost || !parsedPrice || parsedPrice <= 0) {
+      setSuggestedPriceInput(currentSuggested > 0 ? currentSuggested.toString() : "")
+      setIsEditingSuggestedPrice(false)
+      return
+    }
+
+    const marginValue = Math.max(0, Math.min(100, (1 - cost / parsedPrice) * 100))
+    updateField("margin", marginValue.toFixed(2))
+    setSuggestedPriceInput(parsedPrice.toString())
+    setIsEditingSuggestedPrice(false)
+  }, [suggestedPriceInput, formData.purchase_price, priceTable, updateField])
+
+  const handleSuggestedPriceKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault()
+      commitSuggestedPrice()
+    }
+  }, [commitSuggestedPrice])
+
+  useEffect(() => {
+    if (isEditingSuggestedPrice) return
+    const currentSuggested = priceTable[0]?.price || 0
+    setSuggestedPriceInput(currentSuggested > 0 ? currentSuggested.toString() : "")
+  }, [priceTable, isEditingSuggestedPrice])
 
   const handleSelectColor = useCallback((name: string, hex: string) => {
     updateField("color", name)
@@ -198,7 +232,7 @@ export default function AddProductPage() {
         if (category === "accessories") {
           return !!selectedModel
         }
-        return selectedModel && formData.storage && formData.color && formData.grade && formData.imei && formData.serial_number
+        return selectedModel && formData.storage && formData.color && formData.grade && formData.serial_number
       case 2:
         return formData.purchase_price && formData.purchase_date && formData.quantity && parseInt(formData.quantity) >= 1
       case 3:
@@ -321,6 +355,9 @@ export default function AddProductPage() {
       const accessoryName = isAccessory ? `Acessório: ${selectedModel.name}` : null
 
       // Insert inventory
+      const selectedSupplier = suppliers.find((s: any) => s.value === formData.supplier_id)
+      const resolvedSupplierName = formData.supplier_name || selectedSupplier?.label || null
+
       const { error: inventoryError } = await (supabase.from("inventory") as any).insert({
         company_id: company.id,
         catalog_id: catalogId,
@@ -331,13 +368,16 @@ export default function AddProductPage() {
         condition_notes: accessoryName || formData.condition_notes || null,
         purchase_price: parseFloat(formData.purchase_price),
         purchase_date: formData.purchase_date,
+        supplier_id: formData.type === "supplier" && formData.supplier_id ? formData.supplier_id : null,
+        type: formData.type || "own",
+        supplier_name: formData.type === "supplier" ? resolvedSupplierName : null,
         suggested_price: suggestedPrice,
         photos: photos.length > 0 ? photos : null,
         ios_version: formData.ios_version || null,
         battery_health: formData.battery_health ? parseInt(formData.battery_health) : null,
         notes: accessoryName || formData.condition_notes || null,
         checklist_id: (checklist as any)?.id,
-        status: "in_stock",
+        status: "active",
       } as any)
 
       if (inventoryError) throw inventoryError
@@ -556,7 +596,7 @@ export default function AddProductPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Input
                   label="IMEI 1"
-                  placeholder="15 dígitos"
+                  placeholder="IMEI (opcional)"
                   value={formData.imei}
                   onChange={(e) => updateField("imei", e.target.value.replace(/\D/g, "").slice(0, 15))}
                 />
@@ -607,11 +647,13 @@ export default function AddProductPage() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Select
-              label="Fornecedor"
-              placeholder={loadingSuppliers ? "Carregando..." : "Selecione"}
-              options={suppliers}
-              value={formData.supplier_id}
-              onChange={(e) => updateField("supplier_id", e.target.value)}
+              label="Origem do produto"
+              options={[
+                { label: "Estoque próprio", value: "own" },
+                { label: "Fornecedor", value: "supplier" },
+              ]}
+              value={formData.type}
+              onChange={(e) => updateField("type", e.target.value)}
             />
             <Input
               label="Data da Compra"
@@ -621,6 +663,45 @@ export default function AddProductPage() {
             />
           </div>
 
+          {formData.type === "supplier" && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Select
+                label="Fornecedor"
+                placeholder={loadingSuppliers ? "Carregando..." : "Selecione"}
+                options={suppliers}
+                value={formData.supplier_id}
+                onChange={(e) => updateField("supplier_id", e.target.value)}
+              />
+              <Input
+                label="Nome do fornecedor"
+                placeholder="Opcional"
+                value={formData.supplier_name}
+                onChange={(e) => updateField("supplier_name", e.target.value)}
+              />
+            </div>
+          )}
+
+          {formData.type === "own" && (
+            <div>
+              <label className="block text-sm font-medium text-navy-900 mb-1.5">Quantidade em Estoque</label>
+              <Input
+                type="number"
+                min="1"
+                max="999"
+                placeholder="1"
+                value={formData.quantity}
+                onChange={(e) => {
+                  const val = Math.min(999, Math.max(1, parseInt(e.target.value) || 1)).toString()
+                  updateField("quantity", val)
+                }}
+              />
+            </div>
+          )}
+
+          {formData.type === "supplier" && (
+            <p className="text-xs text-gray-500">Produto virtual de fornecedor (não compõe estoque próprio).</p>
+          )}
+
           <div>
             <label className="block text-sm font-medium text-navy-900 mb-1.5">Preço de Custo (R$)</label>
             <Input
@@ -628,21 +709,6 @@ export default function AddProductPage() {
               placeholder="0,00"
               value={formData.purchase_price}
               onChange={(e) => updateField("purchase_price", e.target.value)}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-navy-900 mb-1.5">Quantidade em Estoque</label>
-            <Input
-              type="number"
-              min="1"
-              max="999"
-              placeholder="1"
-              value={formData.quantity}
-              onChange={(e) => {
-                const val = Math.min(999, Math.max(1, parseInt(e.target.value) || 1)).toString()
-                updateField("quantity", val)
-              }}
             />
           </div>
 
@@ -658,15 +724,17 @@ export default function AddProductPage() {
                       type="number"
                       min="0"
                       step="1"
-                      value={priceTable[0]?.price || ""}
+                      value={suggestedPriceInput}
+                      onFocus={() => setIsEditingSuggestedPrice(true)}
                       onChange={(e) => {
-                        const newPrice = parseFloat(e.target.value) || 0
-                        const cost = parseFloat(formData.purchase_price) || 0
-                        if (cost > 0) {
-                          const newMargin = Math.max(0, Math.round(((newPrice - cost) / cost) * 100)).toString()
-                          setFormData((prev) => ({ ...prev, margin: newMargin }))
-                        }
+                        setIsEditingSuggestedPrice(true)
+                        setSuggestedPriceInput(e.target.value)
                       }}
+                      onBlur={() => {
+                        if (!isEditingSuggestedPrice) return
+                        commitSuggestedPrice()
+                      }}
+                      onKeyDown={handleSuggestedPriceKeyDown}
                       className="w-24 h-8 text-center rounded-lg border border-gray-200 text-sm font-semibold px-2"
                     />
                   </div>
@@ -677,9 +745,10 @@ export default function AddProductPage() {
                 type="range"
                 min="0"
                 max="100"
+                step="0.01"
                 value={formData.margin}
                 onChange={(e) => updateField("margin", e.target.value)}
-                className="w-full accent-royal-500"
+                className="w-full h-1.5 accent-royal-500"
               />
               <div className="flex justify-between text-xs text-gray-400">
                 <span>0%</span>

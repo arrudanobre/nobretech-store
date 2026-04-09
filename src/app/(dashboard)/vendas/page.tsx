@@ -23,6 +23,9 @@ export default function SalesPage() {
           .from("sales") as any)
           .select(`
             *,
+            source_type,
+            supplier_name,
+            supplier_cost,
             customers:customer_id (id, full_name, cpf, phone),
             inventory:inventory_id (
               id,
@@ -116,8 +119,16 @@ export default function SalesPage() {
             const notes = s.notes || ""
             const qtyMatch = notes.match(/^\[(\d+)x/)
             const qty = qtyMatch ? parseInt(qtyMatch[1]) : 1
-            const baseProfit = salePrice - (costPrice * qty)
-            const additionalProfit = (s.sales_additional_items || []).reduce((sum: number, item: any) => sum + Number(item.profit || 0), 0)
+
+            // Calculate main product price (total minus upsells)
+            const additionalItems = s.sales_additional_items || []
+            const upsellTotal = additionalItems.reduce((sum: number, item: any) => {
+              return sum + (Number(item.sale_price) || 0)
+            }, 0)
+            const mainProductPrice = salePrice - upsellTotal
+
+            const baseProfit = mainProductPrice - (costPrice * qty)
+            const additionalProfit = additionalItems.reduce((sum: number, item: any) => sum + Number(item.profit || 0), 0)
             const totalProfit = baseProfit + additionalProfit
 
             return (
@@ -132,9 +143,17 @@ export default function SalesPage() {
                     <p className="text-xs text-gray-500 mt-0.5">
                       {customerName} · {s.payment_method ? s.payment_method.replace("credit_", "Crédito ").replace("debit", "Débito").replace("pix", "PIX").replace("cash", "Dinheiro") : "—"} · {formatDate(s.sale_date)}
                     </p>
+                    {s.source_type === "supplier" && (
+                      <p className="text-xs text-gray-500">Fornecedor{s.supplier_name ? `: ${s.supplier_name}` : ""}</p>
+                    )}
                   </div>
                   <div className="text-right shrink-0">
-                    <p className="font-bold text-navy-900">{formatBRL(s.sale_price)}</p>
+                    <p className="font-bold text-navy-900">{formatBRL(mainProductPrice)}</p>
+                    {additionalItems.length > 0 && (
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        + {additionalItems.length} item{additionalItems.length > 1 ? 's' : ''} adicional{additionalItems.length > 1 ? 'es' : ''}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-2 mt-2">

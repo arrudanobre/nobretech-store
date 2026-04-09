@@ -33,6 +33,8 @@ export interface ProductCatalog {
 }
 
 export type InventoryStatus =
+  | 'pending'
+  | 'active'
   | 'in_stock'
   | 'sold'
   | 'returned'
@@ -53,6 +55,10 @@ export interface Inventory {
   purchase_price: number
   purchase_date: string
   supplier_id?: string
+  type?: 'own' | 'supplier'
+  supplier_name?: string
+  origin?: 'purchase' | 'trade_in' | 'return'
+  source_sale_id?: string
   suggested_price?: number
   status: InventoryStatus
   checklist_id?: string
@@ -128,6 +134,9 @@ export interface Sale {
   warranty_start?: string
   warranty_end?: string
   warranty_pdf_url?: string
+  source_type?: 'own' | 'supplier'
+  supplier_name?: string
+  supplier_cost?: number
   sale_date: string
   notes?: string
   created_at: string

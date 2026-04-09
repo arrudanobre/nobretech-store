@@ -99,11 +99,11 @@ export default function DashboardPage() {
         recentSalesRes,
       ] = await Promise.all([
         (supabase.from("inventory") as any)
-          .select("purchase_price, status")
-          .in("status", ["available", "reserved", "in_stock"]),
+          .select("purchase_price, status, type")
+          .in("status", ["active", "in_stock"] as any),
 
         (supabase.from("sales") as any)
-          .select("sale_price, net_amount, created_at, inventory:inventory_id(purchase_price)")
+          .select("sale_price, net_amount, created_at, source_type, supplier_cost, inventory:inventory_id(purchase_price, type)")
           .gte("sale_date", startOfMonth),
 
         (supabase.from("sales") as any)
@@ -136,12 +136,12 @@ export default function DashboardPage() {
           .limit(6),
       ])
 
-      const inventory = (inventoryRes.data as any[]) ?? []
+      const inventory = ((inventoryRes.data as any[]) ?? []).filter((i) => (i.type || "own") === "own")
       const invested = inventory.reduce((acc, i) => acc + (i.purchase_price ?? 0), 0)
       setTotalInvested(invested)
       setStockCount(inventory.length)
 
-      const salesMonth = (salesMonthRes.data as any[]) ?? []
+      const salesMonth = ((salesMonthRes.data as any[]) ?? []).filter((s) => (s.source_type || "own") === "own")
       const totalSales = salesMonth.reduce((acc, s) => acc + (s.sale_price ?? 0), 0)
       setMonthlySales(totalSales)
 

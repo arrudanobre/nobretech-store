@@ -85,6 +85,8 @@ CREATE TABLE IF NOT EXISTS inventory (
   purchase_price  DECIMAL(10,2) NOT NULL,
   purchase_date   DATE NOT NULL,
   supplier_id     UUID REFERENCES suppliers(id),
+  type            TEXT DEFAULT 'own' CHECK (type IN ('own', 'supplier')),
+  supplier_name   TEXT,
   suggested_price DECIMAL(10,2),
   status          TEXT DEFAULT 'in_stock' CHECK (status IN ('in_stock', 'sold', 'returned', 'under_repair', 'trade_in_received')),
   checklist_id    UUID REFERENCES checklists(id),
@@ -152,6 +154,9 @@ CREATE TABLE IF NOT EXISTS sales (
   warranty_start   DATE,
   warranty_end     DATE,
   warranty_pdf_url TEXT,
+  source_type      TEXT DEFAULT 'own' CHECK (source_type IN ('own', 'supplier')),
+  supplier_name    TEXT,
+  supplier_cost    DECIMAL(10,2),
   sale_date        DATE NOT NULL DEFAULT CURRENT_DATE,
   notes            TEXT,
   created_at       TIMESTAMPTZ DEFAULT NOW()
@@ -356,7 +361,9 @@ BEGIN
     NEW.sale_date + (NEW.warranty_months || ' months')::INTERVAL,
     'active'
   );
-  UPDATE inventory SET status = 'sold' WHERE id = NEW.inventory_id;
+  IF COALESCE(NEW.source_type, 'own') = 'own' THEN
+    UPDATE inventory SET status = 'sold' WHERE id = NEW.inventory_id;
+  END IF;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;

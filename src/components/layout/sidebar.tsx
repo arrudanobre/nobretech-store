@@ -222,7 +222,7 @@ export function DashboardLayout({ children, title }: { children: React.ReactNode
         const { data, error } = await (supabase
           .from("inventory") as any)
           .select("id")
-          .eq("status", "in_stock")
+          .in("status", ["active", "in_stock"] as any)
         if (!error) {
           setCounts((prev) => ({ ...prev, estoque: data?.length ?? 0 }))
         }

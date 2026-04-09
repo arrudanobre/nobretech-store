@@ -6,7 +6,7 @@ import { useToast } from "@/components/ui/toaster"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { supabase } from "@/lib/supabase"
-import { formatBRL, formatDate } from "@/lib/helpers"
+import { formatBRL, formatDate, getAdditionalItemDisplayName, getTradeInDisplayName, getTradeInSummaryStatus, getInventoryStatusMeta, isPendingInventoryStatus } from "@/lib/helpers"
 import { CHECKLIST_TEMPLATES } from "@/lib/constants"
 import jsPDF from "jspdf"
 import { ArrowLeft, ShieldCheck, FileText, CreditCard, User, ShoppingCart, AlertTriangle, Download, CheckCircle2, XCircle, MinusCircle, Loader2 } from "lucide-react"
@@ -30,6 +30,8 @@ export default function SaleDetailPage() {
   const [checklist, setChecklist] = useState<any[]>([])
   const [generatingPdf, setGeneratingPdf] = useState(false)
   const [additionalItems, setAdditionalItems] = useState<any[]>([])
+  const [tradeInData, setTradeInData] = useState<any>(null)
+  const [tradeInInventory, setTradeInInventory] = useState<any>(null)
 
   useEffect(() => {
     const fetchSale = async () => {
@@ -71,6 +73,26 @@ export default function SaleDetailPage() {
                 const items = typeof cl.items === "string" ? JSON.parse(cl.items) : cl.items
                 setChecklist(items)
               }
+            }
+          }
+        }
+
+        if ((data as any)?.trade_in_id) {
+          const { data: ti } = await (supabase
+            .from("trade_ins") as any)
+            .select("*")
+            .eq("id", (data as any).trade_in_id)
+            .single()
+
+          if (ti) {
+            setTradeInData(ti)
+            if ((ti as any).linked_inventory_id) {
+              const { data: tiInventory } = await (supabase
+                .from("inventory") as any)
+                .select("id, status, origin")
+                .eq("id", (ti as any).linked_inventory_id)
+                .single()
+              if (tiInventory) setTradeInInventory(tiInventory)
             }
           }
         }
@@ -450,6 +472,12 @@ export default function SaleDetailPage() {
   const okCount = checklist.filter((i: any) => i.status === "ok").length
   const failCount = checklist.filter((i: any) => i.status === "fail").length
 
+  // Calculate main product price (total minus upsells)
+  const upsellTotal = (additionalItems || []).reduce((sum: number, item: any) => {
+    return sum + (Number(item.sale_price) || 0)
+  }, 0)
+  const mainProductPrice = Number(sale?.sale_price || 0) - upsellTotal
+
   return (
     <div className="space-y-4 animate-fade-in">
       <div className="flex items-center justify-between">
@@ -470,7 +498,7 @@ export default function SaleDetailPage() {
           <div className="w-8 h-8 rounded-lg bg-royal-100 flex items-center justify-center"><ShoppingCart className="w-4 h-4 text-royal-500" /></div>
           <h3 className="font-display font-bold text-navy-900 font-syne">Aparelho</h3>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
           <div className="bg-surface rounded-xl p-4">
             <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Modelo</p>
             <p className="text-sm font-semibold text-navy-900">{fullModel}</p>
@@ -483,8 +511,131 @@ export default function SaleDetailPage() {
             <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Status</p>
             <p className="text-sm font-semibold text-navy-900">{product?.grade || "—"}</p>
           </div>
+          <div className="bg-surface rounded-xl p-4">
+            <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Preço</p>
+            <p className="text-sm font-bold text-navy-900">{formatBRL(mainProductPrice)}</p>
+            {sale?.source_type === "supplier" && (
+              <p className="text-xs text-gray-500 mt-1">Fornecedor{sale?.supplier_name ? `: ${sale.supplier_name}` : ""}</p>
+            )}
+            {sale?.source_type === "supplier" && sale?.supplier_cost != null && (
+              <p className="text-xs text-gray-500">Custo fornecedor: {formatBRL(Number(sale.supplier_cost))}</p>
+            )}
+            {additionalItems && additionalItems.length > 0 && (
+              <p className="text-xs text-gray-500 mt-1">
+                + {additionalItems.length} item{additionalItems.length > 1 ? 's' : ''} adicional{additionalItems.length > 1 ? 'es' : ''}
+              </p>
+            )}
+          </div>
         </div>
       </div>
+
+      {tradeInData && (() => {
+        const inventoryStatus = tradeInInventory?.status || "pending"
+        const statusMeta = getInventoryStatusMeta(inventoryStatus)
+        const tradeInLabel = getTradeInSummaryStatus(inventoryStatus)
+        const tradeInName = getTradeInDisplayName({
+          model: tradeInData.notes || undefined,
+          fallback: "Aparelho recebido",
+        })
+
+        return (
+          <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <h3 className="font-display font-bold text-navy-900 font-syne">Aparelho recebido</h3>
+              <Badge variant={statusMeta.badge} dot>{tradeInLabel}</Badge>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="bg-surface rounded-xl p-3">
+                <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Nome</p>
+                <p className="text-sm font-semibold text-navy-900">{tradeInName}</p>
+              </div>
+              <div className="bg-surface rounded-xl p-3">
+                <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Valor atribuído</p>
+                <p className="text-sm font-semibold text-navy-900">{formatBRL(Number(tradeInData.trade_in_value || 0))}</p>
+              </div>
+              <div className="bg-surface rounded-xl p-3">
+                <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Status</p>
+                <p className="text-sm font-semibold text-navy-900">{tradeInLabel}</p>
+              </div>
+            </div>
+
+            {isPendingInventoryStatus(inventoryStatus) && tradeInInventory?.id && (
+              <div className="mt-3 flex justify-end">
+                <Button variant="outline" size="sm" onClick={() => router.push(`/estoque/${tradeInInventory.id}/editar`)}>
+                  Finalizar cadastro
+                </Button>
+              </div>
+            )}
+          </div>
+        )
+      })()}
+
+      {/* Additional Items (Upsell / Brinde) - Moved to appear right after main product */}
+      {additionalItems.length > 0 && (
+        <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-8 h-8 rounded-lg bg-royal-100 flex items-center justify-center"><CreditCard className="w-4 h-4 text-royal-500" /></div>
+            <h3 className="font-display font-bold text-navy-900 font-syne">Itens Adicionais da Venda</h3>
+          </div>
+          <div className="space-y-2">
+            {(additionalItems || []).map((item) => {
+              const isUpsell = item.type === "upsell"
+              const profit = Number(item.profit || 0)
+              return (
+                <div key={item.id} className={`rounded-xl p-3 border ${isUpsell ? "bg-success-100/10 border-success-500/10" : "bg-danger-100/10 border-danger-500/10"}`}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-navy-900">
+                        {getAdditionalItemDisplayName(item.name)}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {isUpsell ? "Upsell (pago)" : "Brinde (gratuito)"} · Custo: {formatBRL(item.cost_price)}
+                        {isUpsell && item.sale_price ? ` · Venda: ${formatBRL(item.sale_price)}` : null}
+                      </p>
+                    </div>
+                    <span className={`text-sm font-bold ${profit >= 0 ? "text-success-500" : "text-danger-500"}`}>
+                      {profit >= 0 ? "+" : ""}{formatBRL(profit)}
+                    </span>
+                  </div>
+                </div>
+              )
+            })}
+            {/* Lucro total */}
+            {(() => {
+              const addProfit = (additionalItems || []).reduce((sum, i) => sum + Number(i.profit || 0), 0)
+              const mainCost = product?.purchase_price || 0
+              // Detect quantity from notes format "[Nx ...]"
+              const notes = sale?.notes || ""
+              const qtyMatch = notes.match(/^\[(\d+)x/)
+              const qty = qtyMatch ? parseInt(qtyMatch[1]) : 1
+              const mainProfit = mainProductPrice - (mainCost * qty)
+              const totalProfit = mainProfit + addProfit
+              return (
+                <div className="pt-2 border-t border-gray-100 mt-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Lucro principal</span>
+                    <span className={`font-semibold ${mainProfit >= 0 ? "text-success-500" : "text-danger-500"}`}>
+                      {formatBRL(mainProfit)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Impacto adicionais</span>
+                    <span className={`font-semibold ${addProfit >= 0 ? "text-success-500" : "text-danger-500"}`}>
+                      {addProfit >= 0 ? "+" : ""}{formatBRL(addProfit)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-sm pt-2 border-t border-gray-100">
+                    <span className="font-semibold text-navy-900">Lucro total</span>
+                    <span className={`font-bold ${totalProfit >= 0 ? "text-success-500" : "text-danger-500"}`}>
+                      {formatBRL(totalProfit)}
+                    </span>
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+        </div>
+      )}
 
       <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
         <div className="flex items-center gap-2 mb-4">
@@ -570,66 +721,6 @@ export default function SaleDetailPage() {
         </div>
       )}
 
-      {/* Additional Items (Upsell / Brinde) */}
-      {additionalItems.length > 0 && (
-        <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-8 h-8 rounded-lg bg-royal-100 flex items-center justify-center"><CreditCard className="w-4 h-4 text-royal-500" /></div>
-            <h3 className="font-display font-bold text-navy-900 font-syne">Itens Adicionais</h3>
-          </div>
-          <div className="space-y-2">
-            {additionalItems.map((item) => {
-              const isUpsell = item.type === "upsell"
-              const profit = Number(item.profit || 0)
-              return (
-                <div key={item.id} className={`rounded-xl p-3 border ${isUpsell ? "bg-success-100/10 border-success-500/10" : "bg-danger-100/10 border-danger-500/10"}`}>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-navy-900">{item.name}</p>
-                      <p className="text-xs text-gray-500">
-                        {isUpsell ? "Upsell (pago)" : "Brinde (gratuito)"} · Custo: {formatBRL(item.cost_price)}
-                        {isUpsell && item.sale_price ? ` · Venda: ${formatBRL(item.sale_price)}` : null}
-                      </p>
-                    </div>
-                    <span className={`text-sm font-bold ${profit >= 0 ? "text-success-500" : "text-danger-500"}`}>
-                      {profit >= 0 ? "+" : ""}{formatBRL(profit)}
-                    </span>
-                  </div>
-                </div>
-              )
-            })}
-            {/* Lucro total */}
-            {(() => {
-              const addProfit = additionalItems.reduce((sum, i) => sum + Number(i.profit || 0), 0)
-              const mainCost = product?.purchase_price || 0
-              const mainProfit = Number(sale?.sale_price || 0) - mainCost
-              const totalProfit = mainProfit + addProfit
-              return (
-                <div className="pt-2 border-t border-gray-100 mt-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-500">Lucro principal</span>
-                    <span className={`font-semibold ${mainProfit >= 0 ? "text-success-500" : "text-danger-500"}`}>
-                      {formatBRL(mainProfit)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-500">Impacto adicionais</span>
-                    <span className={`font-semibold ${addProfit >= 0 ? "text-success-500" : "text-danger-500"}`}>
-                      {addProfit >= 0 ? "+" : ""}{formatBRL(addProfit)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-sm pt-2 border-t border-gray-100">
-                    <span className="font-semibold text-navy-900">Lucro total</span>
-                    <span className={`font-bold ${totalProfit >= 0 ? "text-success-500" : "text-danger-500"}`}>
-                      {formatBRL(totalProfit)}
-                    </span>
-                  </div>
-                </div>
-              )
-            })()}
-          </div>
-        </div>
-      )}
 
       <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
         <h3 className="font-display font-bold text-navy-900 mb-4 font-syne">Documentos da Venda</h3>
