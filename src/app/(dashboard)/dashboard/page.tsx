@@ -42,6 +42,8 @@ const CATEGORY_COLORS: Record<string, string> = {
 }
 
 const MONTHS_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+const CACHE_KEY = "dashboard_data"
+const CACHE_TTL = 3 * 60 * 1000 // 3 minutos
 
 function relativeTime(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime()
@@ -85,6 +87,27 @@ export default function DashboardPage() {
     async function load() {
       setLoading(true)
 
+      const cached = localStorage.getItem(CACHE_KEY)
+      if (cached) {
+        const { data, timestamp } = JSON.parse(cached)
+        if (Date.now() - timestamp < CACHE_TTL) {
+          setTotalInvested(data.totalInvested)
+          setMonthlySales(data.monthlySales)
+          setMonthlyProfit(data.monthlyProfit)
+          setAvgMargin(data.avgMargin)
+          setSalesChartData(data.salesChartData)
+          setCategoryData(data.categoryData)
+          setExpiringWarranties(data.expiringWarranties)
+          setOpenProblems(data.openProblems)
+          setRecentActivity(data.recentActivity)
+          setStockCount(data.stockCount)
+          setWarrantiesCount(data.warrantiesCount)
+          setProblemsCount(data.problemsCount)
+          setLoading(false)
+          return
+        }
+      }
+
       const now = new Date()
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
       const in30Days = new Date(now.getTime() + 30 * 86400000).toISOString().split("T")[0]
@@ -109,7 +132,8 @@ export default function DashboardPage() {
         (supabase.from("sales") as any)
           .select("sale_price, sale_date")
           .gte("sale_date", new Date(now.getFullYear(), now.getMonth() - 5, 1).toISOString().split("T")[0])
-          .order("sale_date", { ascending: true }),
+          .order("sale_date", { ascending: true })
+          .limit(200),
 
         (supabase.from("sales") as any)
           .select("inventory:inventory_id(catalog:catalog_id(category))")
@@ -235,6 +259,44 @@ export default function DashboardPage() {
           time: relativeTime(s.created_at),
         }))
       )
+
+      localStorage.setItem(CACHE_KEY, JSON.stringify({
+        data: {
+          totalInvested: invested,
+          monthlySales: totalSales,
+          monthlyProfit: totalProfit,
+          avgMargin: totalSales > 0 ? Math.round((totalProfit / totalSales) * 100 * 10) / 10 : 0,
+          salesChartData: Object.entries(monthMap).map(([key, value]) => ({
+            month: MONTHS_PT[parseInt(key.split("-")[1]) - 1],
+            value,
+          })),
+          categoryData: Object.entries(catCount).map(([name, count]) => ({
+            name,
+            value: Math.round((count / total) * 100),
+            color: CATEGORY_COLORS[name] ?? CATEGORY_COLORS["Outros"],
+          })),
+          expiringWarranties: warranties.map((w: any) => ({
+            customer: w.customer?.full_name ?? "—",
+            product: w.inventory?.catalog ? `${w.inventory.catalog.brand} ${w.inventory.catalog.model}` : "—",
+            days: daysUntil(w.end_date),
+          })),
+          openProblems: problems.map((p: any) => ({
+            customer: p.customers?.full_name ?? "—",
+            product: p.inventory?.product_catalog?.model ?? "—",
+            tag: Array.isArray(p.tags) && p.tags.length > 0 ? p.tags[0] : "outro",
+            priority: p.priority ?? "medium",
+          })),
+          recentActivity: recentSales.map((s: any) => ({
+            action: "Venda realizada",
+            detail: `${s.inventory?.catalog?.brand ?? ""} ${s.inventory?.catalog?.model ?? "—"} → ${s.customer?.full_name ?? "Cliente"}`,
+            time: relativeTime(s.created_at),
+          })),
+          stockCount: inventory.length,
+          warrantiesCount: warranties.length,
+          problemsCount: problems.length,
+        },
+        timestamp: Date.now(),
+      }))
 
       setLoading(false)
     }
