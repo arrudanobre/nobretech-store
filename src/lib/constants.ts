@@ -528,6 +528,12 @@ export const PAYMENT_METHODS = [
   { value: 'credit_10x', label: 'Crédito 10x', icon: '💳', maxInstallments: 10 },
   { value: 'credit_11x', label: 'Crédito 11x', icon: '💳', maxInstallments: 11 },
   { value: 'credit_12x', label: 'Crédito 12x', icon: '💳', maxInstallments: 12 },
+  { value: 'credit_13x', label: 'Crédito 13x', icon: '💳', maxInstallments: 13 },
+  { value: 'credit_14x', label: 'Crédito 14x', icon: '💳', maxInstallments: 14 },
+  { value: 'credit_15x', label: 'Crédito 15x', icon: '💳', maxInstallments: 15 },
+  { value: 'credit_16x', label: 'Crédito 16x', icon: '💳', maxInstallments: 16 },
+  { value: 'credit_17x', label: 'Crédito 17x', icon: '💳', maxInstallments: 17 },
+  { value: 'credit_18x', label: 'Crédito 18x', icon: '💳', maxInstallments: 18 },
 ] as const
 
 export const CATEGORIES = [

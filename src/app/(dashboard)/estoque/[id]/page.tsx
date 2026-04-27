@@ -5,7 +5,6 @@ import { useRouter, useParams } from "next/navigation"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { CategoryIcon } from "@/components/ui/icon-helpers"
 import { formatBRL, daysBetween, buildPriceTable, getInventoryStatusMeta, getComputedInventoryStatus, getTradeInOriginLabel, isPendingInventoryStatus } from "@/lib/helpers"
 import { CATEGORIES, GRADES, CHECKLIST_TEMPLATES } from "@/lib/constants"
 import { supabase } from "@/lib/supabase"
@@ -85,6 +84,8 @@ export default function ProductDetailPage() {
           credit_1x: 3.26, credit_2x: 11.77, credit_3x: 13.03, credit_4x: 13.13,
           credit_5x: 15.37, credit_6x: 15.38, credit_7x: 17.12, credit_8x: 17.12,
           credit_9x: 19.17, credit_10x: 19.82, credit_11x: 19.82, credit_12x: 20.78,
+          credit_13x: 20.78, credit_14x: 20.78, credit_15x: 20.78, credit_16x: 20.78,
+          credit_17x: 20.78, credit_18x: 20.78,
           default_margin_pct: 15
         }
 
@@ -108,6 +109,12 @@ export default function ProductDetailPage() {
             credit_10x: s.credit_10x_fee_pct ?? defaults.credit_10x,
             credit_11x: s.credit_11x_fee_pct ?? defaults.credit_11x,
             credit_12x: s.credit_12x_fee_pct ?? defaults.credit_12x,
+            credit_13x: s.credit_13x_fee_pct ?? s.credit_12x_fee_pct ?? defaults.credit_13x,
+            credit_14x: s.credit_14x_fee_pct ?? s.credit_12x_fee_pct ?? defaults.credit_14x,
+            credit_15x: s.credit_15x_fee_pct ?? s.credit_12x_fee_pct ?? defaults.credit_15x,
+            credit_16x: s.credit_16x_fee_pct ?? s.credit_12x_fee_pct ?? defaults.credit_16x,
+            credit_17x: s.credit_17x_fee_pct ?? s.credit_12x_fee_pct ?? defaults.credit_17x,
+            credit_18x: s.credit_18x_fee_pct ?? s.credit_12x_fee_pct ?? defaults.credit_18x,
             default_margin_pct: s.default_margin_pct ?? defaults.default_margin_pct,
           } as any
         }
@@ -209,7 +216,7 @@ export default function ProductDetailPage() {
 
   const catalogName = product.catalog?.model
     ? `${product.catalog.model}${product.catalog.variant ? " " + product.catalog.variant : ""}`
-    : product.condition_notes ? product.condition_notes.replace(/^Acessório:\s*/, "")
+    : product.notes || product.condition_notes ? (product.notes || product.condition_notes || "").replace(/^Acessório:\s*/, "")
     : product.imei
       ? `Dispositivo IMEI ...${product.imei.slice(-4)}`
       : "Sem catálogo"
@@ -227,7 +234,9 @@ export default function ProductDetailPage() {
   const progress = total > 0 ? Math.round((passed / total) * 100) : 0
 
   const catalogCategory = product.catalog?.category || ""
-  const categoryLabel = CATEGORIES.find((c) => c.value === catalogCategory)?.label || "Acessório"
+  const manualCategoryText = `${product.notes || ""} ${product.condition_notes || ""}`.toLowerCase()
+  const manualCategoryLabel = /capa|pel[ií]cula|pencil|caneta|cabo|fonte|carregador|acess[oó]rio/.test(manualCategoryText) ? "Acessório" : "Outros"
+  const categoryLabel = CATEGORIES.find((c) => c.value === catalogCategory)?.label || product.catalog?.category || manualCategoryLabel
 
   // Calc Promo Limits for Cash/PIX (minimalista)
   const promoLimit10 = buildPriceTable(product.purchase_price, 10, settings || {}).find(p => p.method === 'pix')?.price || 0
@@ -296,17 +305,6 @@ export default function ProductDetailPage() {
           </Link>
         </div>
       )}
-
-      <div className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-2xl aspect-video flex items-center justify-center">
-        <div className="text-center">
-          {product.catalog ? (
-            <CategoryIcon category={product.catalog.category} className="!w-16 !h-16" />
-          ) : (
-            <span className="text-5xl">📦</span>
-          )}
-          <p className="text-xs text-gray-400 mt-2">Mídia desativada no estoque</p>
-        </div>
-      </div>
 
       {/* Specs & Price */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

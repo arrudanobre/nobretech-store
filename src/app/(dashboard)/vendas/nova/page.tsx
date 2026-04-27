@@ -31,6 +31,7 @@ type InventoryProduct = {
   name: string
   imei: string
   imei2?: string
+  serial_number?: string
   condition_notes?: string | null
   cost: number
   suggested: number
@@ -508,7 +509,9 @@ function NewSaleContent() {
   const defaultFees: Record<string, number> = {
     debit: 1.47, credit_1x: 3.26, credit_2x: 11.77, credit_3x: 13.03, credit_4x: 13.13,
     credit_5x: 15.37, credit_6x: 15.38, credit_7x: 17.12, credit_8x: 17.12,
-    credit_9x: 19.17, credit_10x: 19.82, credit_11x: 19.82, credit_12x: 20.78, pix: 0, cash: 0,
+    credit_9x: 19.17, credit_10x: 19.82, credit_11x: 19.82, credit_12x: 20.78,
+    credit_13x: 20.78, credit_14x: 20.78, credit_15x: 20.78, credit_16x: 20.78,
+    credit_17x: 20.78, credit_18x: 20.78, pix: 0, cash: 0,
   }
   const [fees, setFees] = useState<Partial<Record<string, number>>>(defaultFees)
 
@@ -562,7 +565,7 @@ function NewSaleContent() {
       try {
         const { data, error } = await supabase
           .from("inventory")
-          .select("id, imei, imei2, purchase_price, suggested_price, battery_health, status, condition_notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color)")
+          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, status, condition_notes, notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color)")
           .in("status", ["active", "in_stock"] as any)
           .order("created_at", { ascending: false })
 
@@ -574,6 +577,7 @@ function NewSaleContent() {
             name: getProductName(item),
             imei: item.imei || "",
             imei2: item.imei2 || "",
+            serial_number: item.serial_number || "",
             condition_notes: item.condition_notes || null,
             cost: item.purchase_price || 0,
             suggested: item.suggested_price || 0,
@@ -598,7 +602,7 @@ function NewSaleContent() {
     const fetchProduct = async () => {
       try {
         const { data: items, error } = await (supabase.from("inventory") as any)
-          .select("id, imei, imei2, purchase_price, suggested_price, battery_health, condition_notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color)")
+          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, condition_notes, notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color)")
           .eq("id", preselectId)
           .single()
 
@@ -617,6 +621,7 @@ function NewSaleContent() {
           name: getProductName(items),
           imei: items.imei || "",
           imei2: items.imei2 || "",
+          serial_number: items.serial_number || "",
           condition_notes: items.condition_notes || null,
           cost: items.purchase_price || 0,
           suggested: items.suggested_price || 0,
@@ -658,6 +663,12 @@ function NewSaleContent() {
             credit_10x: typeof data.credit_10x_fee_pct === 'number' && data.credit_10x_fee_pct > 0 ? data.credit_10x_fee_pct : prev.credit_10x,
             credit_11x: typeof data.credit_11x_fee_pct === 'number' && data.credit_11x_fee_pct > 0 ? data.credit_11x_fee_pct : prev.credit_11x,
             credit_12x: typeof data.credit_12x_fee_pct === 'number' && data.credit_12x_fee_pct > 0 ? data.credit_12x_fee_pct : prev.credit_12x,
+            credit_13x: typeof data.credit_13x_fee_pct === 'number' && data.credit_13x_fee_pct > 0 ? data.credit_13x_fee_pct : prev.credit_13x,
+            credit_14x: typeof data.credit_14x_fee_pct === 'number' && data.credit_14x_fee_pct > 0 ? data.credit_14x_fee_pct : prev.credit_14x,
+            credit_15x: typeof data.credit_15x_fee_pct === 'number' && data.credit_15x_fee_pct > 0 ? data.credit_15x_fee_pct : prev.credit_15x,
+            credit_16x: typeof data.credit_16x_fee_pct === 'number' && data.credit_16x_fee_pct > 0 ? data.credit_16x_fee_pct : prev.credit_16x,
+            credit_17x: typeof data.credit_17x_fee_pct === 'number' && data.credit_17x_fee_pct > 0 ? data.credit_17x_fee_pct : prev.credit_17x,
+            credit_18x: typeof data.credit_18x_fee_pct === 'number' && data.credit_18x_fee_pct > 0 ? data.credit_18x_fee_pct : prev.credit_18x,
             pix: typeof data.pix_fee_pct === 'number' && data.pix_fee_pct > 0 ? data.pix_fee_pct : prev.pix,
             cash: typeof data.cash_discount_pct === 'number' && data.cash_discount_pct > 0 ? data.cash_discount_pct : prev.cash,
           }))
@@ -672,10 +683,12 @@ function NewSaleContent() {
   const filteredProducts = useMemo(() => {
     const products = inventoryProducts
     if (!searchTerm) return products
+    const term = searchTerm.toLowerCase()
     return products.filter(
       (p) =>
-        p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        p.imei?.includes(searchTerm)
+        p.name.toLowerCase().includes(term) ||
+        p.imei?.toLowerCase().includes(term) ||
+        p.serial_number?.toLowerCase().includes(term)
     )
   }, [searchTerm, inventoryProducts])
 
@@ -1225,7 +1238,7 @@ function NewSaleContent() {
         <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
           <h3 className="font-display font-bold text-navy-900 mb-4 font-syne">Buscar Produto em Estoque</h3>
           <Input
-            placeholder="Buscar por IMEI, modelo, nome..."
+            placeholder="Buscar por nome, IMEI ou número de série..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             icon={<Search className="w-4 h-4" />}
@@ -1251,7 +1264,7 @@ function NewSaleContent() {
                   <div>
                     <p className="text-sm font-medium text-navy-900">{p.name}</p>
                     <p className="text-xs text-gray-500">
-                      {p.imei ? `IMEI: ${p.imei}` : "—"} · Bateria {p.battery}%
+                      {[p.imei ? `IMEI: ${p.imei}` : null, p.serial_number ? `Serial: ${p.serial_number}` : null, p.battery ? `Bateria ${p.battery}%` : null].filter(Boolean).join(" · ") || "Sem identificação"}
                     </p>
                     {p.type === "supplier" && (
                       <p className="text-xs text-gray-500">Fornecedor{p.supplier_name ? `: ${p.supplier_name}` : ""}</p>

@@ -591,6 +591,12 @@ export interface Database {
           credit_10x_fee_pct: number | null;
           credit_11x_fee_pct: number | null;
           credit_12x_fee_pct: number | null;
+          credit_13x_fee_pct: number | null;
+          credit_14x_fee_pct: number | null;
+          credit_15x_fee_pct: number | null;
+          credit_16x_fee_pct: number | null;
+          credit_17x_fee_pct: number | null;
+          credit_18x_fee_pct: number | null;
           pix_fee_pct: number | null;
           cash_discount_pct: number | null;
           default_warranty_months: number | null;
@@ -613,6 +619,12 @@ export interface Database {
           credit_10x_fee_pct?: number | null;
           credit_11x_fee_pct?: number | null;
           credit_12x_fee_pct?: number | null;
+          credit_13x_fee_pct?: number | null;
+          credit_14x_fee_pct?: number | null;
+          credit_15x_fee_pct?: number | null;
+          credit_16x_fee_pct?: number | null;
+          credit_17x_fee_pct?: number | null;
+          credit_18x_fee_pct?: number | null;
           pix_fee_pct?: number | null;
           cash_discount_pct?: number | null;
           default_warranty_months?: number | null;
@@ -635,6 +647,12 @@ export interface Database {
           credit_10x_fee_pct?: number | null;
           credit_11x_fee_pct?: number | null;
           credit_12x_fee_pct?: number | null;
+          credit_13x_fee_pct?: number | null;
+          credit_14x_fee_pct?: number | null;
+          credit_15x_fee_pct?: number | null;
+          credit_16x_fee_pct?: number | null;
+          credit_17x_fee_pct?: number | null;
+          credit_18x_fee_pct?: number | null;
           pix_fee_pct?: number | null;
           cash_discount_pct?: number | null;
           default_warranty_months?: number | null;

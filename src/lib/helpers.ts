@@ -19,6 +19,12 @@ export function getFeeKey(method: string): string {
     credit_10x: 'credit_10x',
     credit_11x: 'credit_11x',
     credit_12x: 'credit_12x',
+    credit_13x: 'credit_13x',
+    credit_14x: 'credit_14x',
+    credit_15x: 'credit_15x',
+    credit_16x: 'credit_16x',
+    credit_17x: 'credit_17x',
+    credit_18x: 'credit_18x',
   }
   return map[method] ?? 'pix'
 }
@@ -326,14 +332,14 @@ export function getProductName(item: {
     const parts = [item.model, item.storage, item.color].filter(Boolean)
     return parts.join(" ") || "Produto sem nome"
   }
-  // Accessories — name stored in notes/condition_notes
+  // Accessories/manual items — name is stored in notes first, with condition_notes as legacy fallback.
+  if (item.notes) return item.notes.replace(/^Acessório:\s*/i, "").trim()
   if (item.condition_notes) {
     // Extract accessory name (format: "Acessório: X" or just the text)
     const match = item.condition_notes.match(/^Acessório:\s*(.+)$/i)
     if (match) return match[1].trim()
     return item.condition_notes
   }
-  if (item.notes) return item.notes
   return "Produto"
 }
 
@@ -436,8 +442,11 @@ export function isInventoryReadyForSale(item: {
 }): boolean {
   const hasPrice = Number(item.purchase_price || 0) > 0
   const hasDate = Boolean(item.purchase_date)
-  const hasGrade = Boolean(item.grade)
-  const hasIdentity = Boolean(item.imei || item.serial_number)
+  const isManual = !item.catalog_id && Boolean((item.notes || "").trim() || (item.condition_notes || "").trim())
+  const isAccessory = /acess[oó]rio:/i.test(`${item.notes || ""} ${item.condition_notes || ""}`)
+  const isLacrado = item.grade === "Lacrado"
+  const hasGrade = Boolean(item.grade) || isManual || isAccessory
+  const hasIdentity = Boolean(item.imei || item.serial_number) || isManual || isAccessory || isLacrado
   const hasProductIdentity = Boolean(item.catalog_id || (item.notes || "").trim() || (item.condition_notes || "").trim())
 
   return hasPrice && hasDate && hasGrade && hasIdentity && hasProductIdentity

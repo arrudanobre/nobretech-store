@@ -251,6 +251,12 @@ export interface FinancialSettings {
   credit_10x_fee_pct?: number
   credit_11x_fee_pct?: number
   credit_12x_fee_pct?: number
+  credit_13x_fee_pct?: number
+  credit_14x_fee_pct?: number
+  credit_15x_fee_pct?: number
+  credit_16x_fee_pct?: number
+  credit_17x_fee_pct?: number
+  credit_18x_fee_pct?: number
   pix_fee_pct?: number
   cash_discount_pct?: number
   default_warranty_months?: number

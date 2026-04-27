@@ -1,50 +1,56 @@
 "use client"
 
-import { useState, useCallback, useMemo, useEffect } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
+import { ArrowLeft, ArrowRight, Check, Package, Save } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
-import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
-import { buildPriceTable, formatBRL } from "@/lib/helpers"
-import { PRODUCT_CATALOG, CHECKLIST_TEMPLATES, CATEGORIES, GRADES } from "@/lib/constants"
+import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/toaster"
 import { supabase } from "@/lib/supabase"
-import { useRouter } from "next/navigation"
-import {
-  ArrowLeft,
-  ArrowRight,
-  Check,
-  Smartphone,
-  TabletSmartphone,
-  Monitor,
-  Headphones,
-  Watch,
-  MapPinned,
-  Zap,
-} from "lucide-react"
+import { formatBRL, getComputedInventoryStatus, mapLifecycleToLegacyCompatibleStatus } from "@/lib/helpers"
+import { CATEGORIES, CHECKLIST_TEMPLATES, GRADES, PRODUCT_CATALOG } from "@/lib/constants"
 
-const categoryIcons: Record<string, React.ElementType> = {
-  iphone: Smartphone,
-  ipad: TabletSmartphone,
-  applewatch: Watch,
-  airpods: Headphones,
-  macbook: Monitor,
-  garmin: MapPinned,
-  accessories: Zap,
+type Step = 1 | 2 | 3
+type ProductMode = "catalog" | "manual"
+
+type ChecklistItem = {
+  id: string
+  label: string
+  status: string
+  note: string
 }
 
-type Step = 1 | 2 | 3 | 4 | 5
+const ACCESSORY_SUGGESTIONS = [
+  "Capa para iPad",
+  "Película para iPad",
+  "Apple Pencil",
+  "Cabo USB-C",
+  "Fonte 20W",
+  "Capa para iPhone",
+  "Película para iPhone",
+]
+
+const categoryOptions = CATEGORIES.map((category) => ({ label: category.label, value: category.value }))
 
 export default function AddProductPage() {
+  const router = useRouter()
+  const { toast } = useToast()
   const [step, setStep] = useState<Step>(1)
-  const [category, setCategory] = useState<string>("")
+  const [mode, setMode] = useState<ProductMode>("catalog")
+  const [category, setCategory] = useState("iphone")
   const [modelIdx, setModelIdx] = useState(0)
+  const [suppliers, setSuppliers] = useState<any[]>([])
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([])
   const [formData, setFormData] = useState({
+    manual_name: "",
     storage: "",
     color: "",
     colorHex: "",
-    grade: "",
+    grade: "Lacrado",
     imei: "",
     imei2: "",
     serial_number: "",
@@ -54,885 +60,450 @@ export default function AddProductPage() {
     supplier_id: "",
     type: "own",
     supplier_name: "",
-    purchase_date: "",
+    purchase_date: new Date().toISOString().split("T")[0],
     purchase_price: "",
+    suggested_price: "",
     margin: "15",
     quantity: "1",
   })
-  const [checklistItems, setChecklistItems] = useState<Array<{ id: string; label: string; status: string; note: string }>>([])
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [suppliers, setSuppliers] = useState<any[]>([])
-  const [loadingSuppliers, setLoadingSuppliers] = useState(false)
-
-  const { toast } = useToast()
-  const router = useRouter()
-
-  const ACCESSORIES_LIST = [
-    "Apple Pencil (1ª geração)",
-    "Apple Pencil (2ª geração)",
-    "Apple Pencil USB-C",
-    "Caneta Stylus Goojodoq",
-    "Caneta Stylus WB",
-    "Cabo Lightning",
-    "Cabo USB-C",
-    "Fonte 5W",
-    "Fonte 12W",
-    "Fonte 20W",
-    "Fonte USB-C genérica",
-    "Capa iPhone",
-    "Película iPhone",
-    "Película iPad"
-  ]
 
   const models = useMemo(() => {
-    if (category === "accessories") {
-      return ACCESSORIES_LIST.map(name => ({ name }))
-    }
     const cat = PRODUCT_CATALOG[category as keyof typeof PRODUCT_CATALOG]
     return cat ? cat.models : []
   }, [category])
 
-  const selectedModel = models[modelIdx]
-  const [suggestedPriceInput, setSuggestedPriceInput] = useState("")
-  const [isEditingSuggestedPrice, setIsEditingSuggestedPrice] = useState(false)
+  const selectedModel = models[modelIdx] as any
+  const isManual = mode === "manual"
+  const isSealedElectronic = mode === "catalog" && ["iphone", "ipad", "applewatch"].includes(category) && formData.grade === "Lacrado"
+  const showBatteryField = !isManual && !isSealedElectronic
+  const productName = useMemo(() => {
+    if (isManual) return formData.manual_name.trim()
+    const parts = [selectedModel?.name, formData.storage, formData.color].filter(Boolean)
+    return parts.join(" ").trim()
+  }, [isManual, formData.manual_name, formData.storage, formData.color, selectedModel?.name])
 
-  const priceTable = useMemo(() => {
-    const cost = parseFloat(formData.purchase_price)
-    const margin = parseFloat(formData.margin)
-    if (!cost || !margin) return []
-    return buildPriceTable(cost, margin, {})
-  }, [formData.purchase_price, formData.margin])
+  const suggestedPrice = useMemo(() => {
+    const manual = Number(formData.suggested_price || 0)
+    if (manual > 0) return manual
+    const cost = Number(formData.purchase_price || 0)
+    const margin = Number(formData.margin || 0)
+    return cost > 0 ? Math.ceil(cost * (1 + margin / 100)) : 0
+  }, [formData.purchase_price, formData.suggested_price, formData.margin])
+
+  const requiresChecklist = useMemo(() => {
+    return mode === "catalog" && formData.type === "own" && ["iphone", "ipad"].includes(category) && formData.grade !== "Lacrado"
+  }, [mode, category, formData.grade, formData.type])
 
   const checklistProgress = useMemo(() => {
-    const completed = checklistItems.filter((i) => i.status === "ok" || i.status === "fail").length
-    const total = checklistItems.length
-    return total > 0 ? Math.round((completed / total) * 100) : 0
-  }, [checklistItems])
-
-  const updateField = useCallback((field: string, value: string) => {
-    setFormData((prev) => ({ ...prev, [field]: value }))
-  }, [])
-
-  const commitSuggestedPrice = useCallback(() => {
-    const currentSuggested = priceTable[0]?.price || 0
-    const parsedPrice = parseFloat(suggestedPriceInput)
-    const cost = parseFloat(formData.purchase_price) || 0
-
-    if (!cost || !parsedPrice || parsedPrice <= 0) {
-      setSuggestedPriceInput(currentSuggested > 0 ? currentSuggested.toString() : "")
-      setIsEditingSuggestedPrice(false)
-      return
-    }
-
-    const marginValue = Math.max(0, Math.min(100, (1 - cost / parsedPrice) * 100))
-    updateField("margin", marginValue.toFixed(2))
-    setSuggestedPriceInput(parsedPrice.toString())
-    setIsEditingSuggestedPrice(false)
-  }, [suggestedPriceInput, formData.purchase_price, priceTable, updateField])
-
-  const handleSuggestedPriceKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
-      e.preventDefault()
-      commitSuggestedPrice()
-    }
-  }, [commitSuggestedPrice])
-
-  useEffect(() => {
-    if (isEditingSuggestedPrice) return
-    const currentSuggested = priceTable[0]?.price || 0
-    setSuggestedPriceInput(currentSuggested > 0 ? currentSuggested.toString() : "")
-  }, [priceTable, isEditingSuggestedPrice])
-
-  const handleSelectColor = useCallback((name: string, hex: string) => {
-    updateField("color", name)
-    updateField("colorHex", hex)
-  }, [updateField])
-
-  const handleSelectStorage = useCallback((s: string) => {
-    updateField("storage", s)
-  }, [updateField])
-
-  const handleSelectGrade = useCallback((g: string) => {
-    updateField("grade", g)
-  }, [updateField])
-
-  const handleCategoryChange = (cat: string) => {
-    setCategory(cat)
-    setModelIdx(0)
-    updateField("storage", "")
-    updateField("color", "")
-    updateField("colorHex", "")
-  }
-
-  const handleModelChange = (idx: string) => {
-    setModelIdx(parseInt(idx))
-    updateField("storage", "")
-    updateField("color", "")
-    updateField("colorHex", "")
-  }
-
-  const loadChecklist = () => {
-    const template = CHECKLIST_TEMPLATES[category] || []
-    setChecklistItems(template.map((t) => ({ ...t, note: t.note || "" })))
-  }
-
-  const updateChecklistItem = (idx: number, status: string, note?: string) => {
-    setChecklistItems((prev) => {
-      const updated = [...prev]
-      updated[idx] = { ...updated[idx], status, note: note ?? updated[idx].note }
-      return updated
-    })
-  }
-
-// Auto-set storage for accessories (uses selectedModel name as storage)
-  useEffect(() => {
-    if (category === "accessories" && selectedModel) {
-      if (!formData.storage || formData.storage !== selectedModel.name) {
-        setFormData((prev) => ({ ...prev, storage: selectedModel.name, color: "Padrão", grade: "Lacrado" }))
-      }
-    }
-  }, [category, selectedModel?.name])
+    if (!requiresChecklist) return 100
+    const completed = checklistItems.filter((item) => item.status === "ok" || item.status === "fail").length
+    return checklistItems.length ? Math.round((completed / checklistItems.length) * 100) : 0
+  }, [checklistItems, requiresChecklist])
 
   const canProceed = useMemo(() => {
-    switch (step) {
-      case 1:
-        if (category === "accessories") {
-          return !!selectedModel
-        }
-        return selectedModel && formData.storage && formData.color && formData.grade && formData.serial_number
-      case 2:
-        return formData.purchase_price && formData.purchase_date && formData.quantity && parseInt(formData.quantity) >= 1
-      case 3:
-        return true
-      case 4:
-        if (category === "accessories") return true
-        return checklistProgress >= 80
-      case 5:
-        return true
-      default:
-        return true
+    if (step === 1) {
+      if (isManual) return formData.manual_name.trim().length > 0 && category
+      return Boolean(category && selectedModel && (formData.storage || !(selectedModel.storage || selectedModel.sizes)) && (formData.color || !selectedModel.colors))
     }
-  }, [step, category, selectedModel, formData, checklistProgress])
-
-  const prevStep = () => setStep((s) => Math.max(1, s - 1) as Step)
-  const nextStep = () => {
-    if (step === 3 && checklistItems.length === 0) {
-      loadChecklist()
+    if (step === 2) {
+      const hasValues = Number(formData.purchase_price || 0) > 0 && Boolean(formData.purchase_date) && Number(formData.quantity || 0) > 0
+      return hasValues && (!requiresChecklist || checklistProgress >= 80)
     }
-    setStep((s) => Math.min(5, s + 1) as Step)
-  }
+    return true
+  }, [step, isManual, formData, category, selectedModel, requiresChecklist, checklistProgress])
 
-  // Load suppliers from database
   useEffect(() => {
     async function fetchSuppliers() {
-      setLoadingSuppliers(true)
-      const { data, error } = await (supabase
-        .from("suppliers") as any)
-        .select("id, name, city")
-        .order("name", { ascending: true })
-      
-      if (!error && data) {
-        setSuppliers((data as any[]).map((s: any) => ({
-          label: `${s.name}${s.city ? ` — ${s.city}` : ""}`,
-          value: s.id
-        })))
-      }
-      setLoadingSuppliers(false)
+      const { data } = await (supabase.from("suppliers") as any).select("id, name, city").order("name", { ascending: true })
+      setSuppliers((data || []).map((supplier: any) => ({
+        label: `${supplier.name}${supplier.city ? ` - ${supplier.city}` : ""}`,
+        value: supplier.id,
+      })))
     }
     fetchSuppliers()
   }, [])
 
+  useEffect(() => {
+    if (!requiresChecklist) {
+      setChecklistItems([])
+      return
+    }
+    const template = CHECKLIST_TEMPLATES[category as keyof typeof CHECKLIST_TEMPLATES] || []
+    setChecklistItems(template.map((item: any) => ({ ...item, status: item.status || "", note: item.note || "" })))
+  }, [requiresChecklist, category])
+
+  useEffect(() => {
+    if (!isManual || formData.manual_name) return
+    setFormData((prev) => ({ ...prev, manual_name: ACCESSORY_SUGGESTIONS[0], grade: "Lacrado" }))
+  }, [isManual, formData.manual_name])
+
+  const updateField = (field: string, value: string) => {
+    setFormData((prev) => ({ ...prev, [field]: value }))
+  }
+
+  const updatePurchasePrice = (value: string) => {
+    setFormData((prev) => {
+      const cost = Number(value || 0)
+      const margin = Number(prev.margin || 0)
+      return {
+        ...prev,
+        purchase_price: value,
+        suggested_price: cost > 0 ? Math.ceil(cost * (1 + margin / 100)).toString() : "",
+      }
+    })
+  }
+
+  const updateMargin = (value: string) => {
+    setFormData((prev) => {
+      const cost = Number(prev.purchase_price || 0)
+      const margin = Number(value || 0)
+      return {
+        ...prev,
+        margin: value,
+        suggested_price: cost > 0 ? Math.ceil(cost * (1 + margin / 100)).toString() : prev.suggested_price,
+      }
+    })
+  }
+
+  const updateSuggestedPrice = (value: string) => {
+    setFormData((prev) => {
+      const cost = Number(prev.purchase_price || 0)
+      const price = Number(value || 0)
+      return {
+        ...prev,
+        suggested_price: value,
+        margin: cost > 0 && price > 0 ? Math.max(0, ((price / cost) - 1) * 100).toFixed(2) : prev.margin,
+      }
+    })
+  }
+
+  const handleCategoryChange = (value: string) => {
+    setCategory(value)
+    setModelIdx(0)
+    setFormData((prev) => ({ ...prev, storage: "", color: "", colorHex: "" }))
+  }
+
+  const updateChecklistItem = (idx: number, status: string, note?: string) => {
+    setChecklistItems((prev) => {
+      const next = [...prev]
+      next[idx] = { ...next[idx], status, note: note ?? next[idx].note }
+      return next
+    })
+  }
+
+  const findOrCreateCatalog = async () => {
+    if (isManual) return null
+    const storage = formData.storage || null
+    const color = formData.color || null
+    const { data: existing } = await (supabase.from("product_catalog") as any)
+      .select("id")
+      .eq("category", category)
+      .eq("model", selectedModel.name)
+      .eq("storage", storage)
+      .eq("color", color)
+      .limit(1)
+
+    if (existing?.[0]?.id) return existing[0].id
+
+    const { data: created, error } = await (supabase.from("product_catalog") as any)
+      .insert({
+        category,
+        brand: ["iphone", "ipad", "applewatch", "airpods", "macbook"].includes(category) ? "Apple" : category,
+        model: selectedModel.name,
+        variant: storage,
+        storage,
+        color,
+        color_hex: formData.colorHex || null,
+      } as any)
+      .select("id")
+      .single()
+
+    if (error) throw error
+    return created?.id || null
+  }
+
   const handleSubmit = async () => {
     setIsSubmitting(true)
-
-    const suggestedPrice = priceTable.length > 0 ? priceTable[0].price : 0
-
     try {
-      // 1. Get auth session
       const { data: { session } } = await supabase.auth.getSession()
-      if (!session?.user) {
-        throw new Error("Sessão expirada. Por favor, saia e entre novamente no sistema.")
-      }
+      if (!session?.user) throw new Error("Sessão expirada. Por favor, saia e entre novamente no sistema.")
 
-      // 2. Get company ID (relying on RLS)
-      const { data: company, error: companyError } = await (supabase
-        .from("companies") as any)
-        .select("id")
-        .single()
+      const { data: company, error: companyError } = await (supabase.from("companies") as any).select("id").limit(1).single()
+      if (companyError || !company?.id) throw new Error("Não foi possível identificar sua empresa.")
 
-      if (companyError || !company?.id) {
-        console.error("Company fetch error:", companyError)
-        throw new Error("Não foi possível identificar sua empresa. Verifique suas permissões.")
-      }
-
-      // 3. Ensure user record exists
-      const { error: userError } = await (supabase.from("users") as any).upsert({
+      await (supabase.from("users") as any).upsert({
         id: session.user.id,
         company_id: company.id,
         role: "owner",
         full_name: session.user.email,
-      } as any, {
-        onConflict: "id",
+      } as any, { onConflict: "id" })
+
+      const catalogId = await findOrCreateCatalog()
+      let checklistId = null
+      if (requiresChecklist) {
+        const { data: checklist, error } = await (supabase.from("checklists") as any)
+          .insert({ company_id: company.id, device_type: category, items: checklistItems } as any)
+          .select("id")
+          .single()
+        if (error) throw error
+        checklistId = checklist?.id || null
+      }
+
+      const manualName = isManual ? productName : ""
+      const selectedSupplier = suppliers.find((supplier) => supplier.value === formData.supplier_id)
+      const supplierName = formData.supplier_name || selectedSupplier?.label || null
+      const notes = manualName || formData.condition_notes || null
+      const lifecycleStatus = getComputedInventoryStatus({
+        status: "active",
+        purchase_price: Number(formData.purchase_price || 0),
+        purchase_date: formData.purchase_date,
+        grade: formData.grade || null,
+        imei: formData.imei || null,
+        serial_number: formData.serial_number || null,
+        catalog_id: catalogId,
+        notes,
+        condition_notes: formData.condition_notes || notes,
       })
 
-      if (userError) {
-        console.error("User upsert error:", userError)
-        throw new Error("Erro ao sincronizar perfil de usuário.")
-      }
-
-      // 4. Insert checklist
-      const { data: checklist, error: checklistError } = await (supabase.from("checklists") as any).insert({
-        company_id: company.id,
-        device_type: category,
-        items: checklistItems,
-      } as any).select().single()
-
-      if (checklistError) throw checklistError
-
-      // Find or create product catalog entry
-      const isAccessory = category === "accessories"
-      let catalogId = null
-      if (!isAccessory) {
-        const { data: catalogEntries } = await (supabase
-          .from("product_catalog") as any)
-          .select("id")
-          .eq("category", category)
-          .eq("model", selectedModel.name)
-          .eq("storage", formData.storage)
-          .eq("color", formData.color)
-
-        if (catalogEntries && catalogEntries.length > 0) {
-          catalogId = catalogEntries[0].id
-        } else {
-          const { data: newCatalog } = await (supabase.from("product_catalog") as any).insert({
-            category,
-            brand: "Apple",
-            model: selectedModel.name,
-            variant: formData.storage,
-            storage: formData.storage,
-            color: formData.color,
-            color_hex: formData.colorHex,
-          } as any).select("id").single()
-
-          catalogId = (newCatalog as any)?.id
-        }
-      }
-
-      // Accessory name stored in notes (accessible by getProductName)
-      const accessoryName = isAccessory ? `Acessório: ${selectedModel.name}` : null
-
-      // Insert inventory
-      const selectedSupplier = suppliers.find((s: any) => s.value === formData.supplier_id)
-      const resolvedSupplierName = formData.supplier_name || selectedSupplier?.label || null
-
-      const { error: inventoryError } = await (supabase.from("inventory") as any).insert({
+      const { error } = await (supabase.from("inventory") as any).insert({
         company_id: company.id,
         catalog_id: catalogId,
-        imei: isAccessory ? null : (formData.imei || null),
-        serial_number: isAccessory ? null : (formData.serial_number || null),
-        imei2: isAccessory ? null : (formData.imei2 || null),
-        grade: isAccessory ? "Lacrado" : formData.grade,
-        condition_notes: accessoryName || formData.condition_notes || null,
-        purchase_price: parseFloat(formData.purchase_price),
+        imei: formData.imei || null,
+        imei2: formData.imei2 || null,
+        serial_number: formData.serial_number || null,
+        grade: formData.grade || (isManual ? "Lacrado" : null),
+        condition_notes: formData.condition_notes || manualName || null,
+        purchase_price: Number(formData.purchase_price),
         purchase_date: formData.purchase_date,
         supplier_id: formData.type === "supplier" && formData.supplier_id ? formData.supplier_id : null,
-        type: formData.type || "own",
-        supplier_name: formData.type === "supplier" ? resolvedSupplierName : null,
-        suggested_price: suggestedPrice,
-        photos: null,
+        type: formData.type,
+        supplier_name: formData.type === "supplier" ? supplierName : null,
+        origin: "purchase",
+        suggested_price: suggestedPrice || null,
         ios_version: formData.ios_version || null,
-        battery_health: formData.battery_health ? parseInt(formData.battery_health) : null,
-        notes: accessoryName || formData.condition_notes || null,
-        checklist_id: (checklist as any)?.id,
-        status: "active",
+        battery_health: isSealedElectronic ? 100 : formData.battery_health ? Number(formData.battery_health) : null,
+        notes,
+        checklist_id: checklistId,
+        quantity: formData.type === "own" ? Math.max(1, Number(formData.quantity || 1)) : 1,
+        status: mapLifecycleToLegacyCompatibleStatus(lifecycleStatus),
       } as any)
 
-      if (inventoryError) throw inventoryError
+      if (error) throw error
 
-      toast({
-        title: isAccessory ? "Acessório cadastrado!" : "Aparelho cadastrado!",
-        description: "O produto foi salvo no estoque com sucesso.",
-        type: "success",
-      })
+      toast({ title: "Produto cadastrado!", description: `${productName || "Produto"} foi salvo no estoque.`, type: "success" })
       router.push("/estoque")
     } catch (error) {
-      // Extract real Supabase error message
-      const msg = error && typeof error === "object" && "message" in error
-        ? (error as any).message
-        : error && typeof error === "object" && "msg" in error
-        ? (error as any).msg
-        : error instanceof Error ? error.message : JSON.stringify(error)
-
-      toast({
-        title: "Erro ao cadastrar",
-        description: msg,
-        type: "error",
-      })
+      const message = error instanceof Error ? error.message : "Erro inesperado"
+      toast({ title: "Erro ao cadastrar", description: message, type: "error" })
     } finally {
       setIsSubmitting(false)
     }
   }
 
-  const productName = selectedModel
-    ? `${selectedModel.name}${formData.storage ? " " + formData.storage : ""}`
-    : ""
-
-  const stepLabels = ["Produto", "Compra", "Fotos", "Checklist", "Revisão"]
+  const steps = [
+    { num: 1, label: "Produto" },
+    { num: 2, label: "Valores" },
+    { num: 3, label: "Revisão" },
+  ]
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Stepper */}
-      <div className="bg-card rounded-2xl border border-gray-100 p-4 shadow-sm">
-        <div className="flex items-center gap-1 sm:gap-2 overflow-x-auto">
-          {[1, 2, 3, 4, 5].map((s) => (
-            <div key={s} className="flex items-center gap-1 flex-1 min-w-0">
-              <div
-                className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 transition-colors ${
-                  s < step
-                    ? "bg-success-500 text-white"
-                    : s === step
-                    ? "bg-royal-500 text-white"
-                    : "bg-gray-100 text-gray-400"
-                }`}
-              >
-                {s < step ? <Check className="w-3.5 h-3.5" /> : s}
-              </div>
-              <span
-                className={`text-xs font-medium whitespace-nowrap hidden sm:inline ${
-                  s <= step ? "text-navy-900" : "text-gray-400"
-                }`}
-              >
-                {stepLabels[s - 1]}
-              </span>
-              {s < 5 && (
-                <div
-                  className={`flex-1 h-0.5 rounded min-w-[8px] ${
-                    s < step ? "bg-success-500" : "bg-gray-100"
-                  }`}
-                />
-              )}
-            </div>
-          ))}
-        </div>
-        <div className="mt-2 text-center md:hidden">
-          <span className="text-sm font-medium text-navy-900">
-            Passo {step}: {stepLabels[step - 1]}
-          </span>
+    <div className="space-y-5 animate-fade-in">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="icon" onClick={() => router.back()}>
+            <ArrowLeft className="w-5 h-5" />
+          </Button>
+          <div>
+            <h2 className="text-xl font-display font-bold text-navy-900 font-syne">Novo produto</h2>
+            <p className="text-sm text-gray-500">Cadastro rápido para aparelhos, acessórios e itens manuais</p>
+          </div>
         </div>
       </div>
 
-      {/* ── Step 1: Device Info ──────────────────────────────── */}
+      <div className="bg-card rounded-2xl border border-gray-100 p-4 shadow-sm">
+        <div className="flex items-center gap-2">
+          {steps.map((item, index) => (
+            <div key={item.num} className="flex items-center gap-2 flex-1">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${item.num < step ? "bg-success-500 text-white" : item.num === step ? "bg-royal-500 text-white" : "bg-gray-100 text-gray-400"}`}>
+                {item.num < step ? <Check className="w-4 h-4" /> : item.num}
+              </div>
+              <span className={`text-xs font-medium hidden sm:inline ${item.num <= step ? "text-navy-900" : "text-gray-400"}`}>{item.label}</span>
+              {index < steps.length - 1 && <div className={`h-0.5 flex-1 rounded ${item.num < step ? "bg-success-500" : "bg-gray-100"}`} />}
+            </div>
+          ))}
+        </div>
+      </div>
+
       {step === 1 && (
         <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm space-y-5">
-          <h3 className="font-display font-bold text-navy-900 font-syne">Dados do Aparelho</h3>
+          <h3 className="font-display font-bold text-navy-900 font-syne">Tipo e identificação</h3>
 
-          {/* Category selector */}
-          <div>
-            <label className="block text-sm font-medium text-navy-900 mb-2">Categoria</label>
-            <div className="flex gap-2 overflow-x-auto pb-1">
-              {CATEGORIES.map((c) => {
-                const Icon = categoryIcons[c.value]
-                return (
-                  <button
-                    key={c.value}
-                    onClick={() => handleCategoryChange(c.value)}
-                    className={`shrink-0 flex flex-col items-center gap-1 px-4 py-3 rounded-xl border transition-colors min-w-[80px] ${
-                      category === c.value
-                        ? "bg-navy-900 text-white border-navy-900"
-                        : "bg-white text-gray-600 border-gray-200 hover:border-royal-500"
-                    }`}
-                  >
-                    <Icon className="w-5 h-5" />
-                    <span className="text-xs font-medium">{c.label}</span>
-                  </button>
-                )
-              })}
-            </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button onClick={() => setMode("catalog")} className={`rounded-xl border p-4 text-left transition-all ${mode === "catalog" ? "border-royal-500 bg-royal-100/30" : "border-gray-100 hover:border-gray-200"}`}>
+              <p className="font-semibold text-navy-900">Produto do catálogo</p>
+              <p className="text-xs text-gray-500 mt-1">iPhone, iPad, Apple Watch, AirPods, MacBook ou Garmin.</p>
+            </button>
+            <button onClick={() => setMode("manual")} className={`rounded-xl border p-4 text-left transition-all ${mode === "manual" ? "border-royal-500 bg-royal-100/30" : "border-gray-100 hover:border-gray-200"}`}>
+              <p className="font-semibold text-navy-900">Acessório / outros</p>
+              <p className="text-xs text-gray-500 mt-1">Capas, películas, Apple Pencil, cabos, fontes e itens fora do catálogo.</p>
+            </button>
           </div>
 
-          {/* Model selector */}
-          {category && (
-            <>
-              <Select
-                label="Modelo"
-                placeholder="Selecione o modelo"
-                value={modelIdx.toString()}
-                onChange={(e) => handleModelChange(e.target.value)}
-                options={models.map((m, i) => ({ label: m.name, value: i.toString() }))}
-              />
+          <Select label="Categoria" value={category} onChange={(e) => handleCategoryChange(e.target.value)} options={categoryOptions} />
 
-              {/* Color swatches */}
-              {selectedModel && (
-                <>
-                  <div>
-                    <label className="block text-sm font-medium text-navy-900 mb-2">Cor</label>
-                    <div className="flex flex-wrap gap-2">
-                      {(selectedModel as any).colors?.map((c: { name: string; hex: string }) => (
-                        <button
-                          key={c.name}
-                          onClick={() => handleSelectColor(c.name, c.hex)}
-                          className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-medium transition-all ${
-                            formData.color === c.name
-                              ? "border-royal-500 ring-2 ring-royal-500/20"
-                              : "border-gray-200 hover:border-gray-300"
-                          }`}
-                        >
-                          <span
-                            className="w-5 h-5 rounded-full border border-gray-300"
-                            style={{ backgroundColor: c.hex }}
-                          />
-                          {c.name}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Storage chips */}
-                  {(selectedModel as any).storage && (
-                    <div>
-                      <label className="block text-sm font-medium text-navy-900 mb-2">Armazenamento</label>
-                      <div className="flex flex-wrap gap-2">
-                        {(selectedModel as any).storage.map((s: string) => (
-                          <button
-                            key={s}
-                            onClick={() => handleSelectStorage(s)}
-                            className={`px-4 py-2 rounded-xl border text-sm font-medium transition-all ${
-                              formData.storage === s
-                                ? "bg-navy-900 text-white border-navy-900"
-                                : "bg-white text-gray-600 border-gray-200 hover:border-gray-300"
-                            }`}
-                          >
-                            {s}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Size chips for watches */}
-                  {(selectedModel as any).sizes && (
-                    <div>
-                      <label className="block text-sm font-medium text-navy-900 mb-2">Tamanho</label>
-                      <div className="flex flex-wrap gap-2">
-                        {(selectedModel as any).sizes.map((s: string) => (
-                          <button
-                            key={s}
-                            onClick={() => handleSelectStorage(s)}
-                            className={`px-4 py-2 rounded-xl border text-sm font-medium transition-all ${
-                              formData.storage === s
-                                ? "bg-navy-900 text-white border-navy-900"
-                                : "bg-white text-gray-600 border-gray-200 hover:border-gray-300"
-                            }`}
-                          >
-                            {s}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
+          {isManual ? (
+            <div className="space-y-3">
+              <Input label="Nome do produto" placeholder="Ex: Capa para iPad 10ª geração" value={formData.manual_name} onChange={(e) => updateField("manual_name", e.target.value)} />
+              <div className="flex flex-wrap gap-2">
+                {ACCESSORY_SUGGESTIONS.map((suggestion) => (
+                  <button key={suggestion} onClick={() => updateField("manual_name", suggestion)} className="px-3 py-1.5 rounded-full border border-gray-200 text-xs text-gray-600 hover:border-royal-500">
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <Select label="Modelo" value={modelIdx.toString()} onChange={(e) => setModelIdx(Number(e.target.value))} options={models.map((model: any, index) => ({ label: model.name, value: index.toString() }))} />
+              {(selectedModel?.storage || selectedModel?.sizes) && (
+                <Select label="Armazenamento / tamanho" value={formData.storage} onChange={(e) => updateField("storage", e.target.value)} placeholder="Selecione" options={(selectedModel.storage || selectedModel.sizes).map((value: string) => ({ label: value, value }))} />
               )}
-            </>
+              {selectedModel?.colors && (
+                <div>
+                  <label className="block text-sm font-medium text-navy-900 mb-2">Cor</label>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedModel.colors.map((color: { name: string; hex: string }) => (
+                      <button key={color.name} onClick={() => setFormData((prev) => ({ ...prev, color: color.name, colorHex: color.hex }))} className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-medium ${formData.color === color.name ? "border-royal-500 ring-2 ring-royal-500/20" : "border-gray-200 hover:border-gray-300"}`}>
+                        <span className="w-5 h-5 rounded-full border border-gray-300" style={{ backgroundColor: color.hex }} />
+                        {color.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
 
-          {/* Grade — não aplicável para acessórios */}
-          {category !== "accessories" && (
           <div>
-            <label className="block text-sm font-medium text-navy-900 mb-2">Grade (ABEC)</label>
-            <div className="flex gap-2">
-              {GRADES.map((g) => (
-                <button
-                  key={g.value}
-                  onClick={() => handleSelectGrade(g.value)}
-                  className={`flex-1 py-3 rounded-xl border text-sm font-bold transition-all ${
-                    formData.grade === g.value
-                      ? g.color + " border-current"
-                      : "bg-white text-gray-400 border-gray-200"
-                  }`}
-                >
-                  {g.value}
+            <label className="block text-sm font-medium text-navy-900 mb-2">Condição</label>
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {GRADES.map((grade) => (
+                <button key={grade.value} onClick={() => updateField("grade", grade.value)} className={`shrink-0 px-4 py-2 rounded-xl border text-sm font-bold ${formData.grade === grade.value ? `${grade.color} border-current` : "bg-white text-gray-500 border-gray-200"}`}>
+                  {grade.label}
                 </button>
               ))}
             </div>
           </div>
-          )}
 
-          {category !== "accessories" && (
-            <>
-              {/* IMEI, Serial, iOS, Battery */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <Input
-                  label="IMEI 1"
-                  placeholder="IMEI (opcional)"
-                  value={formData.imei}
-                  onChange={(e) => updateField("imei", e.target.value.replace(/\D/g, "").slice(0, 15))}
-                />
-                <Input
-                  label="IMEI 2 (Dual SIM)"
-                  placeholder="Opcional"
-                  value={formData.imei2}
-                  onChange={(e) => updateField("imei2", e.target.value.replace(/\D/g, "").slice(0, 15))}
-                />
-                <Input
-                  label="Nº de Série"
-                  placeholder="Serial Number"
-                  value={formData.serial_number}
-                  onChange={(e) => updateField("serial_number", e.target.value)}
-                />
-                <Input
-                  label="Versão do Software"
-                  placeholder="Ex: 18.3, watchOS 10"
-                  value={formData.ios_version}
-                  onChange={(e) => updateField("ios_version", e.target.value)}
-                />
-                <Input
-                  label="Saúde da Bateria (%)"
-                  placeholder="Ex: 94"
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={formData.battery_health}
-                  onChange={(e) => updateField("battery_health", e.target.value)}
-                />
-              </div>
-            </>
+          {!isManual && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Input label="IMEI 1" placeholder="Opcional para lacrado" value={formData.imei} onChange={(e) => updateField("imei", e.target.value.replace(/\D/g, "").slice(0, 15))} />
+              <Input label="IMEI 2" placeholder="Opcional" value={formData.imei2} onChange={(e) => updateField("imei2", e.target.value.replace(/\D/g, "").slice(0, 15))} />
+              <Input label="Número de série" placeholder="Serial Number" value={formData.serial_number} onChange={(e) => updateField("serial_number", e.target.value)} />
+              <Input label="Software" placeholder="Ex: iOS 18.3" value={formData.ios_version} onChange={(e) => updateField("ios_version", e.target.value)} />
+            </div>
           )}
-
-          <Textarea
-            label="Observações de Condição"
-            placeholder="Descreva o estado físico, riscos, marcas de uso..."
-            value={formData.condition_notes}
-            onChange={(e) => updateField("condition_notes", e.target.value)}
-          />
         </div>
       )}
 
-      {/* ── Step 2: Purchase ───────────────────────────────────── */}
       {step === 2 && (
         <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm space-y-5">
-          <h3 className="font-display font-bold text-navy-900 font-syne">Dados da Compra</h3>
-
+          <h3 className="font-display font-bold text-navy-900 font-syne">Valores, condição e estoque</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Select
-              label="Origem do produto"
-              options={[
-                { label: "Estoque próprio", value: "own" },
-                { label: "Fornecedor", value: "supplier" },
-              ]}
-              value={formData.type}
-              onChange={(e) => updateField("type", e.target.value)}
-            />
-            <Input
-              label="Data da Compra"
-              type="date"
-              value={formData.purchase_date}
-              onChange={(e) => updateField("purchase_date", e.target.value)}
-            />
+            <Select label="Origem" value={formData.type} onChange={(e) => updateField("type", e.target.value)} options={[{ label: "Estoque próprio", value: "own" }, { label: "Fornecedor", value: "supplier" }]} />
+            {formData.type === "supplier" ? (
+              <Input label="Nome do fornecedor" value={formData.supplier_name} onChange={(e) => updateField("supplier_name", e.target.value)} />
+            ) : (
+              <Input label="Quantidade" type="number" min="1" value={formData.quantity} onChange={(e) => updateField("quantity", Math.max(1, Number(e.target.value || 1)).toString())} />
+            )}
+            <Input label="Preço de custo (R$)" type="number" min="0" value={formData.purchase_price} onChange={(e) => updatePurchasePrice(e.target.value)} />
+            <Input label="Preço sugerido (R$)" type="number" min="0" placeholder={suggestedPrice ? suggestedPrice.toString() : "Opcional"} value={formData.suggested_price} onChange={(e) => updateSuggestedPrice(e.target.value)} />
+            <Input label="Margem padrão (%)" type="number" min="0" value={formData.margin} onChange={(e) => updateMargin(e.target.value)} />
+            <Input label="Data da compra" type="date" value={formData.purchase_date} onChange={(e) => updateField("purchase_date", e.target.value)} />
+            {showBatteryField && <Input label="Saúde da bateria (%)" type="number" min="0" max="100" value={formData.battery_health} onChange={(e) => updateField("battery_health", e.target.value)} />}
           </div>
 
-          {formData.type === "supplier" && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Select
-                label="Fornecedor"
-                placeholder={loadingSuppliers ? "Carregando..." : "Selecione"}
-                options={suppliers}
-                value={formData.supplier_id}
-                onChange={(e) => updateField("supplier_id", e.target.value)}
-              />
-              <Input
-                label="Nome do fornecedor"
-                placeholder="Opcional"
-                value={formData.supplier_name}
-                onChange={(e) => updateField("supplier_name", e.target.value)}
-              />
+          <Textarea label="Observações" placeholder="Estado físico, riscos, marcas de uso, detalhes do item..." value={formData.condition_notes} onChange={(e) => updateField("condition_notes", e.target.value)} />
+
+          {suggestedPrice > 0 && (
+            <div className="rounded-xl bg-surface p-3 flex items-center justify-between">
+              <span className="text-sm text-gray-500">Preço sugerido calculado</span>
+              <span className="text-lg font-bold text-navy-900">{formatBRL(suggestedPrice)}</span>
             </div>
           )}
 
-          {formData.type === "own" && (
-            <div>
-              <label className="block text-sm font-medium text-navy-900 mb-1.5">Quantidade em Estoque</label>
-              <Input
-                type="number"
-                min="1"
-                max="999"
-                placeholder="1"
-                value={formData.quantity}
-                onChange={(e) => {
-                  const val = Math.min(999, Math.max(1, parseInt(e.target.value) || 1)).toString()
-                  updateField("quantity", val)
-                }}
-              />
-            </div>
-          )}
-
-          {formData.type === "supplier" && (
-            <p className="text-xs text-gray-500">Produto virtual de fornecedor (não compõe estoque próprio).</p>
-          )}
-
-          <div>
-            <label className="block text-sm font-medium text-navy-900 mb-1.5">Preço de Custo (R$)</label>
-            <Input
-              type="number"
-              placeholder="0,00"
-              value={formData.purchase_price}
-              onChange={(e) => updateField("purchase_price", e.target.value)}
-            />
-          </div>
-
-          {/* Margin slider */}
-          {formData.purchase_price && (
-            <div className="bg-surface rounded-xl p-4 space-y-3">
+          {requiresChecklist && (
+            <div className="space-y-3 rounded-2xl border border-gray-100 p-4">
               <div className="flex items-center justify-between">
-                <label className="text-sm font-medium text-navy-900">Preço de Venda Sugerido</label>
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-1">
-                    <span className="text-xs text-gray-400">R$</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={suggestedPriceInput}
-                      onFocus={() => setIsEditingSuggestedPrice(true)}
-                      onChange={(e) => {
-                        setIsEditingSuggestedPrice(true)
-                        setSuggestedPriceInput(e.target.value)
-                      }}
-                      onBlur={() => {
-                        if (!isEditingSuggestedPrice) return
-                        commitSuggestedPrice()
-                      }}
-                      onKeyDown={handleSuggestedPriceKeyDown}
-                      className="w-24 h-8 text-center rounded-lg border border-gray-200 text-sm font-semibold px-2"
-                    />
-                  </div>
-                  <Badge variant="blue">Margem: {formData.margin}%</Badge>
+                <div>
+                  <p className="font-semibold text-navy-900">Checklist técnico</p>
+                  <p className="text-xs text-gray-500">Obrigatório para iPhone/iPad seminovo.</p>
                 </div>
+                <Badge variant={checklistProgress >= 80 ? "green" : "yellow"}>{checklistProgress}%</Badge>
               </div>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                step="0.01"
-                value={formData.margin}
-                onChange={(e) => updateField("margin", e.target.value)}
-                className="w-full h-1.5 accent-royal-500"
-              />
-              <div className="flex justify-between text-xs text-gray-400">
-                <span>0%</span>
-                <span>100%</span>
+              <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
+                {checklistItems.map((item, index) => (
+                  <div key={item.id} className="rounded-xl border border-gray-100 p-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <p className="text-sm font-medium text-navy-900">{item.label}</p>
+                      <div className="flex gap-2">
+                        {["ok", "fail", "na"].map((status) => (
+                          <button key={status} onClick={() => updateChecklistItem(index, status)} className={`px-3 py-1 rounded-lg text-xs font-bold border ${item.status === status ? "bg-navy-900 text-white border-navy-900" : "bg-white text-gray-500 border-gray-200"}`}>
+                            {status === "ok" ? "OK" : status === "fail" ? "Falha" : "N/A"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {item.status === "fail" && <Input className="mt-2" placeholder="Observação da falha" value={item.note} onChange={(e) => updateChecklistItem(index, item.status, e.target.value)} />}
+                  </div>
+                ))}
               </div>
-            </div>
-          )}
-
-          {/* Price Table */}
-          {priceTable.length > 0 && (
-            <div className="bg-surface rounded-xl overflow-hidden">
-              <h4 className="text-sm font-semibold text-navy-900 px-4 pt-3 pb-2">Tabela de Preços Sugeridos</h4>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
-                    <th className="px-4 py-2 font-medium">Forma</th>
-                    <th className="px-4 py-2 font-medium text-right">Preço</th>
-                    <th className="px-4 py-2 font-medium text-right">Parcelas</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {priceTable.map((row) => (
-                    <tr
-                      key={row.method}
-                      className="border-b border-gray-50 hover:bg-white/50"
-                    >
-                      <td className="px-4 py-2.5 font-medium text-navy-900">{row.label}</td>
-                      <td className="px-4 py-2.5 text-right font-semibold text-navy-900">
-                        {formatBRL(row.price)}
-                      </td>
-                      <td className="px-4 py-2.5 text-right text-gray-500">
-                        {row.installments > 1
-                          ? `${row.installments}x de ${formatBRL(row.installmentValue)}`
-                          : "À vista"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
             </div>
           )}
         </div>
       )}
 
-      {/* ── Step 3: Photos ───────────────────────────────────── */}
       {step === 3 && (
-        <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm space-y-5">
-          <div className="flex items-center justify-between">
-            <h3 className="font-display font-bold text-navy-900 font-syne">Fotos do Aparelho</h3>
-            <Badge variant="gray">Desativado</Badge>
-          </div>
-
-          <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-8 text-center">
-            <p className="text-sm font-medium text-navy-900">Cadastro de imagens desativado temporariamente.</p>
-            <p className="text-xs text-gray-400 mt-1">As fotos ficarão reservadas para o fluxo de assistência técnica.</p>
-          </div>
-        </div>
-      )}
-
-      {/* ── Step 4: Checklist ──────────────────────────── */}
-      {step === 4 && (
         <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm space-y-4">
-          {category === "accessories" ? (
-            <div className="flex flex-col items-center justify-center py-8 text-center">
-              <Check className="w-12 h-12 text-success-500 mb-3" />
-              <h3 className="font-display font-bold text-navy-900 font-syne">Checklist não necessário</h3>
-              <p className="text-sm text-gray-500 mt-1">Produtos lacrados e acessórios não exigem inspeção.</p>
+          <h3 className="font-display font-bold text-navy-900 font-syne">Revisão</h3>
+          <div className="rounded-2xl bg-surface p-4 flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-royal-100 flex items-center justify-center">
+              <Package className="w-5 h-5 text-royal-500" />
             </div>
-          ) : (
-            <>
-          <div className="flex items-center justify-between">
-            <h3 className="font-display font-bold text-navy-900 font-syne">
-              Checklist — {productName || category}
-            </h3>
-            <Badge
-              variant={checklistProgress >= 80 ? "green" : checklistProgress >= 50 ? "yellow" : "red"}
-            >
-              {checklistProgress}%
-            </Badge>
-          </div>
-
-          {/* Progress bar */}
-          <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-            <div
-              className={`h-full rounded-full transition-all ${
-                checklistProgress >= 80 ? "bg-success-500" : checklistProgress >= 50 ? "bg-warning-500" : "bg-danger-500"
-              }`}
-              style={{ width: `${checklistProgress}%` }}
-            />
-          </div>
-          {checklistProgress < 80 && (
-            <p className="text-xs text-danger-500 font-medium">
-              ⚠️ Complete pelo menos 80% do checklist para prosseguir
-            </p>
-          )}
-
-          {/* Items */}
-          <div className="space-y-2">
-            {checklistItems.map((item, idx) => (
-              <div
-                key={item.id}
-                className={`rounded-xl border p-3 transition-colors ${
-                  item.status === "ok"
-                    ? "bg-success-100/30 border-success-500/20"
-                    : item.status === "fail"
-                    ? "bg-danger-100/30 border-danger-500/20"
-                    : "bg-white border-gray-100"
-                }`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm text-navy-900 flex-1">{item.label}</p>
-                  <div className="flex gap-1 shrink-0">
-                    <button
-                      onClick={() => updateChecklistItem(idx, "ok")}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
-                        item.status === "ok"
-                          ? "bg-success-500 text-white"
-                          : "bg-gray-100 text-gray-500 hover:bg-success-100 hover:text-success-500"
-                      }`}
-                    >
-                      ✓ OK
-                    </button>
-                    <button
-                      onClick={() => updateChecklistItem(idx, "fail")}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
-                        item.status === "fail"
-                          ? "bg-danger-500 text-white"
-                          : "bg-gray-100 text-gray-500 hover:bg-danger-100 hover:text-danger-500"
-                      }`}
-                    >
-                      ✕ Falha
-                    </button>
-                    <button
-                      onClick={() => updateChecklistItem(idx, "na")}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
-                        item.status === "na"
-                          ? "bg-gray-500 text-white"
-                          : "bg-gray-100 text-gray-500 hover:bg-gray-200"
-                      }`}
-                    >
-                      — N/A
-                    </button>
-                  </div>
-                </div>
-                {item.status === "fail" && (
-                  <input
-                    type="text"
-                    placeholder="Descreva o problema..."
-                    className="mt-2 w-full px-3 py-2 text-xs bg-white rounded-lg border border-danger-200 focus:outline-none focus:ring-2 focus:ring-danger-500/20"
-                    value={item.note}
-                    onChange={(e) => updateChecklistItem(idx, "fail", e.target.value)}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
-          </>
-          )}
-        </div>
-      )}
-
-      {/* ── Step 5: Review ─────────────────────────────────── */}
-      {step === 5 && (
-        <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm space-y-5">
-          <h3 className="font-display font-bold text-navy-900 font-syne">Revisão e Confirmação</h3>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="bg-surface rounded-xl p-4">
-              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Produto</h4>
-              <p className="font-semibold text-navy-900">{productName}</p>
-              <p className="text-sm text-gray-500">
-                {[formData.color, formData.storage].filter(Boolean).join(" · ")}
-              </p>
-              <p className="text-xs text-gray-400 mt-1">IMEI: {formData.imei}</p>
-              <Badge className="mt-2">{formData.grade}</Badge>
-            </div>
-            <div className="bg-surface rounded-xl p-4">
-              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Compra</h4>
-              <p className="font-semibold text-navy-900">{formatBRL(parseFloat(formData.purchase_price))}</p>
-              <p className="text-sm text-gray-500">Margem: {formData.margin}%</p>
-              <p className="text-sm text-royal-500 font-semibold">
-                Sugerido: {priceTable.length > 0 ? formatBRL(priceTable[0].price) : "—"}
-              </p>
+            <div className="min-w-0">
+              <p className="font-semibold text-navy-900">{productName || "Produto sem nome"}</p>
+              <p className="text-sm text-gray-500">{CATEGORIES.find((item) => item.value === category)?.label} · {formData.grade}</p>
+              <p className="text-sm text-gray-500">{formData.imei ? `IMEI ${formData.imei}` : formData.serial_number ? `Serial ${formData.serial_number}` : "Sem IMEI/serial"}</p>
             </div>
           </div>
-
-          {/* Checklist summary */}
-          <div className="bg-surface rounded-xl p-4">
-            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Checklist</h4>
-            <p className="text-sm text-navy-900">
-              {checklistItems.filter((i) => i.status === "ok").length} OK ·{" "}
-              {checklistItems.filter((i) => i.status === "fail").length} Falhas ·{" "}
-              {checklistItems.filter((i) => i.status === "na").length} N/A
-            </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="rounded-xl border border-gray-100 p-3">
+              <p className="text-xs text-gray-500">Custo</p>
+              <p className="font-bold text-navy-900">{formatBRL(Number(formData.purchase_price || 0))}</p>
+            </div>
+            <div className="rounded-xl border border-gray-100 p-3">
+              <p className="text-xs text-gray-500">Sugerido</p>
+              <p className="font-bold text-navy-900">{formatBRL(suggestedPrice)}</p>
+            </div>
+            <div className="rounded-xl border border-gray-100 p-3">
+              <p className="text-xs text-gray-500">Checklist</p>
+              <p className="font-bold text-navy-900">{requiresChecklist ? `${checklistProgress}%` : "Não exigido"}</p>
+            </div>
           </div>
         </div>
       )}
 
-      {/* ── Navigation ──────────────────────────── */}
-      <div className="flex items-center justify-between bg-card rounded-2xl border border-gray-100 p-3 shadow-sm">
-        <Button
-          variant="ghost"
-          onClick={step > 1 ? prevStep : () => router.back()}
-        >
-          <ArrowLeft className="w-4 h-4" />
-          {step > 1 ? "Anterior" : "Voltar"}
+      <div className="bg-card rounded-2xl border border-gray-100 p-4 shadow-sm flex items-center justify-between">
+        <Button variant="ghost" disabled={step === 1 || isSubmitting} onClick={() => setStep((prev) => Math.max(1, prev - 1) as Step)}>
+          <ArrowLeft className="w-4 h-4" /> Anterior
         </Button>
-        <span className="text-xs text-gray-400 hidden sm:inline">
-          Passo {step} de 5
-        </span>
-        {step < 5 ? (
-          <Button onClick={nextStep} disabled={!canProceed}>
+        {step < 3 ? (
+          <Button variant="primary" disabled={!canProceed} onClick={() => setStep((prev) => Math.min(3, prev + 1) as Step)}>
             Próximo <ArrowRight className="w-4 h-4" />
           </Button>
         ) : (
-          <Button onClick={handleSubmit} isLoading={isSubmitting}>
-            Salvar Aparelho
+          <Button variant="success" disabled={!canProceed} isLoading={isSubmitting} onClick={handleSubmit}>
+            <Save className="w-4 h-4" /> Salvar produto
           </Button>
         )}
       </div>

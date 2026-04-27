@@ -124,6 +124,8 @@ export default function SaleDetailPage() {
       credit_4x: "Crédito 4x", credit_5x: "Crédito 5x", credit_6x: "Crédito 6x",
       credit_7x: "Crédito 7x", credit_8x: "Crédito 8x", credit_9x: "Crédito 9x",
       credit_10x: "Crédito 10x", credit_11x: "Crédito 11x", credit_12x: "Crédito 12x",
+      credit_13x: "Crédito 13x", credit_14x: "Crédito 14x", credit_15x: "Crédito 15x",
+      credit_16x: "Crédito 16x", credit_17x: "Crédito 17x", credit_18x: "Crédito 18x",
     }
     return map[sale.payment_method] || sale.payment_method
   }

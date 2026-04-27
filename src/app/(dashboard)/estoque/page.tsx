@@ -11,7 +11,7 @@ import { CATEGORIES, GRADES } from "@/lib/constants"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/toaster"
 import { useBadgeCount } from "@/components/layout/sidebar"
-import { Plus, Search, Package, Loader2, Trash2, CameraOff } from "lucide-react"
+import { Plus, Search, Package, Loader2, Trash2, Eye, Pencil } from "lucide-react"
 
 interface InventoryItem {
   id: string
@@ -55,6 +55,11 @@ export default function InventoryPage() {
 
   const pageRef = useRef(1)
   const hasFetchedRef = useRef(false)
+
+  const getManualCategoryLabel = (item: InventoryItem) => {
+    const text = `${item.notes || ""} ${item.condition_notes || ""}`.toLowerCase()
+    return /capa|pel[ií]cula|pencil|caneta|cabo|fonte|carregador|acess[oó]rio/.test(text) ? "Acessório" : "Outros"
+  }
 
   const fetchInventory = useCallback(async (loadMore = false) => {
     const currentPage = loadMore ? pageRef.current + 1 : 1
@@ -205,14 +210,22 @@ export default function InventoryPage() {
 
   const filtered = useMemo(() => {
     return items.filter((item) => {
-      const matchCategory = activeCategory === "all" || item.catalog?.category === activeCategory
+      const cat = item.catalog || item.product_catalog
+      const categoryLabel = CATEGORIES.find((category) => category.value === cat?.category)?.label || cat?.category || getManualCategoryLabel(item)
+      const searchText = [
+        getProductName(item),
+        cat?.model,
+        item.imei,
+        item.serial_number,
+        categoryLabel,
+        cat?.category,
+        item.notes,
+        item.condition_notes,
+      ].filter(Boolean).join(" ").toLowerCase()
+      const matchCategory = activeCategory === "all" || cat?.category === activeCategory
       const matchStatus = activeStatus === "all" || item.status === activeStatus
       const matchGrade = activeGrade === "all" ? true : item.grade === activeGrade
-      const matchSearch = search
-        ? getProductName(item).toLowerCase().includes(search.toLowerCase()) ||
-          (item.imei || "").includes(search) ||
-          false
-        : true
+      const matchSearch = search ? searchText.includes(search.toLowerCase()) : true
       return matchCategory && matchStatus && matchSearch && matchGrade
     })
   }, [items, activeCategory, activeStatus, activeGrade, search])
@@ -316,41 +329,28 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      {/* Loading state using Skeletons */}
+      {/* Loading state */}
       {loading && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-          {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
-            <div key={i} className="bg-card rounded-2xl border border-gray-100 p-3 animate-pulse">
-              <div className="aspect-[4/3] bg-gray-100 rounded-xl mb-3" />
-              <div className="h-4 bg-gray-100 rounded w-3/4 mb-2" />
-              <div className="h-3 bg-gray-100 rounded w-1/2 mb-4" />
-              <div className="flex justify-between mt-auto">
-                <div className="h-8 bg-gray-50 rounded w-20" />
-                <div className="h-8 bg-gray-50 rounded w-20" />
-              </div>
-              {/* Status badge skeleton */}
-              <div className="h-6 bg-gray-50 rounded w-16 mt-2" />
+        <div className="bg-card rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="grid grid-cols-2 lg:grid-cols-9 gap-3 p-4 border-b border-gray-50 animate-pulse">
+              <div className="h-4 bg-gray-100 rounded col-span-2" />
+              <div className="h-4 bg-gray-100 rounded" />
+              <div className="h-4 bg-gray-100 rounded" />
+              <div className="h-4 bg-gray-100 rounded" />
+              <div className="h-4 bg-gray-100 rounded" />
+              <div className="h-4 bg-gray-100 rounded" />
+              <div className="h-4 bg-gray-100 rounded" />
+              <div className="h-4 bg-gray-100 rounded" />
             </div>
           ))}
         </div>
       )}
 
-      {/* Loading more state */}
       {loadingMore && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 mt-3">
-          {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="bg-card rounded-2xl border border-gray-100 p-3 animate-pulse">
-              <div className="aspect-[4/3] bg-gray-100 rounded-xl mb-3" />
-              <div className="h-4 bg-gray-100 rounded w-3/4 mb-2" />
-              <div className="h-3 bg-gray-100 rounded w-1/2 mb-4" />
-              <div className="flex justify-between mt-auto">
-                <div className="h-8 bg-gray-50 rounded w-20" />
-                <div className="h-8 bg-gray-50 rounded w-20" />
-              </div>
-              {/* Status badge skeleton */}
-              <div className="h-6 bg-gray-50 rounded w-16 mt-2" />
-            </div>
-          ))}
+        <div className="bg-card rounded-2xl border border-gray-100 p-4 text-center text-sm text-gray-500">
+          <Loader2 className="w-4 h-4 inline mr-2 animate-spin" />
+          Carregando mais itens...
         </div>
       )}
 
@@ -368,135 +368,83 @@ export default function InventoryPage() {
         </div>
       )}
 
-      {/* Product Cards Grid */}
+      {/* Inventory table */}
       {!loading && filtered.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-          {filtered.map((item: any) => {
-            const computedStatus = getComputedInventoryStatus(item)
-            const status = getInventoryStatusMeta(computedStatus)
-            const gradeInfo = GRADES.find((g) => g.value === item.grade)
-            const days = daysBetween(item.purchase_date)
-            const cat = item.catalog || item.product_catalog
-            const catalogName = getProductName(item)
-            const catalogStorage = cat?.storage || ""
-            const catalogColor = cat?.color || ""
+        <div className="bg-card rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="hidden lg:grid grid-cols-[1.7fr_0.8fr_1.1fr_0.8fr_0.6fr_0.6fr_0.8fr_0.8fr_0.8fr_0.8fr] gap-3 px-4 py-3 bg-gray-50 text-[11px] uppercase tracking-wider font-bold text-gray-500">
+            <span>Produto</span>
+            <span>Categoria</span>
+            <span>IMEI / Serial</span>
+            <span>Condição</span>
+            <span>Bateria</span>
+            <span>Qtd</span>
+            <span>Custo</span>
+            <span>Sugerido</span>
+            <span>Status</span>
+            <span className="text-right">Ações</span>
+          </div>
+          <div className="divide-y divide-gray-100">
+            {filtered.map((item: any) => {
+              const computedStatus = getComputedInventoryStatus(item)
+              const status = getInventoryStatusMeta(computedStatus)
+              const cat = item.catalog || item.product_catalog
+              const categoryLabel = CATEGORIES.find((category) => category.value === cat?.category)?.label || cat?.category || getManualCategoryLabel(item)
+              const product = getProductName(item)
+              const identity = [item.imei ? `IMEI ${item.imei}` : null, item.serial_number ? `Serial ${item.serial_number}` : null].filter(Boolean).join(" · ") || "—"
+              const quantity = item.type === "supplier" ? "—" : Math.max(1, item.quantity || 1)
 
-
-            return (
-              <div
-                key={item.id}
-                className="group bg-card rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-all overflow-hidden animate-fade-in relative"
-              >
-                <Link href={`/estoque/${item.id}`} className="block">
-                <div className="aspect-[4/3] relative bg-gray-50">
-                    <div className="relative w-full h-full flex flex-col items-center justify-center text-gray-300 gap-2">
-                      {item.catalog || item.product_catalog ? (
-                        <CategoryIcon category={(item.catalog || item.product_catalog).category} className="!w-10 !h-10 opacity-20" />
-                      ) : (
-                        <CameraOff className="w-8 h-8 opacity-20" />
-                      )}
-                      <span className="text-[10px] font-medium uppercase tracking-widest opacity-40">Mídia desativada</span>
-                      {computedStatus === "sold" && (
-                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center z-10 transition-colors group-hover:bg-black/20">
-                          <span className="bg-white text-navy-900 px-3 py-1 rounded-lg text-xs font-bold shadow-lg -rotate-12">
-                            VENDIDO
-                          </span>
-                        </div>
-                      )}
-                      {computedStatus === "under_repair" && (
-                        <div className="absolute inset-0 bg-red-900/10 flex items-center justify-center z-10">
-                          <span className="bg-danger-500 text-white px-3 py-1 rounded-lg text-xs font-bold shadow-lg">
-                            EM REPARO
-                          </span>
-                        </div>
-                      )}
-                      {item.grade && (
-                        <span className={`absolute top-2 right-2 px-2 py-0.5 rounded-md text-[10px] font-bold z-10 shadow-sm ${gradeInfo?.color}`}>
-                          {item.grade}
-                        </span>
-                      )}
-                      {days > 30 && computedStatus === "active" && (
-                        <span className="absolute top-2 left-2 bg-danger-500 text-white px-2 py-0.5 rounded-md text-[9px] font-bold z-10 shadow-sm">
-                          {days} dias
-                        </span>
-                      )}
-                      {(() => {
-                        const isAccessory = item.notes?.includes("Acessório:") || item.condition_notes?.includes("Acessório:")
-                        const isIncomplete = !isAccessory && !item.imei && !item.serial_number
-                        return isIncomplete
-                      })() && (
-                        <span className="absolute bottom-2 left-2 bg-amber-50 text-amber-700 px-2 py-0.5 rounded-md text-[10px] font-medium z-10 border border-amber-200">
-                          Cadastro incompleto
-                        </span>
-                      )}
-                    </div>
-                </div>
-
-                {/* Info */}
-                <div className="p-3">
-                  <p className="font-medium text-sm text-navy-900 truncate">{catalogName}</p>
-                  <p className="text-xs text-gray-500 truncate">
-                    {[catalogStorage, catalogColor].filter(Boolean).join(" · ")}
-                  </p>
-                  <p className="text-xs text-gray-500 mt-1">{item.type === "supplier" ? "Fornecedor" : "Em estoque"}</p>
-                  {item.type === "supplier" && item.supplier_name && (
-                    <p className="text-xs text-gray-500">{item.supplier_name}</p>
-                  )}
-                  {item.type !== "supplier" && (
-                    <p className="text-xs text-gray-500 mt-1">Estoque: {Math.max(1, item.quantity || 1)}</p>
-                  )}
-                  {/* Battery / iOS for phones */}
-                  {item.battery_health && (
-                    <p className="text-[11px] text-gray-400 mt-1">
-                      Bateria {item.battery_health}%
-                      {item.ios_version && ` · iOS ${item.ios_version}`}
-                    </p>
-                  )}
-
-                  {/* Price info */}
-                  <div className="mt-2 flex items-center justify-between">
-                    <div>
-                      <p className="text-xs text-gray-500">Custo</p>
-                      <p className="text-sm font-bold text-navy-900">{formatBRL(item.purchase_price)}</p>
-                    </div>
-                    <div className="text-right">
-                      {item.suggested_price && (
-                        <div className={item.status === "sold" ? "mb-1" : ""}>
-                          <p className="text-[10px] text-gray-400 leading-tight">Sugerido</p>
-                          <p className={`font-bold ${item.status === "sold" ? "text-xs text-gray-400" : "text-sm text-royal-500"}`}>
-                            {formatBRL(item.suggested_price)}
-                          </p>
-                        </div>
-                      )}
-                    </div>
+              return (
+                <div key={item.id} className="grid grid-cols-1 lg:grid-cols-[1.7fr_0.8fr_1.1fr_0.8fr_0.6fr_0.6fr_0.8fr_0.8fr_0.8fr_0.8fr] gap-2 lg:gap-3 px-4 py-3 hover:bg-gray-50/60 transition-colors">
+                  <div className="min-w-0">
+                    <Link href={`/estoque/${item.id}`} className="font-semibold text-sm text-navy-900 hover:text-royal-500 truncate block">{product}</Link>
+                    <p className="text-xs text-gray-500 truncate lg:hidden">{categoryLabel} · {identity}</p>
+                    {item.type === "supplier" && <p className="text-xs text-gray-400">Fornecedor{item.supplier_name ? `: ${item.supplier_name}` : ""}</p>}
                   </div>
-
-                  {/* Status */}
-                  <div className="mt-2">
+                  <div className="hidden lg:flex items-center text-sm text-gray-600">{categoryLabel}</div>
+                  <div className="hidden lg:flex items-center text-xs text-gray-500">{identity}</div>
+                  <div className="flex items-center">
+                    <span className="lg:hidden text-xs text-gray-400 mr-2">Condição:</span>
+                    <span className="text-sm font-medium text-navy-900">{item.grade || "—"}</span>
+                  </div>
+                  <div className="flex items-center text-sm text-gray-600">
+                    <span className="lg:hidden text-xs text-gray-400 mr-2">Bateria:</span>
+                    {item.battery_health ? `${item.battery_health}%` : "—"}
+                  </div>
+                  <div className="flex items-center text-sm text-gray-600">
+                    <span className="lg:hidden text-xs text-gray-400 mr-2">Qtd:</span>
+                    {quantity}
+                  </div>
+                  <div className="flex items-center text-sm font-semibold text-navy-900">
+                    <span className="lg:hidden text-xs text-gray-400 mr-2">Custo:</span>
+                    {formatBRL(item.purchase_price)}
+                  </div>
+                  <div className="flex items-center text-sm font-semibold text-royal-500">
+                    <span className="lg:hidden text-xs text-gray-400 mr-2">Sugerido:</span>
+                    {item.suggested_price ? formatBRL(item.suggested_price) : "—"}
+                  </div>
+                  <div className="flex items-center gap-2">
                     <Badge variant={status.badge} dot>{status.label}</Badge>
-                    {isPendingInventoryStatus(computedStatus) && (
-                      <p className="text-[11px] text-amber-700 mt-1">Finalizar cadastro</p>
-                    )}
+                    {isPendingInventoryStatus(computedStatus) && <span className="text-[11px] text-amber-700">Incompleto</span>}
+                  </div>
+                  <div className="flex items-center justify-start lg:justify-end gap-1">
+                    <Link href={`/estoque/${item.id}`}>
+                      <Button variant="ghost" size="icon" title="Ver detalhes">
+                        <Eye className="w-4 h-4" />
+                      </Button>
+                    </Link>
+                    <Link href={`/estoque/${item.id}/editar`}>
+                      <Button variant="ghost" size="icon" title="Editar">
+                        <Pencil className="w-4 h-4" />
+                      </Button>
+                    </Link>
+                    <button onClick={(e) => handleDelete(item.id, e)} disabled={deletingId === item.id} className="h-10 w-10 rounded-xl text-gray-400 hover:bg-danger-500 hover:text-white inline-flex items-center justify-center transition-colors" title="Excluir item">
+                      {deletingId === item.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                    </button>
                   </div>
                 </div>
-                </Link>
-
-                {/* Delete button */}
-                <button
-                  onClick={(e) => handleDelete(item.id, e)}
-                  disabled={deletingId === item.id}
-                  className="absolute bottom-2 right-2 w-7 h-7 rounded-full bg-white/80 hover:bg-danger-500 hover:text-white text-gray-400 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all z-10"
-                  title="Excluir item"
-                >
-                  {deletingId === item.id ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Trash2 className="w-3.5 h-3.5" />
-                  )}
-                </button>
-              </div>
-            )
-          })}
+              )
+            })}
+          </div>
         </div>
         )}
 

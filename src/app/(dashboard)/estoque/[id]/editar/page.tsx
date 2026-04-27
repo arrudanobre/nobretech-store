@@ -30,6 +30,8 @@ export default function EditProductPage() {
   const [saving, setSaving] = useState(false)
   const [catalogName, setCatalogName] = useState("")
   const [isAccessory, setIsAccessory] = useState(false)
+  const [catalogId, setCatalogId] = useState<string | null>(null)
+  const [notes, setNotes] = useState("")
   const [formData, setFormData] = useState({
     imei: "",
     serial_number: "",
@@ -45,6 +47,7 @@ export default function EditProductPage() {
     type: "own",
     supplier_name: "",
   })
+  const isSealed = formData.grade === "Lacrado"
   const fetchProduct = useCallback(async () => {
     if (!productId) return
     try {
@@ -61,11 +64,13 @@ export default function EditProductPage() {
       const item = items[0]
 
       // Detect accessory (no catalog + condition_notes has "Acessório:" prefix)
-      const isAcc = item.catalog_id === null && item.condition_notes?.includes("Acessório:")
+      const isAcc = item.catalog_id === null
       setIsAccessory(isAcc)
+      setCatalogId(item.catalog_id || null)
+      setNotes(item.notes || "")
 
       if (isAcc) {
-        const accName = item.condition_notes?.replace(/^Acessório:\s*/, "") || "Acessório"
+        const accName = item.notes || item.condition_notes?.replace(/^Acessório:\s*/, "") || "Produto manual"
         setCatalogName(accName)
       }
 
@@ -120,8 +125,8 @@ export default function EditProductPage() {
         grade: formData.grade || null,
         imei: formData.imei || null,
         serial_number: formData.serial_number || null,
-        catalog_id: null,
-        notes: formData.condition_notes || null,
+        catalog_id: catalogId,
+        notes: notes || formData.condition_notes || null,
         condition_notes: formData.condition_notes || null,
       })
 
@@ -133,13 +138,12 @@ export default function EditProductPage() {
         purchase_price: parseFloat(formData.purchase_price) || 0,
         suggested_price: formData.suggested_price ? parseFloat(formData.suggested_price) : null,
         purchase_date: formData.purchase_date,
-        battery_health: formData.battery_health ? parseInt(formData.battery_health) : null,
+        battery_health: isSealed && !isAccessory ? 100 : formData.battery_health ? parseInt(formData.battery_health) : null,
         ios_version: formData.ios_version || null,
         condition_notes: formData.condition_notes || null,
         quantity: formData.type === "own" ? Math.max(1, parseInt(formData.quantity) || 1) : 1,
         type: formData.type,
         supplier_name: formData.type === "supplier" ? (formData.supplier_name || null) : null,
-        photos: null,
       }
 
       const { error } = await (supabase.from("inventory") as any)
@@ -214,7 +218,7 @@ export default function EditProductPage() {
         )}
 
         {/* Grade / Status — only for devices */}
-        {!isAccessory && (
+        {!isAccessory && !isSealed && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-sm font-medium text-navy-900 mb-2">Grade (ABEC)</label>
@@ -354,13 +358,6 @@ export default function EditProductPage() {
           onChange={(e) => updateField("condition_notes", e.target.value)}
         />
 
-        <div>
-          <label className="block text-sm font-medium text-navy-900 mb-2">Fotos</label>
-          <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-6 text-center">
-            <p className="text-sm font-medium text-navy-900">Edição de imagens desativada temporariamente.</p>
-            <p className="text-xs text-gray-400 mt-1">As fotos ficarão reservadas para o fluxo de assistência técnica.</p>
-          </div>
-        </div>
       </div>
     </div>
   )

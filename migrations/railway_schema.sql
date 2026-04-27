@@ -295,6 +295,12 @@ CREATE TABLE IF NOT EXISTS financial_settings (
   credit_10x_fee_pct      NUMERIC(5,2) DEFAULT 19.82,
   credit_11x_fee_pct      NUMERIC(5,2) DEFAULT 19.82,
   credit_12x_fee_pct      NUMERIC(5,2) DEFAULT 20.78,
+  credit_13x_fee_pct      NUMERIC(5,2) DEFAULT 20.78,
+  credit_14x_fee_pct      NUMERIC(5,2) DEFAULT 20.78,
+  credit_15x_fee_pct      NUMERIC(5,2) DEFAULT 20.78,
+  credit_16x_fee_pct      NUMERIC(5,2) DEFAULT 20.78,
+  credit_17x_fee_pct      NUMERIC(5,2) DEFAULT 20.78,
+  credit_18x_fee_pct      NUMERIC(5,2) DEFAULT 20.78,
   pix_fee_pct             NUMERIC(5,2) DEFAULT 0,
   cash_discount_pct       NUMERIC(5,2) DEFAULT 0,
   default_warranty_months INT DEFAULT 3,
@@ -418,7 +424,14 @@ BEGIN
     COALESCE(NEW.purchase_price, 0) > 0
     AND NEW.purchase_date IS NOT NULL
     AND COALESCE(NEW.grade, '') <> ''
-    AND (COALESCE(NEW.imei, '') <> '' OR COALESCE(NEW.serial_number, '') <> '')
+    AND (
+      COALESCE(NEW.imei, '') <> ''
+      OR COALESCE(NEW.serial_number, '') <> ''
+      OR NEW.grade = 'Lacrado'
+      OR NEW.catalog_id IS NULL
+      OR COALESCE(BTRIM(NEW.notes), '') <> ''
+      OR COALESCE(BTRIM(NEW.condition_notes), '') <> ''
+    )
     AND (
       NEW.catalog_id IS NOT NULL
       OR COALESCE(BTRIM(NEW.notes), '') <> ''

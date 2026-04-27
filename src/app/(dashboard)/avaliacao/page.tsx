@@ -124,6 +124,12 @@ export default function TradeInEvalPage() {
             credit_10x: Number(data.credit_10x_fee_pct) || 0,
             credit_11x: Number(data.credit_11x_fee_pct) || 0,
             credit_12x: Number(data.credit_12x_fee_pct) || 0,
+            credit_13x: Number(data.credit_13x_fee_pct ?? data.credit_12x_fee_pct) || 0,
+            credit_14x: Number(data.credit_14x_fee_pct ?? data.credit_12x_fee_pct) || 0,
+            credit_15x: Number(data.credit_15x_fee_pct ?? data.credit_12x_fee_pct) || 0,
+            credit_16x: Number(data.credit_16x_fee_pct ?? data.credit_12x_fee_pct) || 0,
+            credit_17x: Number(data.credit_17x_fee_pct ?? data.credit_12x_fee_pct) || 0,
+            credit_18x: Number(data.credit_18x_fee_pct ?? data.credit_12x_fee_pct) || 0,
           })
         }
       } catch { /* use empty settings */ }
