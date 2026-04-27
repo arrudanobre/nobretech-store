@@ -1,0 +1,21 @@
+UPDATE financial_settings
+SET
+  debit_fee_pct = 1.10,
+  credit_1x_fee_pct = 3.08,
+  credit_2x_fee_pct = 4.67,
+  credit_3x_fee_pct = 5.50,
+  credit_4x_fee_pct = 6.34,
+  credit_5x_fee_pct = 7.17,
+  credit_6x_fee_pct = 8.03,
+  credit_7x_fee_pct = 8.93,
+  credit_8x_fee_pct = 9.78,
+  credit_9x_fee_pct = 10.64,
+  credit_10x_fee_pct = 11.51,
+  credit_11x_fee_pct = 12.37,
+  credit_12x_fee_pct = 13.25,
+  credit_13x_fee_pct = 14.13,
+  credit_14x_fee_pct = 15.01,
+  credit_15x_fee_pct = 15.90,
+  credit_16x_fee_pct = 16.78,
+  credit_17x_fee_pct = 17.69,
+  credit_18x_fee_pct = 18.58;

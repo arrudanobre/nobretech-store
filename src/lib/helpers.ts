@@ -29,11 +29,13 @@ export function getFeeKey(method: string): string {
   return map[method] ?? 'pix'
 }
 
-/** Calculate price needed to net target amount after fees */
+function roundCurrency(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100
+}
+
+/** Calculate customer price from the amount the store wants to receive. */
 export function calcPrice(target: number, feePct: number): number {
-  if (feePct >= 100) return Infinity
-  const net = target / (1 - feePct / 100)
-  return Math.ceil(net) // arredonda para cima
+  return roundCurrency(target * (1 + feePct / 100))
 }
 
 /** Build full price table for all payment methods */

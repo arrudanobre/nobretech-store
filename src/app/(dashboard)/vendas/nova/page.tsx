@@ -507,11 +507,11 @@ function NewSaleContent() {
   const [inventoryProducts, setInventoryProducts] = useState<any[]>([])
   const [loadingInventory, setLoadingInventory] = useState(true)
   const defaultFees: Record<string, number> = {
-    debit: 1.47, credit_1x: 3.26, credit_2x: 11.77, credit_3x: 13.03, credit_4x: 13.13,
-    credit_5x: 15.37, credit_6x: 15.38, credit_7x: 17.12, credit_8x: 17.12,
-    credit_9x: 19.17, credit_10x: 19.82, credit_11x: 19.82, credit_12x: 20.78,
-    credit_13x: 20.78, credit_14x: 20.78, credit_15x: 20.78, credit_16x: 20.78,
-    credit_17x: 20.78, credit_18x: 20.78, pix: 0, cash: 0,
+    debit: 1.10, credit_1x: 3.08, credit_2x: 4.67, credit_3x: 5.50, credit_4x: 6.34,
+    credit_5x: 7.17, credit_6x: 8.03, credit_7x: 8.93, credit_8x: 9.78,
+    credit_9x: 10.64, credit_10x: 11.51, credit_11x: 12.37, credit_12x: 13.25,
+    credit_13x: 14.13, credit_14x: 15.01, credit_15x: 15.90, credit_16x: 16.78,
+    credit_17x: 17.69, credit_18x: 18.58, pix: 0, cash: 0,
   }
   const [fees, setFees] = useState<Partial<Record<string, number>>>(defaultFees)
 
@@ -1597,7 +1597,7 @@ function NewSaleContent() {
                 const netPrice = finalTotal - tradeInVal
                 const feeKey = getFeeKey(paymentMethod)
                 const feePct = fees[feeKey] ?? 0
-                const feeAdjustedPrice = feePct > 0 ? Math.ceil(netPrice / (1 - feePct / 100)) : netPrice
+                const feeAdjustedPrice = feePct > 0 ? Math.round(netPrice * (1 + feePct / 100) * 100) / 100 : netPrice
                 const selectedMethod = PAYMENT_METHODS.find((p) => p.value === paymentMethod)
                 const isInstallment = selectedMethod && selectedMethod.maxInstallments > 1
 
@@ -1782,7 +1782,7 @@ function NewSaleContent() {
                 const netPrice = finalTotal - tradeInVal
                 const baseForFees = hasTradeIn ? netPrice : finalTotal
                 const feePct = fees[getFeeKey(pm.value)] ?? 0
-                const displayPrice = feePct > 0 ? Math.ceil(baseForFees / (1 - feePct / 100)) : baseForFees
+                const displayPrice = feePct > 0 ? Math.round(baseForFees * (1 + feePct / 100) * 100) / 100 : baseForFees
                 const isInstallment = pm.maxInstallments > 1
                 const installPerMonth = displayPrice / pm.maxInstallments
                 const isVisible = baseForFees > 0
