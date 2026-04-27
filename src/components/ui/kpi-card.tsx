@@ -13,8 +13,20 @@ interface KPICardProps {
 
 export function KPICard({ title, value, change, icon: Icon, prefix, gradient }: KPICardProps) {
   let displayValue = value
-  if (typeof value === "number") {
-    displayValue = prefix === "currency" ? formatBRL(value) : prefix === "%" ? `${value}%` : value.toString()
+  const numericValue =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim() !== ""
+        ? Number(value)
+        : Number.NaN
+
+  if (Number.isFinite(numericValue)) {
+    displayValue =
+      prefix === "currency"
+        ? formatBRL(numericValue)
+        : prefix === "%"
+          ? `${numericValue}%`
+          : numericValue.toString()
   }
 
   return (

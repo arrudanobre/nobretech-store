@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useMemo, useRef, useEffect } from "react"
+import { useState, useCallback, useMemo, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
@@ -15,10 +15,6 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
-  X,
-  Camera,
-  Plus,
-  Trash2,
   Smartphone,
   TabletSmartphone,
   Monitor,
@@ -63,8 +59,6 @@ export default function AddProductPage() {
     margin: "15",
     quantity: "1",
   })
-  const [photos, setPhotos] = useState<string[]>([])
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const [checklistItems, setChecklistItems] = useState<Array<{ id: string; label: string; status: string; note: string }>>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [suppliers, setSuppliers] = useState<any[]>([])
@@ -190,33 +184,6 @@ export default function AddProductPage() {
     })
   }
 
-  const handlePhotos = () => {
-    fileInputRef.current?.click()
-  }
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files
-    if (!files || files.length === 0) return
-
-    Array.from(files).forEach((file) => {
-      if (!file.type.startsWith("image/")) return
-      const reader = new FileReader()
-      reader.onload = (ev) => {
-        if (ev.target?.result) {
-          setPhotos((prev) => [...prev, ev.target!.result as string])
-        }
-      }
-      reader.readAsDataURL(file)
-    })
-
-    // Reset input so same file can be selected again
-    e.target.value = ""
-  }
-
-  const removePhoto = (idx: number) => {
-    setPhotos((prev) => prev.filter((_, i) => i !== idx))
-  }
-
 // Auto-set storage for accessories (uses selectedModel name as storage)
   useEffect(() => {
     if (category === "accessories" && selectedModel) {
@@ -236,7 +203,7 @@ export default function AddProductPage() {
       case 2:
         return formData.purchase_price && formData.purchase_date && formData.quantity && parseInt(formData.quantity) >= 1
       case 3:
-        return photos.length >= 1
+        return true
       case 4:
         if (category === "accessories") return true
         return checklistProgress >= 80
@@ -245,7 +212,7 @@ export default function AddProductPage() {
       default:
         return true
     }
-  }, [step, category, selectedModel, formData, photos, checklistProgress])
+  }, [step, category, selectedModel, formData, checklistProgress])
 
   const prevStep = () => setStep((s) => Math.max(1, s - 1) as Step)
   const nextStep = () => {
@@ -372,7 +339,7 @@ export default function AddProductPage() {
         type: formData.type || "own",
         supplier_name: formData.type === "supplier" ? resolvedSupplierName : null,
         suggested_price: suggestedPrice,
-        photos: photos.length > 0 ? photos : null,
+        photos: null,
         ios_version: formData.ios_version || null,
         battery_health: formData.battery_health ? parseInt(formData.battery_health) : null,
         notes: accessoryName || formData.condition_notes || null,
@@ -798,50 +765,13 @@ export default function AddProductPage() {
         <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm space-y-5">
           <div className="flex items-center justify-between">
             <h3 className="font-display font-bold text-navy-900 font-syne">Fotos do Aparelho</h3>
-            <Badge variant={photos.length >= 1 ? "green" : "red"}>
-              {photos.length} foto{photos.length !== 1 ? "s" : ""}
-              {photos.length < 1 && " (mínimo 1)"}
-            </Badge>
+            <Badge variant="gray">Desativado</Badge>
           </div>
 
-          {/* Upload zone */}
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            multiple
-            onChange={handleFileChange}
-            className="hidden"
-          />
-          <button
-            type="button"
-            onClick={handlePhotos}
-            className="w-full border-2 border-dashed border-gray-200 hover:border-royal-500 rounded-2xl p-8 transition-colors flex flex-col items-center gap-2"
-          >
-            <div className="w-14 h-14 rounded-2xl bg-gray-50 flex items-center justify-center">
-              <Camera className="w-7 h-7 text-gray-400" />
-            </div>
-            <p className="text-sm font-medium text-navy-900">Tirar foto ou escolher da galeria</p>
-            <p className="text-xs text-gray-400">JPEG, PNG ou WEBP — máx. 10MB</p>
-          </button>
-
-          {/* Photo grid */}
-          {photos.length > 0 && (
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-              {photos.map((photo, i) => (
-                <div key={i} className="relative aspect-square bg-gray-100 rounded-xl overflow-hidden group">
-                  <img src={photo} alt={`Foto ${i + 1}`} className="w-full h-full object-cover" />
-                  <button
-                    type="button"
-                    onClick={() => removePhoto(i)}
-                    className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-danger-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+          <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-8 text-center">
+            <p className="text-sm font-medium text-navy-900">Cadastro de imagens desativado temporariamente.</p>
+            <p className="text-xs text-gray-400 mt-1">As fotos ficarão reservadas para o fluxo de assistência técnica.</p>
+          </div>
         </div>
       )}
 

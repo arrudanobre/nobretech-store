@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# claude/agent files
+.claude/
+
+# supabase temp files
+supabase/.temp/

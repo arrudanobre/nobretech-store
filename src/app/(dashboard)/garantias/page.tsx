@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { useToast } from "@/components/ui/toaster"
 import { formatBRL, formatDate, daysBetween } from "@/lib/helpers"
 import { supabase } from "@/lib/supabase"
+import { generateWarrantyPDF as generateWarrantyTermDocument, type SaleDocumentData } from "@/lib/sale-documents"
 import { Search, ShieldCheck, Download, FileText } from "lucide-react"
 import jsPDF from "jspdf"
 
@@ -49,6 +50,7 @@ export default function WarrantiesPage() {
           inventory (
             id,
             imei,
+            imei2,
             battery_health,
             grade,
             serial_number,
@@ -391,6 +393,40 @@ export default function WarrantiesPage() {
     }
   }
 
+  const generateWarrantyTermPDF = async (w: any) => {
+    setGenerating(w.id)
+    try {
+      const catalog = w.inventory?.product_catalog || {}
+      const productName = `${catalog.model || "Aparelho"}${catalog.variant ? ` ${catalog.variant}` : ""}${catalog.storage ? ` ${catalog.storage}` : ""}${catalog.color ? ` ${catalog.color}` : ""}`.trim()
+      const documentData: SaleDocumentData = {
+        saleId: w.sales?.id || w.id,
+        saleDate: w.sales?.sale_date || w.start_date,
+        customerName: w.customers?.full_name || "Cliente",
+        customerCpf: w.customers?.cpf || null,
+        customerPhone: w.customers?.phone || null,
+        paymentMethod: w.sales?.payment_method || "",
+        saleNotes: w.notes || w.inventory?.condition_notes || null,
+        item: {
+          name: productName,
+          imei: w.inventory?.imei || null,
+          imei2: w.inventory?.imei2 || null,
+          quantity: 1,
+          unitPrice: Number(w.sales?.sale_price || 0),
+          totalPrice: Number(w.sales?.sale_price || 0),
+          warrantyMonths: Number(w.sales?.warranty_months || 0),
+        },
+      }
+
+      await generateWarrantyTermDocument(documentData)
+      toast({ title: "Termo de garantia gerado!", type: "success" })
+    } catch (err) {
+      console.error("Erro ao gerar termo novo:", err)
+      toast({ title: "Erro ao gerar termo", type: "error" })
+    } finally {
+      setGenerating(null)
+    }
+  }
+
   const filtered = warranties.filter((w) => {
     const matchFilter =
       filter === "all" ||
@@ -516,7 +552,7 @@ export default function WarrantiesPage() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => generateWarrantyPDF(w)}
+                    onClick={() => generateWarrantyTermPDF(w)}
                     isLoading={generating === w.id}
                   >
                     <FileText className="w-3.5 h-3.5 mr-1" /> Baixar Termo

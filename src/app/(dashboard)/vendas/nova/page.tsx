@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo, useCallback, useEffect, useRef, Suspense } from "react"
+import { useState, useMemo, useCallback, useEffect, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -12,6 +12,7 @@ import { PAYMENT_METHODS, CATEGORIES, PRODUCT_CATALOG, GRADES } from "@/lib/cons
 import { useToast } from "@/components/ui/toaster"
 import { CategoryIcon } from "@/components/ui/icon-helpers"
 import { supabase } from "@/lib/supabase"
+import { generateReceiptPDF, generateWarrantyPDF, type SaleDocumentData } from "@/lib/sale-documents"
 import {
   Search,
   ShoppingCart,
@@ -21,8 +22,6 @@ import {
   Check,
   ArrowRight,
   ArrowLeft,
-  Camera,
-  X,
 } from "lucide-react"
 
 type Step = 1 | 2 | 3 | 4 | 5
@@ -31,6 +30,8 @@ type InventoryProduct = {
   id: string
   name: string
   imei: string
+  imei2?: string
+  condition_notes?: string | null
   cost: number
   suggested: number
   battery: number
@@ -196,37 +197,10 @@ const uploadTradeInPhotos = async (
   companyId: string,
   saleId: string
 ): Promise<string[]> => {
-  const uploadedUrls: string[] = []
-
-  for (let i = 0; i < tradeInPhotos.length; i++) {
-    const photoData = tradeInPhotos[i]
-    if (!photoData?.startsWith("data:")) continue
-
-    const [meta, base64] = photoData.split(",")
-    const mimeMatch = meta.match(/data:(.*);base64/)
-    const mimeType = mimeMatch?.[1] || "image/jpeg"
-    const ext = mimeType.split("/")[1] || "jpg"
-
-    const binary = atob(base64)
-    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
-    const blob = new Blob([bytes], { type: mimeType })
-
-    const filePath = `${companyId}/tradeins/${saleId}-${Date.now()}-${i}.${ext}`
-
-    const { error: uploadError } = await supabase.storage
-      .from("inventory")
-      .upload(filePath, blob, {
-        contentType: mimeType,
-        upsert: true,
-      })
-
-    if (uploadError) continue
-
-    const { data: publicData } = supabase.storage.from("inventory").getPublicUrl(filePath)
-    if (publicData?.publicUrl) uploadedUrls.push(publicData.publicUrl)
-  }
-
-  return uploadedUrls
+  void tradeInPhotos
+  void companyId
+  void saleId
+  return []
 }
 
 const updateSaleTradeInLink = async (saleId: string, tradeInId: string) => {
@@ -518,7 +492,6 @@ function NewSaleContent() {
   const [tradeIn, setTradeIn] = useState({ category: "", modelIdx: 0, storage: "", color: "", imei: "", grade: "", batteryHealth: "", value: "" })
   const [saleNotes, setSaleNotes] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [tradeInPhotos, setTradeInPhotos] = useState<string[]>([])
 
   // ── Additional item (upsell / brinde) — selecionado do estoque ──
   const [hasAdditionalItem, setHasAdditionalItem] = useState(false)
@@ -530,7 +503,6 @@ function NewSaleContent() {
     salePrice: string
     qty: number
   } | null>(null)
-  const tradeInFileRef = useRef<HTMLInputElement>(null)
   const [inventoryProducts, setInventoryProducts] = useState<any[]>([])
   const [loadingInventory, setLoadingInventory] = useState(true)
   const defaultFees: Record<string, number> = {
@@ -590,7 +562,7 @@ function NewSaleContent() {
       try {
         const { data, error } = await supabase
           .from("inventory")
-          .select("id, imei, purchase_price, suggested_price, battery_health, status, condition_notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color)")
+          .select("id, imei, imei2, purchase_price, suggested_price, battery_health, status, condition_notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color)")
           .in("status", ["active", "in_stock"] as any)
           .order("created_at", { ascending: false })
 
@@ -601,6 +573,8 @@ function NewSaleContent() {
             id: item.id,
             name: getProductName(item),
             imei: item.imei || "",
+            imei2: item.imei2 || "",
+            condition_notes: item.condition_notes || null,
             cost: item.purchase_price || 0,
             suggested: item.suggested_price || 0,
             battery: item.battery_health || 0,
@@ -624,7 +598,7 @@ function NewSaleContent() {
     const fetchProduct = async () => {
       try {
         const { data: items, error } = await (supabase.from("inventory") as any)
-          .select("id, imei, purchase_price, suggested_price, battery_health, condition_notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color)")
+          .select("id, imei, imei2, purchase_price, suggested_price, battery_health, condition_notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color)")
           .eq("id", preselectId)
           .single()
 
@@ -642,6 +616,8 @@ function NewSaleContent() {
           id: items.id,
           name: getProductName(items),
           imei: items.imei || "",
+          imei2: items.imei2 || "",
+          condition_notes: items.condition_notes || null,
           cost: items.purchase_price || 0,
           suggested: items.suggested_price || 0,
           battery: items.battery_health || 0,
@@ -897,38 +873,10 @@ function NewSaleContent() {
   }, [getTradeInInventoryStatus])
 
   const uploadTradeInPhotos = useCallback(async (companyId: string, saleId: string): Promise<string[]> => {
-    const uploadedUrls: string[] = []
-
-    for (let i = 0; i < tradeInPhotos.length; i++) {
-      const photoData = tradeInPhotos[i]
-      if (!photoData?.startsWith("data:")) continue
-
-      const [meta, base64] = photoData.split(",")
-      const mimeMatch = meta.match(/data:(.*);base64/)
-      const mimeType = mimeMatch?.[1] || "image/jpeg"
-      const ext = mimeType.split("/")[1] || "jpg"
-
-      const binary = atob(base64)
-      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
-      const blob = new Blob([bytes], { type: mimeType })
-
-      const filePath = `${companyId}/tradeins/${saleId}-${Date.now()}-${i}.${ext}`
-
-      const { error: uploadError } = await supabase.storage
-        .from("inventory")
-        .upload(filePath, blob, {
-          contentType: mimeType,
-          upsert: true,
-        })
-
-      if (uploadError) continue
-
-      const { data: publicData } = supabase.storage.from("inventory").getPublicUrl(filePath)
-      if (publicData?.publicUrl) uploadedUrls.push(publicData.publicUrl)
-    }
-
-    return uploadedUrls
-  }, [tradeInPhotos])
+    void companyId
+    void saleId
+    return []
+  }, [])
 
   const createTradeInInventoryItem = useCallback(async (params: {
     companyId: string
@@ -987,28 +935,6 @@ function NewSaleContent() {
     }
   }, [])
 
-  const handleTradeInPhotos = () => {
-    tradeInFileRef.current?.click()
-  }
-
-  const handleTradeInFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files
-    if (!files || files.length === 0) return
-    Array.from(files).forEach((file) => {
-      if (!file.type.startsWith("image/")) return
-      const reader = new FileReader()
-      reader.onload = (ev) => {
-        if (ev.target?.result) setTradeInPhotos((prev) => [...prev, ev.target!.result as string])
-      }
-      reader.readAsDataURL(file)
-    })
-    e.target.value = ""
-  }
-
-  const removeTradeInPhoto = (idx: number) => {
-    setTradeInPhotos((prev) => prev.filter((_, i) => i !== idx))
-  }
-
   const canProceed = () => {
     switch (step) {
       case 1: return !!selectedProduct && !loadingInventory && quantity <= maxAvailableQty
@@ -1022,6 +948,10 @@ function NewSaleContent() {
 
   const next = () => setStep((s) => Math.min(5, s + 1) as Step)
   const prev = () => setStep((s) => Math.max(1, s - 1) as Step)
+
+  const getPaymentMethodLabel = (method: string) => {
+    return PAYMENT_METHODS.find((item) => item.value === method)?.label || method
+  }
 
   const handleConfirm = async () => {
     setIsSubmitting(true)
@@ -1198,9 +1128,45 @@ function NewSaleContent() {
         }
       }
 
+      try {
+        const additionalItemsSummary = additionalSelectedItem
+          ? `${additionalSelectedItem.qty || 1}x ${getAdditionalItemDisplayName(additionalSelectedItem.name)}${additionalSelectedItem.type === "free" ? " (brinde)" : ""}`
+          : null
+        const documentNotes = [selectedProduct?.condition_notes, saleNotes].filter(Boolean).join(". ")
+        const documentData: SaleDocumentData = {
+          saleId: sale.id,
+          saleDate: today,
+          customerName: customer.name,
+          customerCpf: customer.cpf || null,
+          customerPhone: customer.phone || null,
+          paymentMethod: getPaymentMethodLabel(paymentMethod),
+          saleNotes: documentNotes || null,
+          additionalItems: additionalItemsSummary,
+          item: {
+            name: selectedProduct!.name,
+            imei: selectedProduct!.imei,
+            imei2: selectedProduct!.imei2 || null,
+            quantity,
+            unitPrice,
+            totalPrice: finalTotal,
+            warrantyMonths: parseInt(warrantyMonths),
+          },
+        }
+
+        await generateReceiptPDF(documentData)
+        await generateWarrantyPDF(documentData)
+      } catch (pdfError) {
+        console.error("Erro ao gerar recibo/garantia:", pdfError)
+        toast({
+          title: "Venda registrada, mas os PDFs não foram gerados",
+          description: "Confira o bloqueio de downloads do navegador e tente registrar/emitir novamente.",
+          type: "error",
+        })
+      }
+
       toast({
         title: "Venda registrada!",
-        description: `Venda de ${selectedProduct!.name} concluída com sucesso.`,
+        description: `Venda de ${selectedProduct!.name} concluída com sucesso. Recibo e garantia emitidos.`,
         type: "success",
       })
       router.push("/vendas")
@@ -1582,34 +1548,12 @@ function NewSaleContent() {
                 )}
               </div>
 
-              {/* Photos */}
               <div>
                 <label className="block text-xs font-medium text-navy-900 mb-2">Fotos do Aparelho</label>
-                <input ref={tradeInFileRef} type="file" accept="image/*" multiple onChange={handleTradeInFileChange} className="hidden" />
-                <button
-                  type="button"
-                  onClick={handleTradeInPhotos}
-                  className="w-full border-2 border-dashed border-gray-200 hover:border-royal-500 rounded-xl p-4 transition-colors flex flex-col items-center gap-1"
-                >
-                  <Camera className="w-5 h-5 text-gray-400" />
-                  <span className="text-xs font-medium text-navy-900">Adicionar fotos</span>
-                </button>
-                {tradeInPhotos.length > 0 && (
-                  <div className="grid grid-cols-4 gap-2 mt-2">
-                    {tradeInPhotos.map((photo, i) => (
-                      <div key={i} className="relative aspect-square rounded-lg overflow-hidden bg-gray-100 group">
-                        <img src={photo} alt={`Foto ${i + 1}`} className="w-full h-full object-cover" />
-                        <button
-                          type="button"
-                          onClick={() => removeTradeInPhoto(i)}
-                          className="absolute top-1 right-1 w-5 h-5 rounded-full bg-danger-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 p-4 text-center">
+                  <p className="text-xs font-medium text-navy-900">Fotos desativadas no fluxo de venda.</p>
+                  <p className="text-[11px] text-gray-400 mt-1">A captura de imagens ficará para assistência técnica.</p>
+                </div>
               </div>
 
               {/* Trade-in value */}

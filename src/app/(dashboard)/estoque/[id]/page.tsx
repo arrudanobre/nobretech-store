@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useRouter, useParams } from "next/navigation"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
@@ -52,6 +52,7 @@ export default function ProductDetailPage() {
       }
 
       const p = items[0] as any
+      p.photos = []
       setProduct(p)
 
       if (p.catalog_id) {
@@ -296,21 +297,16 @@ export default function ProductDetailPage() {
         </div>
       )}
 
-      {/* Photos */}
-      {product.photos && product.photos.length > 0 ? (
-        <DetailPhotoCarousel photos={product.photos} />
-      ) : (
-        <div className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-2xl aspect-video flex items-center justify-center">
-          <div className="text-center">
-            {product.catalog ? (
-              <CategoryIcon category={product.catalog.category} className="!w-16 !h-16" />
-            ) : (
-              <span className="text-5xl">📦</span>
-            )}
-            <p className="text-xs text-gray-400 mt-2">Nenhuma foto cadastrada</p>
-          </div>
+      <div className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-2xl aspect-video flex items-center justify-center">
+        <div className="text-center">
+          {product.catalog ? (
+            <CategoryIcon category={product.catalog.category} className="!w-16 !h-16" />
+          ) : (
+            <span className="text-5xl">📦</span>
+          )}
+          <p className="text-xs text-gray-400 mt-2">Mídia desativada no estoque</p>
         </div>
-      )}
+      </div>
 
       {/* Specs & Price */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -572,90 +568,6 @@ export default function ProductDetailPage() {
           </div>
         </div>
       </div>
-    </div>
-  )
-}
-
-function DetailPhotoCarousel({ photos }: { photos: string[] }) {
-  const [current, setCurrent] = useState(0)
-  const [next, setNext] = useState<number | null>(null)
-
-  const goTo = (idx: number) => {
-    if (idx === current || next !== null) return
-    setNext(idx)
-    setTimeout(() => {
-      setCurrent(idx)
-      setNext(null)
-    }, 300)
-  }
-
-  const step = (dir: 1 | -1) => {
-    goTo((current + dir + photos.length) % photos.length)
-  }
-
-  return (
-    <div className="relative rounded-2xl overflow-hidden bg-gradient-to-br from-gray-100 to-gray-200 w-full">
-      {/* Main image area */}
-      <div className="relative aspect-[4/3] sm:aspect-[16/9]">
-        <img
-          src={photos[current]}
-          alt="Foto do produto"
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 z-0 ${
-            next !== null ? "opacity-0" : "opacity-100"
-          }`}
-        />
-        {next !== null && (
-          <img
-            src={photos[next!]}
-            alt="Foto do produto"
-            className="absolute inset-0 w-full h-full object-cover z-10 opacity-100"
-          />
-        )}
-
-        {/* Navigation arrows */}
-        {photos.length > 1 && (
-          <>
-            <button
-              type="button"
-              onClick={() => step(-1)}
-              className={`absolute left-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/40 text-white items-center justify-center flex transition-all hover:bg-black/60 z-10 ${
-                current === 0 ? "opacity-0 pointer-events-none" : "opacity-80 hover:opacity-100"
-              }`}
-            >
-              <svg width="14" height="14" viewBox="0 0 10 10" fill="none"><path d="M7 1L3 5L7 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            </button>
-            <button
-              type="button"
-              onClick={() => step(1)}
-              className={`absolute right-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/40 text-white items-center justify-center flex transition-all hover:bg-black/60 z-10 ${
-                current === photos.length - 1 ? "opacity-0 pointer-events-none" : "opacity-80 hover:opacity-100"
-              }`}
-            >
-              <svg width="14" height="14" viewBox="0 0 10 10" fill="none"><path d="M3 1L7 5L3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            </button>
-          </>
-        )}
-      </div>
-
-      {/* Thumbnail strip */}
-      {photos.length > 1 && (
-        <div className="flex gap-2 p-3 overflow-x-auto">
-          {photos.map((photo, i) => (
-            <button
-              key={i}
-              type="button"
-              onClick={() => goTo(i)}
-              className={`aspect-square w-16 sm:w-20 rounded-lg overflow-hidden shrink-0 border-2 transition-all ${
-                i === current
-                  ? "border-royal-500 ring-2 ring-royal-500/20"
-                  : "border-transparent opacity-60 hover:opacity-100"
-              }`}
-            >
-              <img src={photo} alt={`Foto ${i + 1}`} className="w-full h-full object-cover" />
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   )
 }

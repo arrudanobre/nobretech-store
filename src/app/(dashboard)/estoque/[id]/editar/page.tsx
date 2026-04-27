@@ -1,16 +1,15 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Select } from "@/components/ui/select"
-import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/toaster"
 import { supabase } from "@/lib/supabase"
 import { GRADES } from "@/lib/constants"
-import { ArrowLeft, Loader2, Save, Camera, X } from "lucide-react"
+import { ArrowLeft, Loader2, Save } from "lucide-react"
 import { getComputedInventoryStatus, mapLifecycleToLegacyCompatibleStatus } from "@/lib/helpers"
 
 const STATUS_OPTIONS = [
@@ -46,34 +45,6 @@ export default function EditProductPage() {
     type: "own",
     supplier_name: "",
   })
-  const [photos, setPhotos] = useState<string[]>([])
-  const fileInputRef = useRef<HTMLInputElement>(null)
-
-  const handlePhotos = () => {
-    fileInputRef.current?.click()
-  }
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files
-    if (!files || files.length === 0) return
-
-    Array.from(files).forEach((file) => {
-      if (!file.type.startsWith("image/")) return
-      const reader = new FileReader()
-      reader.onload = (ev) => {
-        if (ev.target?.result) {
-          setPhotos((prev) => [...prev, ev.target!.result as string])
-        }
-      }
-      reader.readAsDataURL(file)
-    })
-    e.target.value = ""
-  }
-
-  const removePhoto = (idx: number) => {
-    setPhotos((prev) => prev.filter((_, i) => i !== idx))
-  }
-
   const fetchProduct = useCallback(async () => {
     if (!productId) return
     try {
@@ -113,10 +84,6 @@ export default function EditProductPage() {
         type: item.type || "own",
         supplier_name: item.supplier_name || "",
       })
-
-      if (item.photos && Array.isArray(item.photos)) {
-        setPhotos(item.photos)
-      }
 
       if (item.catalog_id) {
         const { data: catData } = await (supabase.from("product_catalog") as any)
@@ -172,7 +139,7 @@ export default function EditProductPage() {
         quantity: formData.type === "own" ? Math.max(1, parseInt(formData.quantity) || 1) : 1,
         type: formData.type,
         supplier_name: formData.type === "supplier" ? (formData.supplier_name || null) : null,
-        photos: photos.length > 0 ? photos : null,
+        photos: null,
       }
 
       const { error } = await (supabase.from("inventory") as any)
@@ -387,45 +354,12 @@ export default function EditProductPage() {
           onChange={(e) => updateField("condition_notes", e.target.value)}
         />
 
-        {/* Photos */}
         <div>
           <label className="block text-sm font-medium text-navy-900 mb-2">Fotos</label>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            multiple
-            onChange={handleFileChange}
-            className="hidden"
-          />
-          <button
-            type="button"
-            onClick={handlePhotos}
-            className="w-full border-2 border-dashed border-gray-200 hover:border-royal-500 rounded-2xl p-6 transition-colors flex flex-col items-center gap-2"
-          >
-            <div className="w-10 h-10 rounded-xl bg-gray-50 flex items-center justify-center">
-              <Camera className="w-5 h-5 text-gray-400" />
-            </div>
-            <p className="text-sm font-medium text-navy-900">Adicionar fotos</p>
-            <p className="text-xs text-gray-400">JPEG, PNG ou WEBP</p>
-          </button>
-
-          {photos.length > 0 && (
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mt-3">
-              {photos.map((photo, i) => (
-                <div key={i} className="relative aspect-square bg-gray-100 rounded-xl overflow-hidden group">
-                  <img src={photo} alt={`Foto ${i + 1}`} className="w-full h-full object-cover" />
-                  <button
-                    type="button"
-                    onClick={() => removePhoto(i)}
-                    className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-danger-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+          <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-6 text-center">
+            <p className="text-sm font-medium text-navy-900">Edição de imagens desativada temporariamente.</p>
+            <p className="text-xs text-gray-400 mt-1">As fotos ficarão reservadas para o fluxo de assistência técnica.</p>
+          </div>
         </div>
       </div>
     </div>

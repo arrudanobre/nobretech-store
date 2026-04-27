@@ -2,12 +2,11 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import Link from "next/link"
-import Image from "next/image"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { CategoryIcon } from "@/components/ui/icon-helpers"
-import { formatBRL, daysBetween, getSupabaseThumbnail, getProductName, getInventoryStatusMeta, getComputedInventoryStatus, isPendingInventoryStatus } from "@/lib/helpers"
+import { formatBRL, daysBetween, getProductName, getInventoryStatusMeta, getComputedInventoryStatus, isPendingInventoryStatus } from "@/lib/helpers"
 import { CATEGORIES, GRADES } from "@/lib/constants"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/toaster"
@@ -86,7 +85,6 @@ export default function InventoryPage() {
           quantity,
           type,
           supplier_name,
-          foto_url:photos->0,
           battery_health,
           ios_version,
           condition_notes,
@@ -220,20 +218,6 @@ export default function InventoryPage() {
   }, [items, activeCategory, activeStatus, activeGrade, search])
 
   const inStockCount = useMemo(() => items.filter((i) => getComputedInventoryStatus(i) === "active").length, [items])
-
-  const getThumbSrc = useCallback((photo?: string) => (photo ? getSupabaseThumbnail(photo, 300) : ""), [])
-  const [imageErrors, setImageErrors] = useState<Record<string, boolean>>({})
-  const PLACEHOLDER_IMG = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='225' viewBox='0 0 300 225'%3E%3Crect width='300' height='225' fill='%23f3f4f6'/%3E%3Cpath d='M120 95h60v35h-60z' fill='%23d1d5db'/%3E%3Ccircle cx='135' cy='110' r='6' fill='%23e5e7eb'/%3E%3Cpath d='M90 165l45-40 32 26 20-18 23 32H90z' fill='%23d1d5db'/%3E%3C/svg%3E"
-  const getCardImageSrc = useCallback(
-    (item: InventoryItem) => {
-      if (imageErrors[item.id]) return PLACEHOLDER_IMG
-      return getThumbSrc(item.foto_url || undefined) || PLACEHOLDER_IMG
-    },
-    [imageErrors, getThumbSrc],
-  )
-  const handleImageError = useCallback((id: string) => {
-    setImageErrors((prev) => (prev[id] ? prev : { ...prev, [id]: true }))
-  }, [])
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -391,7 +375,6 @@ export default function InventoryPage() {
             const computedStatus = getComputedInventoryStatus(item)
             const status = getInventoryStatusMeta(computedStatus)
             const gradeInfo = GRADES.find((g) => g.value === item.grade)
-            const isSold = computedStatus === "sold"
             const days = daysBetween(item.purchase_date)
             const cat = item.catalog || item.product_catalog
             const catalogName = getProductName(item)
@@ -405,18 +388,14 @@ export default function InventoryPage() {
                 className="group bg-card rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-all overflow-hidden animate-fade-in relative"
               >
                 <Link href={`/estoque/${item.id}`} className="block">
-                {/* Photo (Optimized: Single Image with Lazy Loading) */}
                 <div className="aspect-[4/3] relative bg-gray-50">
-                  {item.foto_url ? (
-                    <div className="relative w-full h-full overflow-hidden">
-                      <img
-                        src={getCardImageSrc(item)}
-                        alt={catalogName}
-                        loading="lazy"
-                        decoding="async"
-                        onError={() => handleImageError(item.id)}
-                        className="w-full h-full object-cover"
-                      />
+                    <div className="relative w-full h-full flex flex-col items-center justify-center text-gray-300 gap-2">
+                      {item.catalog || item.product_catalog ? (
+                        <CategoryIcon category={(item.catalog || item.product_catalog).category} className="!w-10 !h-10 opacity-20" />
+                      ) : (
+                        <CameraOff className="w-8 h-8 opacity-20" />
+                      )}
+                      <span className="text-[10px] font-medium uppercase tracking-widest opacity-40">Mídia desativada</span>
                       {computedStatus === "sold" && (
                         <div className="absolute inset-0 bg-black/40 flex items-center justify-center z-10 transition-colors group-hover:bg-black/20">
                           <span className="bg-white text-navy-900 px-3 py-1 rounded-lg text-xs font-bold shadow-lg -rotate-12">
@@ -450,22 +429,7 @@ export default function InventoryPage() {
                           Cadastro incompleto
                         </span>
                       )}
-                      {false && (
-                        <div className="absolute bottom-2 right-2 bg-black/60 text-white text-[9px] px-1.5 py-0.5 rounded-md font-medium backdrop-blur-sm">
-                          1 / {item.photos.length}
-                        </div>
-                      )}
                     </div>
-                  ) : (
-                    <div className="w-full h-full flex flex-col items-center justify-center text-gray-300 gap-2">
-                      {item.catalog || item.product_catalog ? (
-                        <CategoryIcon category={(item.catalog || item.product_catalog).category} className="!w-10 !h-10 opacity-20" />
-                      ) : (
-                        <CameraOff className="w-8 h-8 opacity-20" />
-                      )}
-                      <span className="text-[10px] font-medium uppercase tracking-widest opacity-40">Sem Foto</span>
-                    </div>
-                  )}
                 </div>
 
                 {/* Info */}
@@ -562,103 +526,6 @@ export default function InventoryPage() {
             <p className="text-sm text-gray-500">Todos os itens foram carregados.</p>
           </div>
         )}
-    </div>
-  )
-}
-
-function PhotoCarousel({ photos, alt, children }: { photos: string[]; alt: string; children?: React.ReactNode }) {
-  const [current, setCurrent] = useState(0)
-  const [next, setNext] = useState<number | null>(null)
-  const isTransitioning = next !== null
-  const hasMultiple = photos.length > 1
-
-  const goTo = (idx: number) => {
-    if (idx === current || isTransitioning) return
-    setNext(idx)
-    setTimeout(() => {
-      setCurrent(idx)
-      setNext(null)
-    }, 250)
-  }
-
-  const step = (dir: 1 | -1) => {
-    goTo((current + dir + photos.length) % photos.length)
-  }
-
-  if (!hasMultiple) {
-    return (
-      <div className="relative w-full h-full">
-        <Image
-          src={getSupabaseThumbnail(photos[0], 600)}
-          alt={alt}
-          width={400}
-          height={300}
-          className="w-full h-full object-cover"
-          style={{ objectFit: 'cover' }}
-          unoptimized={!getSupabaseThumbnail(photos[0], 600).includes('supabase.co')}
-        />
-        {children}
-      </div>
-    )
-  }
-
-  return (
-    <div className="relative w-full h-full select-none">
-      {/* Current photo */}
-      <Image
-        src={getSupabaseThumbnail(photos[current], 600)}
-        alt={alt}
-        width={400}
-        height={300}
-        className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-250 ${isTransitioning ? "opacity-0" : "opacity-100"}`}
-        style={{ objectFit: 'cover' }}
-        unoptimized={!getSupabaseThumbnail(photos[current], 600).includes('supabase.co')}
-      />
-      {/* Next photo (crossfade layer) */}
-      {isTransitioning && (
-        <Image
-          src={getSupabaseThumbnail(photos[next!], 600)}
-          alt={alt}
-          width={400}
-          height={300}
-          className="absolute inset-0 w-full h-full object-cover opacity-100"
-          style={{ objectFit: 'cover' }}
-          unoptimized={!getSupabaseThumbnail(photos[next!], 600).includes('supabase.co')}
-        />
-      )}
-
-      {/* Arrow nav */}
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); e.preventDefault(); step(-1) }}
-        className="absolute left-1.5 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-black/40 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/60 z-10"
-      >
-        <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M7 1L3 5L7 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-      </button>
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); e.preventDefault(); step(1) }}
-        className="absolute right-1.5 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-black/40 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/60 z-10"
-      >
-        <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 1L7 5L3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-      </button>
-
-      {/* Dots */}
-      <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1 z-10">
-        {photos.map((_, i) => (
-          <button
-            key={i}
-            type="button"
-            onClick={(e) => { e.stopPropagation(); e.preventDefault(); goTo(i) }}
-            className={`h-1 rounded-full transition-all duration-200 ${
-              i === current ? "w-4 bg-white" : "w-1 bg-white/50 hover:bg-white/80"
-            }`}
-          />
-        ))}
-      </div>
-
-      {/* Overlays (badges, etc) */}
-      {children}
     </div>
   )
 }

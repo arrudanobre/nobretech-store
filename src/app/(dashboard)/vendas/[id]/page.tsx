@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { supabase } from "@/lib/supabase"
 import { formatBRL, formatDate, getAdditionalItemDisplayName, getTradeInDisplayName, getTradeInSummaryStatus, getInventoryStatusMeta, isPendingInventoryStatus } from "@/lib/helpers"
 import { CHECKLIST_TEMPLATES } from "@/lib/constants"
+import { generateWarrantyPDF as generateWarrantyTermDocument, type SaleDocumentData } from "@/lib/sale-documents"
 import jsPDF from "jspdf"
 import { ArrowLeft, ShieldCheck, FileText, CreditCard, User, ShoppingCart, AlertTriangle, Download, CheckCircle2, XCircle, MinusCircle, Loader2 } from "lucide-react"
 
@@ -174,6 +175,44 @@ export default function SaleDetailPage() {
       toast({ title: "Erro ao gerar PDF", type: "error" })
     } finally {
       setGeneratingPdf(false)
+    }
+  }
+
+  const handleDownloadWarrantyTermPDF = async () => {
+    setGenerating("warranty")
+    try {
+      const catalog = product?.catalog || {}
+      const productName = `${catalog.model || "Aparelho"}${catalog.variant ? ` ${catalog.variant}` : ""}${catalog.storage ? ` ${catalog.storage}` : ""}${catalog.color ? ` ${catalog.color}` : ""}`.trim()
+      const additionalItemsSummary = additionalItems.length
+        ? additionalItems.map((item) => `${item.quantity || 1}x ${getAdditionalItemDisplayName(item.name)}${item.type === "free" ? " (brinde)" : ""}`).join(", ")
+        : null
+      const documentData: SaleDocumentData = {
+        saleId: sale?.id || id,
+        saleDate: sale?.sale_date,
+        customerName: customer?.full_name || "Cliente",
+        customerCpf: customer?.cpf || null,
+        customerPhone: customer?.phone || null,
+        paymentMethod: paymentLabel(),
+        saleNotes: sale?.notes || product?.condition_notes || null,
+        additionalItems: additionalItemsSummary,
+        item: {
+          name: productName,
+          imei: product?.imei || null,
+          imei2: product?.imei2 || null,
+          quantity: 1,
+          unitPrice: Number(sale?.sale_price || 0),
+          totalPrice: Number(sale?.sale_price || 0),
+          warrantyMonths: Number(sale?.warranty_months || 0),
+        },
+      }
+
+      await generateWarrantyTermDocument(documentData)
+      toast({ title: "Termo de garantia gerado!", type: "success" })
+    } catch (err) {
+      console.error("Erro ao gerar termo novo:", err)
+      toast({ title: "Erro ao gerar termo", type: "error" })
+    } finally {
+      setGenerating(null)
     }
   }
 
@@ -741,7 +780,7 @@ export default function SaleDetailPage() {
           <Button
             size="lg"
             variant="outline"
-            onClick={() => generatePDF("warranty")}
+            onClick={handleDownloadWarrantyTermPDF}
             isLoading={generating === "warranty"}
             className="flex items-center gap-3 p-6 h-auto"
           >

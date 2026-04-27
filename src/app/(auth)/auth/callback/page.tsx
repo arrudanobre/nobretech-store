@@ -1,30 +1,18 @@
 "use client"
 
 import { useEffect, useRef, Suspense } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
-import { supabase } from "@/lib/supabase"
+import { useRouter } from "next/navigation"
 
 function AuthCallbackContent() {
   const router = useRouter()
-  const searchParams = useSearchParams()
   const hasRunRef = useRef(false)
 
   useEffect(() => {
     if (hasRunRef.current) return
     hasRunRef.current = true
 
-    async function handleCallback() {
-      const code = searchParams.get("code")
-
-      if (code) {
-        await supabase.auth.exchangeCodeForSession(code)
-      }
-
-      router.push("/dashboard")
-    }
-
-    handleCallback()
-  }, [searchParams, router])
+    router.push("/dashboard")
+  }, [router])
 
   return (
     <div className="min-h-screen bg-navy-950 flex items-center justify-center">
