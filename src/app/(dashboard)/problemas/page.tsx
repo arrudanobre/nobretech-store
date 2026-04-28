@@ -115,7 +115,13 @@ export default function ProblemsPage() {
           *,
           customers(full_name, cpf, phone),
           inventory(
+            id,
             imei,
+            serial_number,
+            battery_health,
+            grade,
+            notes,
+            condition_notes,
             catalog:catalog_id(model, variant, storage, color)
           )
         `)
@@ -145,6 +151,11 @@ export default function ProblemsPage() {
   const handleSubmit = async () => {
     if (!formData.type || !formData.description || !formData.priority) {
       toast({ title: "Preencha tipo, descrição e prioridade", type: "error" }); return
+    }
+    const hasSelectableSaleProduct = customerSales.some((sale) => sale.inventory?.id)
+    if (selectedCustomerId && hasSelectableSaleProduct && !selectedInventoryId) {
+      toast({ title: "Selecione o aparelho da OS", description: "Escolha qual produto comprado está com problema antes de registrar.", type: "error" })
+      return
     }
     setIsSubmitting(true)
     try {
@@ -196,6 +207,8 @@ export default function ProblemsPage() {
 
   const selectCustomer = async (customer: any) => {
     setSelectedCustomerId(customer.id)
+    setSelectedInventoryId(null)
+    setSelectedSaleId(null)
     setCustomerSearchQuery(`${customer.full_name}${customer.cpf ? ` — ${customer.cpf}` : ""}`)
     setCustomerResults([])
     setFormData(prev => ({ ...prev, searchProduct: "" }))
@@ -204,11 +217,11 @@ export default function ProblemsPage() {
         .from("sales") as any)
         .select(`
           id, sale_date, sale_price, payment_method, warranty_start, warranty_end, warranty_months,
-          inventory(id, imei, battery_health, grade, product_catalog(model, variant, storage, color))
+          inventory:inventory_id(id, imei, serial_number, battery_health, grade, notes, condition_notes, catalog:catalog_id(model, variant, storage, color))
         `)
         .eq("customer_id", customer.id).order("sale_date", { ascending: false })
       setCustomerSales(data || [])
-    } catch { /* ignore */ }
+    } catch { setCustomerSales([]) }
   }
 
   const updateProblemStatus = async (problemId: string, newStatus: string) => {
@@ -388,12 +401,35 @@ export default function ProblemsPage() {
 
   const selectSaleProduct = (sale: any) => {
     const inv = sale.inventory
-    const modelName = inv?.product_catalog
-      ? `${inv.product_catalog.model}${inv.product_catalog.storage ? " " + inv.product_catalog.storage : ""}${inv.product_catalog.color ? " • " + inv.product_catalog.color : ""}`.trim()
-      : `IMEI: ${inv?.imei || "—"}`
-    setSelectedInventoryId(inv?.id || null)
+    if (!inv?.id) {
+      toast({ title: "Venda sem aparelho vinculado", description: "Essa venda não possui um item de estoque para vincular à OS.", type: "error" })
+      return
+    }
+    const modelName = getInventoryProductName(inv)
+    setSelectedInventoryId(inv.id)
     setSelectedSaleId(sale.id)
     setFormData(prev => ({ ...prev, searchProduct: modelName }))
+  }
+
+  const getInventoryProductName = (inv: any) => {
+    if (!inv) return "Produto não vinculado"
+    const cat = inv.catalog || inv.product_catalog || {}
+    if (cat.model) {
+      return `${cat.model}${cat.storage ? " " + cat.storage : ""}${cat.color ? " • " + cat.color : ""}${cat.variant ? " (" + cat.variant + ")" : ""}`.trim()
+    }
+    if (inv.notes) return inv.notes
+    if (inv.condition_notes) return inv.condition_notes
+    if (inv.imei) return `IMEI: ${String(inv.imei).slice(0, 8)}…`
+    if (inv.serial_number) return `Serial: ${inv.serial_number}`
+    return "Produto não vinculado"
+  }
+
+  const getInventoryIdentifier = (inv: any) => {
+    if (!inv) return null
+    if (inv.imei && inv.serial_number) return `IMEI ${inv.imei} · Serial ${inv.serial_number}`
+    if (inv.imei) return `IMEI ${inv.imei}`
+    if (inv.serial_number) return `Serial ${inv.serial_number}`
+    return null
   }
 
   // Filters + Sort
@@ -403,10 +439,12 @@ export default function ProblemsPage() {
     let matchUrgency = true
     if (urgencyFilter === "critical") matchUrgency = urgency >= 2
     if (urgencyFilter === "expiring") matchUrgency = urgency > 0 && urgency <= 2
-    const productName = p.inventory?.catalog?.model || ""
+    const productName = getInventoryProductName(p.inventory)
+    const productIdentifier = getInventoryIdentifier(p.inventory) || ""
     const customerName = p.customers?.full_name || ""
     const matchSearch = !search ||
       productName.toLowerCase().includes(search.toLowerCase()) ||
+      productIdentifier.toLowerCase().includes(search.toLowerCase()) ||
       customerName.toLowerCase().includes(search.toLowerCase()) ||
       p.description.toLowerCase().includes(search.toLowerCase())
     return matchStatus && matchSearch && matchUrgency
@@ -516,13 +554,11 @@ export default function ProblemsPage() {
           {filtered.map((p) => {
             const status = statusLabels[p.status]
             const inv = p.inventory
-            const cat = inv?.catalog || {}
             const daysSince = getDaysSinceReport(p.reported_date)
             const isEditing = editingProblem === p.id
             const isDeleteAlert = deleteConfirm === p.id
-            const productName = cat.model
-              ? `${cat.model}${cat.storage ? " " + cat.storage : ""}${cat.color ? " • " + cat.color : ""}${cat.variant ? " (" + cat.variant + ")" : ""}`.trim()
-              : inv?.imei ? `IMEI: ${inv.imei.slice(0, 8)}…` : "Produto não vinculado"
+            const productName = getInventoryProductName(inv)
+            const productIdentifier = getInventoryIdentifier(inv)
             const customerInfo = p.customers?.full_name
               ? `${p.customers.full_name}${p.customers.cpf ? ` • ${p.customers.cpf}` : ""}`
               : "Sem cliente vinculado"
@@ -774,7 +810,7 @@ export default function ProblemsPage() {
                             <p className="text-[10px] font-semibold text-navy-900 mb-2 uppercase tracking-wide">Produto</p>
                             <div className="text-xs space-y-1">
                               <p className="font-medium text-navy-800">{productName}</p>
-                              {inv?.imei && <p className="text-gray-500 font-mono">{inv.imei}</p>}
+                              {productIdentifier && <p className="text-gray-500 font-mono">{productIdentifier}</p>}
                               {inv?.battery_health && <p className="text-gray-500">Bateria: {inv.battery_health}%</p>}
                               {inv?.grade && <p className="text-gray-500">Grade: {inv.grade}</p>}
                             </div>
@@ -936,10 +972,9 @@ export default function ProblemsPage() {
                   <p className="text-xs font-semibold text-navy-900 mb-3">Produtos Comprados (selecione o da OS)</p>
                   <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
                     {customerSales.map((sale) => {
-                      const inv = sale.inventory; const cat = inv?.product_catalog || {}
-                      const productName = cat.model
-                        ? `${cat.model}${cat.storage ? " " + cat.storage : ""}${cat.color ? " • " + cat.color : ""}`.trim()
-                        : `IMEI: ${inv?.imei || "—"}`
+                      const inv = sale.inventory
+                      const productName = getInventoryProductName(inv)
+                      const productIdentifier = getInventoryIdentifier(inv)
                       const wLeft = sale.warranty_end ? Math.max(0, Math.ceil((new Date(sale.warranty_end).getTime() - Date.now()) / (1000 * 60 * 60 * 24))) : null
                       const inWarranty = wLeft !== null && wLeft > 0
                       return (
@@ -947,7 +982,13 @@ export default function ProblemsPage() {
                           className={`w-full text-left p-3 rounded-lg border text-xs transition-all ${
                             selectedSaleId === sale.id ? "border-royal-500 bg-royal-50 ring-1 ring-royal-500/20" : "border-gray-100 hover:border-gray-200 hover:bg-gray-50"
                           }`}>
-                          <p className="font-medium text-navy-900 text-sm">{productName}</p>
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="font-medium text-navy-900 text-sm">{productName}</p>
+                            {selectedSaleId === sale.id && (
+                              <span className="shrink-0 rounded-full bg-royal-500 px-2 py-0.5 text-[10px] font-semibold text-white">Selecionado</span>
+                            )}
+                          </div>
+                          {productIdentifier && <p className="text-gray-400 mt-1 font-mono">{productIdentifier}</p>}
                           <p className="text-gray-500 mt-1">Venda: {formatDate(sale.sale_date)} · {formatBRL(sale.sale_price)}</p>
                           {inWarranty !== null && (
                             <span className={`inline-block mt-1.5 px-2 py-0.5 rounded text-[10px] font-semibold ${inWarranty ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
