@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { BarChart3, Package, ShoppingCart, ShieldCheck, AlertTriangle, FileText, Users, Truck, DollarSign, Settings, Smartphone, Calculator, ListChecks, ChevronDown } from "lucide-react"
+import { BarChart3, Package, ShoppingCart, ShieldCheck, AlertTriangle, FileText, Users, Truck, DollarSign, Settings, Smartphone, Calculator, ListChecks, ChevronDown, Menu, X } from "lucide-react"
 import { useState, useEffect, createContext, useContext, useCallback } from "react"
 import { supabase } from "@/lib/supabase"
 
@@ -228,51 +228,180 @@ export function Sidebar() {
   )
 }
 
-export function MobileNav() {
+export function MobileNav({ isOpen, onOpenChange }: { isOpen: boolean; onOpenChange: (open: boolean) => void }) {
   const pathname = usePathname()
+  const { counts } = useBadgeCount()
+
+  useEffect(() => {
+    onOpenChange(false)
+  }, [pathname, onOpenChange])
+
+  const navItems: NavItem[] = staticNavItems.map((item) => {
+    if (item.badge?.source === "db") {
+      const dbCount = counts[item.badge.countKey || "estoque"] ?? item.badge.defaultCount ?? 0
+      return { ...item, badge: { count: dbCount, color: item.badge.color } } as NavItem
+    }
+    if (item.badge?.defaultCount !== undefined && item.badge.source !== "db") {
+      return { ...item, badge: { count: item.badge.defaultCount, color: item.badge.color } } as NavItem
+    }
+    return item as NavItem
+  })
 
   const tabs = [
     { label: "Início", href: "/dashboard", icon: BarChart3 },
     { label: "Estoque", href: "/estoque", icon: Package },
-    { label: "Vender", href: "/estoque/novo", icon: ShoppingCart, primary: true },
-    { label: "Garantias", href: "/garantias", icon: ShieldCheck },
-    { label: "Menu", href: "/dashboard#menu", icon: Settings },
+    { label: "Avaliar", href: "/avaliacao", icon: Calculator, primary: true },
+    { label: "Vendas", href: "/vendas", icon: ShoppingCart },
+    { label: "Menu", href: "#menu", icon: Menu, menu: true },
   ]
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-50 flex md:hidden bg-white border-t border-gray-200 safe-bottom">
-      {tabs.map((tab) => {
-        const isActive = pathname === tab.href || (tab.href !== "/dashboard" && pathname?.startsWith(tab.href))
-        return (
-          <Link
-            key={tab.href}
-            href={tab.href}
-            className={cn(
-              "flex flex-col items-center justify-center flex-1 py-2 text-xs transition-colors",
-              tab.primary
-                ? "-mt-4"
-                : "",
-              isActive && !tab.primary
-                ? "text-royal-500"
-                : tab.primary
-                ? ""
-                : "text-gray-400"
-            )}
-          >
-            {tab.primary ? (
-              <div className="w-12 h-12 rounded-full bg-royal-500 flex items-center justify-center shadow-lg animate-pulse-glow">
-                <tab.icon className="w-6 h-6 text-white" />
+    <>
+      {isOpen && (
+        <div className="fixed inset-0 z-50 md:hidden">
+          <button
+            type="button"
+            aria-label="Fechar menu"
+            className="absolute inset-0 bg-navy-950/50"
+            onClick={() => onOpenChange(false)}
+          />
+          <aside className="absolute right-0 top-0 flex h-full w-[86vw] max-w-sm flex-col bg-white shadow-2xl">
+            <div className="flex h-16 items-center justify-between border-b border-gray-100 px-4">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-royal-500 flex items-center justify-center">
+                  <Smartphone className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <p className="font-display font-bold text-sm font-syne text-navy-900">NOBRETECH</p>
+                  <p className="text-xs text-gray-400">Menu</p>
+                </div>
               </div>
-            ) : (
-              <>
-                <tab.icon className={cn("w-5 h-5 mt-0.5", isActive ? "text-royal-500" : "")} />
-                <span className="mt-0.5">{tab.label}</span>
-              </>
-            )}
-          </Link>
-        )
-      })}
-    </nav>
+              <button
+                type="button"
+                aria-label="Fechar menu"
+                onClick={() => onOpenChange(false)}
+                className="rounded-xl border border-gray-200 p-2 text-gray-500"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="border-b border-gray-100 p-4">
+              <Link
+                href="/avaliacao"
+                onClick={() => onOpenChange(false)}
+                className="flex items-center gap-3 rounded-2xl bg-navy-900 px-4 py-4 text-white shadow-sm"
+              >
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-royal-500">
+                  <Calculator className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold">Avaliação de Recebimento</p>
+                  <p className="text-xs text-white/60">Consultar preço de entrada</p>
+                </div>
+              </Link>
+            </div>
+
+            <nav className="flex-1 overflow-y-auto p-3">
+              <ul className="space-y-1">
+                {navItems.map((item) => {
+                  const isExactActive = pathname === item.href
+                  const isChildActive = pathname !== item.href && pathname?.startsWith(item.href) && item.href !== "/dashboard"
+                  const isActive = isExactActive || isChildActive
+                  return (
+                    <li key={item.href}>
+                      <Link
+                        href={item.href}
+                        onClick={() => onOpenChange(false)}
+                        className={cn(
+                          "flex items-center gap-3 rounded-xl px-3 py-3 text-sm transition-colors",
+                          isActive ? "bg-royal-50 text-royal-600" : "text-gray-600 hover:bg-gray-50"
+                        )}
+                      >
+                        <item.icon className="h-5 w-5 shrink-0" />
+                        <span className="font-medium">{item.label}</span>
+                        {item.badge && item.badge.count > 0 && (
+                          <span className={cn("ml-auto rounded-full px-2 py-0.5 text-xs font-bold text-white", item.badge.color)}>
+                            {item.badge.count}
+                          </span>
+                        )}
+                      </Link>
+                      {item.items && (
+                        <div className="ml-8 mt-1 space-y-1">
+                          {item.items.filter((subItem) => !subItem.disabled).map((subItem) => (
+                            <Link
+                              key={subItem.href}
+                              href={subItem.href}
+                              onClick={() => onOpenChange(false)}
+                              className={cn(
+                                "block rounded-lg px-3 py-2 text-xs",
+                                pathname === subItem.href ? "bg-royal-50 text-royal-600 font-medium" : "text-gray-500 hover:bg-gray-50"
+                              )}
+                            >
+                              {subItem.label}
+                            </Link>
+                          ))}
+                        </div>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            </nav>
+          </aside>
+        </div>
+      )}
+
+      <nav className="fixed bottom-0 left-0 right-0 z-40 flex md:hidden bg-white border-t border-gray-200 safe-bottom">
+        {tabs.map((tab) => {
+          const isActive = tab.menu ? isOpen : pathname === tab.href || (tab.href !== "/dashboard" && pathname?.startsWith(tab.href))
+          const Icon = tab.icon
+          const content = tab.primary ? (
+            <>
+              <div className="w-12 h-12 rounded-full bg-royal-500 flex items-center justify-center shadow-lg animate-pulse-glow">
+                <Icon className="w-6 h-6 text-white" />
+              </div>
+              <span className="mt-0.5 text-[11px] font-semibold text-royal-500">{tab.label}</span>
+            </>
+          ) : (
+            <>
+              <Icon className={cn("w-5 h-5 mt-0.5", isActive ? "text-royal-500" : "")} />
+              <span className="mt-0.5">{tab.label}</span>
+            </>
+          )
+
+          if (tab.menu) {
+            return (
+              <button
+                key={tab.label}
+                type="button"
+                onClick={() => onOpenChange(!isOpen)}
+                className={cn(
+                  "flex flex-col items-center justify-center flex-1 py-2 text-xs transition-colors",
+                  isActive ? "text-royal-500" : "text-gray-400"
+                )}
+              >
+                {content}
+              </button>
+            )
+          }
+
+          return (
+            <Link
+              key={tab.href}
+              href={tab.href}
+              className={cn(
+                "flex flex-col items-center justify-center flex-1 py-2 text-xs transition-colors",
+                tab.primary ? "-mt-5" : "",
+                isActive && !tab.primary ? "text-royal-500" : tab.primary ? "" : "text-gray-400"
+              )}
+            >
+              {content}
+            </Link>
+          )
+        })}
+      </nav>
+    </>
   )
 }
 
@@ -282,6 +411,7 @@ export function DashboardLayout({ children, title }: { children: React.ReactNode
   const [counts, setCounts] = useState<Record<string, number>>({ estoque: 0, garantias: 0 })
   const [refreshKey, setRefreshKey] = useState(0)
   const [checkingAuth, setCheckingAuth] = useState(true)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const router = useRouter()
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), [])
@@ -349,13 +479,21 @@ export function DashboardLayout({ children, title }: { children: React.ReactNode
     <BadgeCountContext.Provider value={{ counts, refresh }}>
       <div className="min-h-screen bg-surface font-inter">
         <Sidebar />
-        <MobileNav />
+        <MobileNav isOpen={mobileMenuOpen} onOpenChange={setMobileMenuOpen} />
         {/* Main content */}
         <main className="md:ml-64 pb-20 md:pb-0 min-h-screen">
           {/* Top bar */}
           <header className="sticky top-0 z-30 bg-surface/80 backdrop-blur-xl border-b border-gray-100">
             <div className="flex items-center justify-between h-14 px-4 sm:px-6">
               <div className="flex items-center gap-2 md:hidden">
+                <button
+                  type="button"
+                  aria-label="Abrir menu"
+                  onClick={() => setMobileMenuOpen(true)}
+                  className="mr-1 rounded-xl border border-gray-200 bg-white p-2 text-navy-900 shadow-sm"
+                >
+                  <Menu className="h-4 w-4" />
+                </button>
                 <div className="w-8 h-8 rounded-lg bg-royal-500 flex items-center justify-center">
                   <Smartphone className="w-4 h-4 text-white" />
                 </div>
