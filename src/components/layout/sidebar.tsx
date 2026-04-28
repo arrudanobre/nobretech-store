@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { BarChart3, Package, ShoppingCart, ShieldCheck, AlertTriangle, FileText, Users, Truck, DollarSign, Settings, Smartphone, Calculator, ListChecks } from "lucide-react"
+import { BarChart3, Package, ShoppingCart, ShieldCheck, AlertTriangle, FileText, Users, Truck, DollarSign, Settings, Smartphone, Calculator, ListChecks, ChevronDown } from "lucide-react"
 import { useState, useEffect, createContext, useContext, useCallback } from "react"
 import { supabase } from "@/lib/supabase"
 
@@ -15,6 +15,11 @@ export interface NavItem {
     count: number
     color: string
   }
+  items?: {
+    label: string
+    href: string
+    disabled?: boolean
+  }[]
 }
 
 export interface BadgeCountContextType {
@@ -42,7 +47,20 @@ const staticNavItems: (Omit<NavItem, "badge"> & { badge?: { count?: number; defa
   { label: "Cotações", href: "/cotacoes", icon: FileText },
   { label: "Clientes", href: "/clientes", icon: Users },
   { label: "Fornecedores", href: "/fornecedores", icon: Truck },
-  { label: "Financeiro", href: "/financeiro", icon: DollarSign },
+  {
+    label: "Financeiro",
+    href: "/financeiro",
+    icon: DollarSign,
+    items: [
+      { label: "Painel Financeiro", href: "/financeiro" },
+      { label: "Entradas e Saídas", href: "/financeiro/transacoes" },
+      { label: "Gastos Mensais", href: "/financeiro/gastos" },
+      { label: "Taxas da Maquininha", href: "/financeiro/taxas" },
+      { label: "DRE", href: "#", disabled: true },
+      { label: "Contas a Receber", href: "#", disabled: true },
+      { label: "Contas a Pagar", href: "#", disabled: true },
+    ]
+  },
   { label: "Laudos", href: "/historico", icon: FileText },
   { label: "Configurações", href: "/configuracoes", icon: Settings },
 ]
@@ -50,7 +68,14 @@ const staticNavItems: (Omit<NavItem, "badge"> & { badge?: { count?: number; defa
 export function Sidebar() {
   const pathname = usePathname()
   const [collapsed, setCollapsed] = useState(false)
+  const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({
+    "/financeiro": pathname?.startsWith("/financeiro")
+  })
   const { counts } = useBadgeCount()
+
+  const toggleMenu = (href: string) => {
+    setOpenMenus(prev => ({ ...prev, [href]: !prev[href] }))
+  }
 
   const navItems: NavItem[] = staticNavItems.map((item) => {
     if (item.badge?.source === "db") {
@@ -91,45 +116,99 @@ export function Sidebar() {
       <nav className="flex-1 py-4 overflow-y-auto">
         <ul className="space-y-1 px-2">
           {navItems.map((item) => {
-            const isActive = pathname === item.href || (item.href !== "/dashboard" && pathname?.startsWith(item.href))
+            const isExactActive = pathname === item.href
+            const isChildActive = pathname !== item.href && pathname?.startsWith(item.href) && item.href !== "/dashboard"
+            const isActive = isExactActive || isChildActive
+            const isOpen = openMenus[item.href] || false
+            const hasItems = item.items && item.items.length > 0
+
             return (
-              <li key={item.href}>
-                <Link
-                  href={item.href}
-                  className={cn(
-                    "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-150 group relative",
-                    isActive
-                      ? "bg-royal-500 text-white"
-                      : "text-white/60 hover:bg-navy-800 hover:text-white"
-                  )}
-                  title={collapsed ? item.label : undefined}
-                >
-                  <item.icon className="w-5 h-5 shrink-0" />
-                  {!collapsed && (
-                    <>
-                      <span className="font-medium">{item.label}</span>
-                      {item.badge && (
-                        <span
-                          className={cn(
-                            "ml-auto text-xs px-2 py-0.5 rounded-full font-bold",
-                            item.badge.color,
-                            "text-white"
-                          )}
-                        >
-                          {item.badge.count}
-                        </span>
-                      )}
-                    </>
-                  )}
-                  {collapsed && item.badge && (
-                    <span
-                      className={cn(
-                        "absolute top-1 right-1 w-2 h-2 rounded-full",
-                        item.badge.color
-                      )}
-                    />
-                  )}
-                </Link>
+              <li key={item.href} className="flex flex-col">
+                {hasItems && !collapsed ? (
+                  <button
+                    onClick={() => toggleMenu(item.href)}
+                    className={cn(
+                      "flex items-center w-full gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-150 group relative",
+                      isActive && !isOpen
+                        ? "bg-navy-800 text-white"
+                        : "text-white/60 hover:bg-navy-800 hover:text-white"
+                    )}
+                  >
+                    <item.icon className={cn("w-5 h-5 shrink-0", isActive ? "text-royal-500" : "")} />
+                    <span className={cn("font-medium", isActive ? "text-white" : "")}>{item.label}</span>
+                    <ChevronDown className={cn("w-4 h-4 ml-auto transition-transform", isOpen ? "rotate-180" : "")} />
+                  </button>
+                ) : (
+                  <Link
+                    href={hasItems && collapsed ? item.items![0].href : item.href}
+                    className={cn(
+                      "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-150 group relative",
+                      isActive && !hasItems
+                        ? "bg-royal-500 text-white"
+                        : "text-white/60 hover:bg-navy-800 hover:text-white"
+                    )}
+                    title={collapsed ? item.label : undefined}
+                  >
+                    <item.icon className="w-5 h-5 shrink-0" />
+                    {!collapsed && (
+                      <>
+                        <span className="font-medium">{item.label}</span>
+                        {item.badge && (
+                          <span
+                            className={cn(
+                              "ml-auto text-xs px-2 py-0.5 rounded-full font-bold",
+                              item.badge.color,
+                              "text-white"
+                            )}
+                          >
+                            {item.badge.count}
+                          </span>
+                        )}
+                      </>
+                    )}
+                    {collapsed && item.badge && (
+                      <span
+                        className={cn(
+                          "absolute top-1 right-1 w-2 h-2 rounded-full",
+                          item.badge.color
+                        )}
+                      />
+                    )}
+                  </Link>
+                )}
+
+                {!collapsed && hasItems && isOpen && (
+                  <ul className="mt-1 ml-9 space-y-1 pr-2">
+                    {item.items!.map((subItem) => {
+                      const isSubActive = pathname === subItem.href
+                      if (subItem.disabled) {
+                        return (
+                          <li key={subItem.label}>
+                            <div className="flex items-center justify-between px-3 py-2 text-xs text-white/30 cursor-not-allowed">
+                              <span>{subItem.label}</span>
+                              <span className="bg-navy-800 px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wider">Em breve</span>
+                            </div>
+                          </li>
+                        )
+                      }
+                      return (
+                        <li key={subItem.href}>
+                          <Link
+                            href={subItem.href}
+                            className={cn(
+                              "block rounded-lg px-3 py-2 text-xs transition-colors",
+                              isSubActive
+                                ? "bg-royal-500/20 text-royal-400 font-medium"
+                                : "text-white/50 hover:text-white hover:bg-navy-800/50"
+                            )}
+                          >
+                            {subItem.label}
+                          </Link>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
               </li>
             )
           })}

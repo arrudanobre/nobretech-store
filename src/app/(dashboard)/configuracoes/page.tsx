@@ -7,7 +7,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { toast } from "sonner"
 import { supabase } from "@/lib/supabase"
-import { Building, FileText, Bell, MessageSquare, UserPlus, Users, Trash2, Mail, Loader2, Smartphone } from "lucide-react"
+import { Building, FileText, Bell, MessageSquare, UserPlus, Users, Trash2, Mail, Loader2, Smartphone, DollarSign, ArrowRight, Info } from "lucide-react"
+import Link from "next/link"
 
 interface TeamMember {
   id: string
@@ -20,7 +21,7 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState("company")
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  
+
   // Company state
   const [companyId, setCompanyId] = useState<string | null>(null)
   const [companyName, setCompanyName] = useState("")
@@ -28,7 +29,7 @@ export default function SettingsPage() {
   const [companyEmail, setCompanyEmail] = useState("")
   const [companyAddress, setCompanyAddress] = useState("")
   const [warrantyTemplate, setWarrantyTemplate] = useState("")
-  
+
   // Team state
   const [team, setTeam] = useState<TeamMember[]>([])
   const [inviteEmail, setInviteEmail] = useState("")
@@ -60,17 +61,17 @@ export default function SettingsPage() {
   useEffect(() => {
     async function loadData() {
       setLoading(true)
-      
+
       const { data: company, error: companyError } = await (supabase
         .from("companies") as any)
         .select("*")
         .limit(1)
         .single()
-      
+
       if (!companyError && company) {
         setCompanyId(company.id)
         setCompanyName(company.name || "")
-        
+
         // Robust settings parsing
         const settings = company.settings as any;
         if (settings && typeof settings === 'object') {
@@ -86,13 +87,13 @@ export default function SettingsPage() {
           .from("users") as any)
           .select("id, full_name, email, role")
           .eq("company_id", company.id)
-        
+
         if (members) setTeam(members as TeamMember[])
       } else {
         // Fallback for when there's no company detected yet
         toast.error("Nenhuma empresa vinculada encontrada.");
       }
-      
+
       setLoading(false)
     }
     loadData()
@@ -100,7 +101,7 @@ export default function SettingsPage() {
 
   const handleSave = async () => {
     if (!companyId) return
-    
+
     setSaving(true)
 
     // Construct settings object since columns address, phone, etc don't exist directly
@@ -147,13 +148,13 @@ export default function SettingsPage() {
 
       setInviteEmail("")
       toast.success(`Convite enviado para ${inviteEmail}`)
-      
+
       const { data: members } = await (supabase
         .from("users") as any)
         .select("id, full_name, email, role")
         .eq("company_id", companyId)
       if (members) setTeam(members as TeamMember[])
-      
+
     } catch (error: any) {
       toast.error("Erro ao convidar: " + error.message)
     }
@@ -166,7 +167,7 @@ export default function SettingsPage() {
     }
 
     const { error } = await supabase.from("users").delete().eq("id", id)
-    
+
     if (error) {
       toast.error("Erro ao remover: " + error.message)
     } else {
@@ -185,6 +186,7 @@ export default function SettingsPage() {
     { key: "company", label: "Empresa", icon: Building },
     { key: "team", label: "Equipe", icon: Users },
     { key: "settings", label: "Garantia", icon: FileText },
+    { key: "finance", label: "Financeiro", icon: DollarSign },
   ]
 
   if (loading) {
@@ -233,11 +235,11 @@ export default function SettingsPage() {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Input label="Nome da Loja" value={companyName} onChange={(e) => setCompanyName(e.target.value)} />
-              <Input 
-                label="WhatsApp / Telefone" 
+              <Input
+                label="WhatsApp / Telefone"
                 placeholder="(00) 00000-0000"
-                value={companyPhone} 
-                onChange={handlePhoneChange} 
+                value={companyPhone}
+                onChange={handlePhoneChange}
               />
               <Input label="E-mail de Contato" type="email" value={companyEmail} onChange={(e) => setCompanyEmail(e.target.value)} />
               <Input label="Endereço Físico" value={companyAddress} onChange={(e) => setCompanyAddress(e.target.value)} />
@@ -350,9 +352,62 @@ export default function SettingsPage() {
             </div>
           </div>
         )}
+
+        {activeTab === "finance" && (
+          <div className="bg-card rounded-2xl border border-gray-100 p-6 shadow-sm space-y-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-100 flex items-center justify-center">
+                <DollarSign className="w-5 h-5 text-emerald-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-navy-900 text-lg font-syne">Módulo Financeiro</h3>
+                <p className="text-xs text-gray-500">Configurações e controles financeiros</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Link href="/financeiro/taxas" className="group p-4 bg-gray-50 rounded-2xl border border-gray-100 hover:border-royal-200 transition-all">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 bg-white rounded-xl flex items-center justify-center border border-gray-100">
+                      <Smartphone className="w-4 h-4 text-royal-500" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-navy-900 text-sm">Taxas da Maquininha</p>
+                      <p className="text-[10px] text-gray-500">Configure sua margem e taxas de cartão</p>
+                    </div>
+                  </div>
+                  <ArrowRight className="w-4 h-4 text-gray-300 group-hover:text-royal-500 transition-colors" />
+                </div>
+              </Link>
+
+              <Link href="/financeiro/transacoes" className="group p-4 bg-gray-50 rounded-2xl border border-gray-100 hover:border-emerald-200 transition-all">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 bg-white rounded-xl flex items-center justify-center border border-gray-100">
+                      <DollarSign className="w-4 h-4 text-emerald-500" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-navy-900 text-sm">Entradas e Saídas</p>
+                      <p className="text-[10px] text-gray-500">Gestão de caixa e movimentações</p>
+                    </div>
+                  </div>
+                  <ArrowRight className="w-4 h-4 text-gray-300 group-hover:text-emerald-500 transition-colors" />
+                </div>
+              </Link>
+            </div>
+
+            <div className="p-4 bg-royal-50 rounded-xl border border-royal-100 flex items-start gap-3">
+              <Info className="w-5 h-5 text-royal-500 shrink-0 mt-0.5" />
+              <p className="text-xs text-royal-700 leading-relaxed">
+                As configurações de taxas foram migradas para o novo módulo financeiro para facilitar a gestão integrada com as vendas e gastos da loja.
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
-      {activeTab !== "team" && (
+      {activeTab !== "team" && activeTab !== "finance" && (
         <div className="fixed bottom-6 right-6 left-6 md:static md:bottom-0 md:right-0 md:left-0">
           <Button fullWidth variant="primary" size="lg" onClick={handleSave} disabled={saving} className="shadow-2xl shadow-royal-600/40">
             {saving ? <Loader2 className="w-5 h-5 animate-spin" /> : "Salvar Configurações"}

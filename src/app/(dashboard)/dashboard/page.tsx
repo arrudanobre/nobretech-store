@@ -6,6 +6,7 @@ import { KPICard } from "@/components/ui/kpi-card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { formatBRL } from "@/lib/helpers"
+import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
 import {
   DollarSign,
   Package,
@@ -126,7 +127,7 @@ export default function DashboardPage() {
           .in("status", ["active", "in_stock"] as any),
 
         (supabase.from("sales") as any)
-          .select("sale_price, net_amount, created_at, source_type, supplier_cost, inventory:inventory_id(purchase_price, type)")
+          .select("sale_price, net_amount, created_at, source_type, supplier_cost, notes, inventory:inventory_id(purchase_price, type), sales_additional_items(*)")
           .gte("sale_date", startOfMonth),
 
         (supabase.from("sales") as any)
@@ -172,7 +173,15 @@ export default function DashboardPage() {
       const profits = salesMonth.map((s) => {
         const cost = (s.inventory as any)?.purchase_price ?? 0
         const revenue = s.net_amount ?? s.sale_price ?? 0
-        return revenue - cost
+        const qty = parseQtyFromNotes(s.notes)
+        const totals = calcSaleTotals({
+          salePrice: revenue,
+          mainCost: cost,
+          qty,
+          additionalItems: s.sales_additional_items || [],
+          supplierCost: s.supplier_cost
+        })
+        return totals.lucroTotal
       })
       const totalProfit = profits.reduce((a, b) => a + b, 0)
       setMonthlyProfit(totalProfit)

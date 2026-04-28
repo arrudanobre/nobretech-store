@@ -11,6 +11,16 @@ type SaleDocumentItem = {
   warrantyMonths: number
 }
 
+export type ReceiptLineItem = {
+  name: string
+  imei?: string | null
+  quantity: number
+  unitPrice: number
+  totalPrice: number
+  warrantyMonths: number
+  type: "principal" | "upsell" | "free"
+}
+
 export type SaleDocumentData = {
   saleId: string
   saleDate: string
@@ -22,6 +32,8 @@ export type SaleDocumentData = {
   saleNotes?: string | null
   additionalItems?: string | null
   item: SaleDocumentItem
+  /** Optional: multiple line items for multi-product receipt */
+  receiptItems?: ReceiptLineItem[]
 }
 
 const STORE_NAME = "NobreTech Store"
@@ -124,12 +136,21 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
   const doc = new JSPDF("p", "mm", "a4")
   const seller = data.sellerName || DEFAULT_SELLER
   const saleDate = formatDate(data.saleDate)
-  const desc = productDescription(data.item)
   const observations = saleObservations(data)
+
+  // Resolve items — use receiptItems if available, fallback to single item
+  const lines: ReceiptLineItem[] = data.receiptItems && data.receiptItems.length > 0
+    ? data.receiptItems
+    : [{ ...data.item, type: "principal" as const }]
+
+  const grandTotal = lines
+    .filter((l) => l.type !== "free")
+    .reduce((sum, l) => sum + l.totalPrice, 0)
 
   doc.setDrawColor(0, 0, 0)
   doc.setLineWidth(0.35)
 
+  // ── Header ──
   doc.rect(17, 28, 176, 16)
   doc.line(56, 28, 56, 44)
   doc.line(158, 28, 158, 44)
@@ -154,6 +175,7 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
   setFont(doc, 9)
   text(doc, seller, 102, 53)
 
+  // ── Consumer ──
   setFont(doc, 9, "bold")
   text(doc, "CONSUMIDOR", 17.5, 59)
   doc.setFillColor(MID_GRAY)
@@ -173,61 +195,86 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
   text(doc, data.customerPhone || "", 132, 67)
   text(doc, data.customerCpf || "", 167, 67)
 
+  // ── Products table ──
+  const ROW_H = 10
+  const tableTop = 75
   setFont(doc, 9, "bold")
   text(doc, "PRODUTOS", 17.5, 74)
-  doc.rect(17, 75, 176, 16)
-  doc.rect(17, 75, 23, 16)
-  doc.rect(40, 75, 88, 16)
-  doc.rect(128, 75, 14, 16)
-  doc.rect(142, 75, 9, 16)
-  doc.rect(151, 75, 22, 16)
-  doc.rect(173, 75, 20, 16)
-  doc.setFillColor(MID_GRAY)
-  doc.rect(17, 75, 176, 5, "F")
-  setFont(doc, 8.2, "bold")
-  text(doc, "Código/SKU", 28.5, 79, { align: "center" })
-  text(doc, "Descrição", 84, 79, { align: "center" })
-  text(doc, "Garantia", 135, 79, { align: "center" })
-  text(doc, "Qtd", 146.5, 79, { align: "center" })
-  text(doc, "Valor Unit.", 162, 79, { align: "center" })
-  text(doc, "Total", 183, 79, { align: "center" })
-  setFont(doc, 8.2)
-  text(doc, doc.splitTextToSize(desc, 86).slice(0, 2), 41, 85)
-  text(doc, warrantyLabel(data.item.warrantyMonths), 135, 86, { align: "center" })
-  text(doc, String(data.item.quantity), 146.5, 86, { align: "center" })
-  text(doc, money(data.item.unitPrice), 162, 86, { align: "center" })
-  text(doc, money(data.item.totalPrice), 183, 86, { align: "center" })
-  doc.rect(151, 91, 42, 4)
-  setFont(doc, 8.2, "bold")
-  text(doc, "Total", 152, 94)
-  text(doc, money(data.item.totalPrice), 183, 94, { align: "center" })
 
+  const totalTableH = ROW_H * lines.length + 5 // header row(5) + data rows
+  doc.rect(17, tableTop, 176, totalTableH + 5)
+  // column dividers
+  const colX = { sku: 17, desc: 40, guar: 128, qty: 142, unit: 151, total: 173 }
+  doc.line(colX.desc, tableTop, colX.desc, tableTop + totalTableH + 5)
+  doc.line(colX.guar, tableTop, colX.guar, tableTop + totalTableH + 5)
+  doc.line(colX.qty, tableTop, colX.qty, tableTop + totalTableH + 5)
+  doc.line(colX.unit, tableTop, colX.unit, tableTop + totalTableH + 5)
+  doc.line(colX.total, tableTop, colX.total, tableTop + totalTableH + 5)
+
+  doc.setFillColor(MID_GRAY)
+  doc.rect(17, tableTop, 176, 5, "F")
+  setFont(doc, 8.2, "bold")
+  text(doc, "Tipo", 28.5, tableTop + 3.5, { align: "center" })
+  text(doc, "Descrição", 84, tableTop + 3.5, { align: "center" })
+  text(doc, "Garantia", 135, tableTop + 3.5, { align: "center" })
+  text(doc, "Qtd", 146.5, tableTop + 3.5, { align: "center" })
+  text(doc, "Valor Unit.", 162, tableTop + 3.5, { align: "center" })
+  text(doc, "Total", 183, tableTop + 3.5, { align: "center" })
+
+  setFont(doc, 8.2)
+  lines.forEach((line, idx) => {
+    const rowY = tableTop + 5 + idx * ROW_H
+    const isFree = line.type === "free"
+    const typeLabel = line.type === "principal" ? "Principal" : line.type === "upsell" ? "Upsell" : "Brinde"
+    const descLine = [line.name, line.imei ? `IMEI: ${line.imei}` : null].filter(Boolean).join(" — ")
+    text(doc, typeLabel, 28.5, rowY + 6, { align: "center" })
+    text(doc, doc.splitTextToSize(descLine, 86).slice(0, 1), 41, rowY + 6)
+    text(doc, warrantyLabel(line.warrantyMonths), 135, rowY + 6, { align: "center" })
+    text(doc, String(line.quantity), 146.5, rowY + 6, { align: "center" })
+    text(doc, isFree ? "—" : money(line.unitPrice), 162, rowY + 6, { align: "center" })
+    text(doc, isFree ? "Brinde" : money(line.totalPrice), 183, rowY + 6, { align: "center" })
+    if (idx < lines.length - 1) doc.line(17, rowY + ROW_H, 193, rowY + ROW_H)
+  })
+
+  const afterTableY = tableTop + totalTableH + 5
+  doc.rect(151, afterTableY, 42, 4)
+  setFont(doc, 8.2, "bold")
+  text(doc, "Total", 152, afterTableY + 3)
+  text(doc, money(grandTotal), 183, afterTableY + 3, { align: "center" })
+
+  // ── Payment ──
+  const payY = afterTableY + 7
   setFont(doc, 9, "bold")
-  text(doc, "PAGAMENTO", 17.5, 101)
-  doc.rect(17, 102, 176, 5)
-  doc.line(158, 102, 158, 107)
+  text(doc, "PAGAMENTO", 17.5, payY)
+  doc.rect(17, payY + 1, 176, 5)
+  doc.line(158, payY + 1, 158, payY + 6)
   doc.setFillColor(MID_GRAY)
-  doc.rect(17, 102, 176, 5, "F")
+  doc.rect(17, payY + 1, 176, 5, "F")
   setFont(doc, 8.2, "bold")
-  text(doc, "Forma de Pagamento", 87, 106, { align: "center" })
-  text(doc, "Valor Pago", 176, 106, { align: "center" })
+  text(doc, "Forma de Pagamento", 87, payY + 5, { align: "center" })
+  text(doc, "Valor Pago", 176, payY + 5, { align: "center" })
   setFont(doc, 8.2)
-  text(doc, data.paymentMethod, 87, 111, { align: "center" })
-  text(doc, money(data.item.totalPrice), 176, 111, { align: "center" })
+  text(doc, data.paymentMethod, 87, payY + 10, { align: "center" })
+  text(doc, money(grandTotal), 176, payY + 10, { align: "center" })
 
-  setFont(doc, 8.4, "bold")
-  text(doc, "OBSERVAÇÕES DA VENDA:", 17.5, 119)
+  // ── Observations ──
+  const obsY = payY + 13
+  setFont(doc, 9, "bold")
+  text(doc, "OBSERVAÇÕES DA VENDA", 17.5, obsY)
+  doc.rect(17, obsY + 1, 176, 12)
   setFont(doc, 8.4)
-  text(doc, doc.splitTextToSize(observations, 135), 56.5, 119)
+  text(doc, doc.splitTextToSize(observations, 172), 19, obsY + 5.5)
 
-  doc.rect(17, 136, 176, 109)
-  doc.line(17, 140, 193, 140)
+  // ── Warranty terms ──
+  const termsY = obsY + 17
+  doc.rect(17, termsY, 176, Math.min(109, 297 - termsY - 30))
+  doc.line(17, termsY + 4, 193, termsY + 4)
   setFont(doc, 8.6, "bold")
-  text(doc, "DADOS ADICIONAIS", 19.5, 139)
-  drawWarrantyText(doc, 19.5, 144, 171, 4.05)
-  drawSignature(doc, 255, data.customerName)
+  text(doc, "DADOS ADICIONAIS", 19.5, termsY + 3)
+  drawWarrantyText(doc, 19.5, termsY + 8, 171, 4.05)
+  drawSignature(doc, termsY + 113, data.customerName)
 
-  doc.save(`${safeFileName(data.item.name)} - Recibo.pdf`)
+  doc.save(`Recibo-${safeFileName(data.customerName)}-${receiptNumber(data.saleId)}.pdf`)
 }
 
 export async function generateWarrantyPDF(data: SaleDocumentData) {

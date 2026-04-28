@@ -6,9 +6,19 @@ import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
-import { formatBRL, formatDate, daysBetween, getProductName } from "@/lib/helpers"
+import { formatBRL, formatDate, daysBetween, getProductName, getAdditionalItemDisplayName } from "@/lib/helpers"
+import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
 import { supabase } from "@/lib/supabase"
-import { Plus, Search } from "lucide-react"
+import { Plus, Search, TrendingUp, ShoppingCart, Calendar, CreditCard, ChevronRight } from "lucide-react"
+
+function formatPayment(method?: string) {
+  if (!method) return "—"
+  return method
+    .replace("credit_", "Crédito ")
+    .replace("debit", "Débito")
+    .replace("pix", "PIX")
+    .replace("cash", "Dinheiro")
+}
 
 export default function SalesPage() {
   const [search, setSearch] = useState("")
@@ -34,20 +44,15 @@ export default function SalesPage() {
               status,
               catalog:catalog_id (id, brand, model, variant, storage, color)
             ),
-            sales_additional_items (type, cost_price, sale_price, profit)
+            sales_additional_items (id, type, name, cost_price, sale_price, profit)
           `)
           .order("sale_date", { ascending: false })
-          .limit(50)
+          .limit(100)
 
         if (error) throw error
         setSales(data || [])
       } catch (err: any) {
-        console.error("Erro detalhado ao carregar vendas:", {
-          message: err?.message,
-          details: err?.details,
-          hint: err?.hint,
-          code: err?.code
-        })
+        console.error("Erro ao carregar vendas:", err?.message)
       } finally {
         setLoading(false)
       }
@@ -67,10 +72,12 @@ export default function SalesPage() {
 
   const totalMonth = sales
     .filter((s) => {
-      const d = daysBetween(s.sale_date.slice(0, 7) + "-01")
-      return d < 31
+      const saleMonth = (s.sale_date || "").slice(0, 7)
+      const now = new Date()
+      const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
+      return saleMonth === thisMonth
     })
-    .reduce((sum, s) => sum + Number(s.sale_price), 0)
+    .reduce((sum, s) => sum + Number(s.sale_price || 0), 0)
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -107,74 +114,134 @@ export default function SalesPage() {
           </Link>
         </div>
       ) : (
-        <div className="space-y-2">
-          {filtered.map((s) => {
-            const customerName = s.customers?.full_name || "—"
-            const productName = getProductName(s.inventory || {})
-            const warrantyDays = daysBetween(s.warranty_end)
-            // sale_price stored may be total (qty * unit) or unit. Parse notes for qty hint.
-            const salePrice = Number(s.sale_price) || 0
-            const costPrice = s.inventory?.purchase_price || 0
-            // Detect quantity from notes format "[Nx ...]"
-            const notes = s.notes || ""
-            const qtyMatch = notes.match(/^\[(\d+)x/)
-            const qty = qtyMatch ? parseInt(qtyMatch[1]) : 1
+        <>
+          {/* Desktop: tabela */}
+          <div className="hidden lg:block bg-card rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50/80 border-b border-gray-100">
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Data</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Produto / Cliente</th>
+                  <th className="text-center px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Itens</th>
+                  <th className="text-left px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Pagamento</th>
+                  <th className="text-right px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Total</th>
+                  <th className="text-right px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Lucro</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Garantia</th>
+                  <th className="px-4 py-3"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {filtered.map((s) => {
+                  const additionalItems = s.sales_additional_items || []
+                  const totals = calcSaleTotals({
+                    salePrice: s.sale_price,
+                    mainCost: s.inventory?.purchase_price,
+                    qty: parseQtyFromNotes(s.notes),
+                    additionalItems,
+                    supplierCost: s.supplier_cost,
+                  })
+                  const warrantyDays = daysBetween(s.warranty_end)
+                  const productName = getProductName(s.inventory || {})
+                  const customerName = s.customers?.full_name || "—"
+                  const upsellItems = additionalItems.filter((i: any) => i.type === "upsell")
+                  return (
+                    <tr
+                      key={s.id}
+                      onClick={() => router.push(`/vendas/${s.id}`)}
+                      className="hover:bg-gray-50/60 cursor-pointer transition-colors"
+                    >
+                      <td className="px-5 py-3 text-gray-500 whitespace-nowrap">{formatDate(s.sale_date)}</td>
+                      <td className="px-4 py-3">
+                        <p className="font-semibold text-navy-900 truncate max-w-[200px]">{productName}</p>
+                        <p className="text-xs text-gray-400">{customerName}</p>
+                        {upsellItems.length > 0 && (
+                          <p className="text-xs text-royal-500 mt-0.5">
+                            + {upsellItems.map((i: any) => getAdditionalItemDisplayName(i.name)).join(", ")}
+                          </p>
+                        )}
+                      </td>
+                      <td className="px-3 py-3 text-center">
+                        <span className="text-xs font-semibold bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                          {totals.quantidadeTotalItens}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{formatPayment(s.payment_method)}</td>
+                      <td className="px-4 py-3 text-right font-bold text-navy-900 whitespace-nowrap">{formatBRL(totals.valorTotal)}</td>
+                      <td className={`px-4 py-3 text-right font-bold whitespace-nowrap ${totals.lucroTotal >= 0 ? "text-success-600" : "text-danger-500"}`}>
+                        {totals.lucroTotal >= 0 ? "+" : ""}{formatBRL(totals.lucroTotal)}
+                        <span className="text-xs font-normal text-gray-400 ml-1">({totals.margemTotal.toFixed(1)}%)</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge variant={warrantyDays > 15 ? "green" : warrantyDays > 0 ? "yellow" : "red"} dot>
+                          {Math.max(0, warrantyDays)}d
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3">
+                        <ChevronRight className="w-4 h-4 text-gray-300" />
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
 
-            // Calculate main product price (total minus upsells)
-            const additionalItems = s.sales_additional_items || []
-            const upsellTotal = additionalItems.reduce((sum: number, item: any) => {
-              return sum + (Number(item.sale_price) || 0)
-            }, 0)
-            const mainProductPrice = salePrice - upsellTotal
+          {/* Mobile / Tablet: cards */}
+          <div className="lg:hidden space-y-2">
+            {filtered.map((s) => {
+              const additionalItems = s.sales_additional_items || []
+              const totals = calcSaleTotals({
+                salePrice: s.sale_price,
+                mainCost: s.inventory?.purchase_price,
+                qty: parseQtyFromNotes(s.notes),
+                additionalItems,
+                supplierCost: s.supplier_cost,
+              })
+              const warrantyDays = daysBetween(s.warranty_end)
+              const productName = getProductName(s.inventory || {})
+              const customerName = s.customers?.full_name || "—"
+              const upsellItems = additionalItems.filter((i: any) => i.type === "upsell")
 
-            const baseProfit = mainProductPrice - (costPrice * qty)
-            const additionalProfit = additionalItems.reduce((sum: number, item: any) => sum + Number(item.profit || 0), 0)
-            const totalProfit = baseProfit + additionalProfit
-
-            return (
-              <button
-                key={s.id}
-                onClick={() => router.push(`/vendas/${s.id}`)}
-                className="w-full bg-card rounded-xl border border-gray-100 p-4 shadow-sm hover:shadow-md hover:border-royal-200/50 hover:bg-gray-50/30 transition-all text-left cursor-pointer active:scale-[0.995]"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="font-semibold text-sm text-navy-900 truncate">{productName}</p>
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      {customerName} · {s.payment_method ? s.payment_method.replace("credit_", "Crédito ").replace("debit", "Débito").replace("pix", "PIX").replace("cash", "Dinheiro") : "—"} · {formatDate(s.sale_date)}
-                    </p>
-                    {s.source_type === "supplier" && (
-                      <p className="text-xs text-gray-500">Fornecedor{s.supplier_name ? `: ${s.supplier_name}` : ""}</p>
-                    )}
-                  </div>
-                  <div className="text-right shrink-0">
-                    <p className="font-bold text-navy-900">{formatBRL(mainProductPrice)}</p>
-                    {additionalItems.length > 0 && (
+              return (
+                <button
+                  key={s.id}
+                  onClick={() => router.push(`/vendas/${s.id}`)}
+                  className="w-full bg-card rounded-xl border border-gray-100 p-4 shadow-sm hover:shadow-md hover:border-royal-200/50 transition-all text-left cursor-pointer active:scale-[0.995]"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold text-sm text-navy-900 truncate">{productName}</p>
                       <p className="text-xs text-gray-500 mt-0.5">
-                        + {additionalItems.length} item{additionalItems.length > 1 ? 's' : ''} adicional{additionalItems.length > 1 ? 'es' : ''}
+                        {customerName} · {formatPayment(s.payment_method)} · {formatDate(s.sale_date)}
                       </p>
+                      {upsellItems.length > 0 && (
+                        <p className="text-xs text-royal-500 mt-0.5">
+                          Inclui: {upsellItems.map((i: any) => getAdditionalItemDisplayName(i.name)).join(", ")}
+                        </p>
+                      )}
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="font-bold text-navy-900">{formatBRL(totals.valorTotal)}</p>
+                      {totals.quantidadeTotalItens > 1 && (
+                        <p className="text-xs text-gray-400">{totals.quantidadeTotalItens} itens</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 mt-2">
+                    <Badge variant={warrantyDays > 15 ? "green" : warrantyDays > 0 ? "yellow" : "red"} dot>
+                      Garantia: {Math.max(0, warrantyDays)} dias
+                    </Badge>
+                    {totals.lucroTotal !== 0 && (
+                      <Badge variant={totals.lucroTotal > 0 ? "green" : "red"} dot>
+                        Lucro: {totals.lucroTotal > 0 ? "+" : ""}{formatBRL(totals.lucroTotal)}
+                      </Badge>
                     )}
                   </div>
-                </div>
-                <div className="flex items-center gap-2 mt-2">
-                  <Badge
-                    variant={
-                      warrantyDays > 15 ? "green" : warrantyDays > 0 ? "yellow" : "red"
-                    }
-                    dot
-                  >
-                    Garantia: {Math.max(0, warrantyDays)} dias
-                  </Badge>
-                  {totalProfit !== 0 && (
-                    <Badge variant={totalProfit > 0 ? "green" : "red"} dot>
-                      Lucro: {totalProfit > 0 ? "+" : ""}{formatBRL(totalProfit)}
-                    </Badge>
-                  )}
-                </div>
-              </button>
-            )
-          })}
-        </div>
+                </button>
+              )
+            })}
+          </div>
+        </>
       )}
     </div>
   )

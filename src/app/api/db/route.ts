@@ -18,6 +18,8 @@ const TABLES_WITH_COMPANY = new Set([
   "financial_settings",
   "supplier_prices",
   "sales_additional_items",
+  "audit_logs",
+  "transactions",
 ])
 
 const JSON_COLUMNS: Record<string, Set<string>> = {
@@ -185,6 +187,10 @@ async function hydrate(table: string, rows: Record<string, unknown>[]) {
     await hydrateChecklists(rows)
   }
 
+  if (table === "sales_additional_items") {
+    await hydrateSalesAdditionalItems(rows)
+  }
+
   return rows
 }
 
@@ -213,6 +219,7 @@ async function hydrateSales(rows: Record<string, unknown>[]) {
   const additional = saleIds.length
     ? await pool.query("SELECT * FROM sales_additional_items WHERE sale_id = ANY($1::uuid[])", [saleIds])
     : { rows: [] as Record<string, unknown>[] }
+  await hydrateSalesAdditionalItems(additional.rows)
 
   for (const row of rows) {
     const customer = customers.get(String(row.customer_id || "")) || null
@@ -221,6 +228,15 @@ async function hydrateSales(rows: Record<string, unknown>[]) {
     row.customers = customer
     row.inventory = item
     row.sales_additional_items = additional.rows.filter((add) => add.sale_id === row.id)
+  }
+}
+
+async function hydrateSalesAdditionalItems(rows: Record<string, unknown>[]) {
+  const inventory = await getByIds("inventory", rows.map((row) => row.product_id))
+  await hydrateInventory(Array.from(inventory.values()))
+
+  for (const row of rows) {
+    row.inventory = inventory.get(String(row.product_id || "")) || null
   }
 }
 

@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input"
 import { useToast } from "@/components/ui/toaster"
 import { formatBRL, formatDate, daysBetween } from "@/lib/helpers"
 import { supabase } from "@/lib/supabase"
-import { generateWarrantyPDF as generateWarrantyTermDocument, type SaleDocumentData } from "@/lib/sale-documents"
+import { generateWarrantyPDF as generateWarrantyTermDocument, generateReceiptPDF as generateReceiptDocument, type SaleDocumentData } from "@/lib/sale-documents"
 import { Search, ShieldCheck, Download, FileText } from "lucide-react"
 import jsPDF from "jspdf"
 
@@ -394,7 +394,7 @@ export default function WarrantiesPage() {
   }
 
   const generateWarrantyTermPDF = async (w: any) => {
-    setGenerating(w.id)
+    setGenerating(w.id + '_term')
     try {
       const catalog = w.inventory?.product_catalog || {}
       const productName = `${catalog.model || "Aparelho"}${catalog.variant ? ` ${catalog.variant}` : ""}${catalog.storage ? ` ${catalog.storage}` : ""}${catalog.color ? ` ${catalog.color}` : ""}`.trim()
@@ -422,6 +422,40 @@ export default function WarrantiesPage() {
     } catch (err) {
       console.error("Erro ao gerar termo novo:", err)
       toast({ title: "Erro ao gerar termo", type: "error" })
+    } finally {
+      setGenerating(null)
+    }
+  }
+
+  const generateWarrantyReceiptPDF = async (w: any) => {
+    setGenerating(w.id + '_receipt')
+    try {
+      const catalog = w.inventory?.product_catalog || {}
+      const productName = `${catalog.model || "Aparelho"}${catalog.variant ? ` ${catalog.variant}` : ""}${catalog.storage ? ` ${catalog.storage}` : ""}${catalog.color ? ` ${catalog.color}` : ""}`.trim()
+      const documentData: SaleDocumentData = {
+        saleId: w.sales?.id || w.id,
+        saleDate: w.sales?.sale_date || w.start_date,
+        customerName: w.customers?.full_name || "Cliente",
+        customerCpf: w.customers?.cpf || null,
+        customerPhone: w.customers?.phone || null,
+        paymentMethod: w.sales?.payment_method || "",
+        saleNotes: w.notes || w.inventory?.condition_notes || null,
+        item: {
+          name: productName,
+          imei: w.inventory?.imei || null,
+          imei2: w.inventory?.imei2 || null,
+          quantity: 1,
+          unitPrice: Number(w.sales?.sale_price || 0),
+          totalPrice: Number(w.sales?.sale_price || 0),
+          warrantyMonths: Number(w.sales?.warranty_months || 0),
+        },
+      }
+
+      await generateReceiptDocument(documentData)
+      toast({ title: "Recibo gerado!", type: "success" })
+    } catch (err) {
+      console.error("Erro ao gerar recibo:", err)
+      toast({ title: "Erro ao gerar recibo", type: "error" })
     } finally {
       setGenerating(null)
     }
@@ -547,16 +581,29 @@ export default function WarrantiesPage() {
                   <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${progress}%` }} />
                 </div>
 
-                <div className="flex items-center justify-between mt-2">
+                <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
                   <span className="text-xs text-gray-400">{formatBRL(salePrice)}</span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => generateWarrantyTermPDF(w)}
-                    isLoading={generating === w.id}
-                  >
-                    <FileText className="w-3.5 h-3.5 mr-1" /> Baixar Termo
-                  </Button>
+                  <div className="flex items-center gap-2 ml-auto">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => generateWarrantyReceiptPDF(w)}
+                      isLoading={generating === w.id + '_receipt'}
+                      disabled={!w.sales?.id}
+                      title={!w.sales?.id ? "Recibo não disponível" : undefined}
+                      className={!w.sales?.id ? "opacity-50 cursor-not-allowed" : ""}
+                    >
+                      <Download className="w-3.5 h-3.5 mr-1" /> Baixar Recibo
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => generateWarrantyTermPDF(w)}
+                      isLoading={generating === w.id + '_term'}
+                    >
+                      <FileText className="w-3.5 h-3.5 mr-1" /> Baixar Termo
+                    </Button>
+                  </div>
                 </div>
               </div>
             )

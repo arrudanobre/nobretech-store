@@ -6,11 +6,13 @@ import { useToast } from "@/components/ui/toaster"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { supabase } from "@/lib/supabase"
-import { formatBRL, formatDate, getAdditionalItemDisplayName, getTradeInDisplayName, getTradeInSummaryStatus, getInventoryStatusMeta, isPendingInventoryStatus } from "@/lib/helpers"
+import { formatBRL, formatDate, getAdditionalItemDisplayName, getTradeInDisplayName, getTradeInSummaryStatus, getInventoryStatusMeta, isPendingInventoryStatus, getProductName } from "@/lib/helpers"
+import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
 import { CHECKLIST_TEMPLATES } from "@/lib/constants"
-import { generateWarrantyPDF as generateWarrantyTermDocument, type SaleDocumentData } from "@/lib/sale-documents"
+import { generateWarrantyPDF as generateWarrantyTermDocument, generateReceiptPDF, type SaleDocumentData, type ReceiptLineItem } from "@/lib/sale-documents"
 import jsPDF from "jspdf"
-import { ArrowLeft, ShieldCheck, FileText, CreditCard, User, ShoppingCart, AlertTriangle, Download, CheckCircle2, XCircle, MinusCircle, Loader2 } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import { ArrowLeft, ShieldCheck, FileText, CreditCard, User, ShoppingCart, AlertTriangle, Download, CheckCircle2, XCircle, MinusCircle, Loader2, Edit, Trash, Plus, Calendar, History, Trash2, Search } from "lucide-react"
 
 const checklistLabels: Record<string, string> = {}
 for (const [cat, items] of Object.entries(CHECKLIST_TEMPLATES)) {
@@ -33,6 +35,31 @@ export default function SaleDetailPage() {
   const [additionalItems, setAdditionalItems] = useState<any[]>([])
   const [tradeInData, setTradeInData] = useState<any>(null)
   const [tradeInInventory, setTradeInInventory] = useState<any>(null)
+
+  const [auditLogs, setAuditLogs] = useState<any[]>([])
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false)
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [editDate, setEditDate] = useState("")
+
+  const [inventoryItems, setInventoryItems] = useState<any[]>([])
+  const [searchQuery, setSearchQuery] = useState("")
+  const [isSearchFocused, setIsSearchFocused] = useState(false)
+  const [selectedInventoryItemId, setSelectedInventoryItemId] = useState("")
+  const [newItemName, setNewItemName] = useState("")
+  const [newItemType, setNewItemType] = useState<"upsell" | "free">("upsell")
+  const [newItemCost, setNewItemCost] = useState("")
+  const [newItemSalePrice, setNewItemSalePrice] = useState("")
+
+  const availableInventoryItems = inventoryItems.filter(item =>
+    !additionalItems.some(add => add.product_id === item.id) &&
+    sale?.inventory_id !== item.id &&
+    (searchQuery === "" ||
+      getProductName(item).toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (item.imei && item.imei.includes(searchQuery)) ||
+      (item.serial_number && item.serial_number.includes(searchQuery))
+    )
+  )
 
   useEffect(() => {
     const fetchSale = async () => {
@@ -102,9 +129,23 @@ export default function SaleDetailPage() {
         if (id) {
           const { data: addItems } = await (supabase
             .from("sales_additional_items") as any)
-            .select("*")
+            .select("*, inventory:product_id(id, imei, imei2, serial_number, grade, catalog:catalog_id(*))")
             .eq("sale_id", id)
           if (addItems) setAdditionalItems(addItems)
+
+          const { data: logs } = await (supabase
+            .from("audit_logs") as any)
+            .select("*")
+            .eq("table_name", "sales")
+            .eq("record_id", id)
+            .order("created_at", { ascending: false })
+          if (logs) setAuditLogs(logs)
+
+          const { data: inv } = await (supabase
+            .from("inventory") as any)
+            .select("id, imei, imei2, serial_number, condition_notes, notes, purchase_price, suggested_price, type, supplier_name, status, catalog:catalog_id(*)")
+            .in("status", ["active", "in_stock"])
+          if (inv) setInventoryItems(inv)
         }
       } catch (err) {
         toast({ title: "Venda não encontrada", type: "error" })
@@ -129,6 +170,15 @@ export default function SaleDetailPage() {
     }
     return map[sale.payment_method] || sale.payment_method
   }
+
+  // Compute totals early (safe: sale/product may be null during loading)
+  const totals = calcSaleTotals({
+    salePrice: sale?.sale_price,
+    mainCost: product?.purchase_price,
+    qty: parseQtyFromNotes(sale?.notes),
+    additionalItems: additionalItems || [],
+    supplierCost: sale?.supplier_cost,
+  })
 
   const handleDownloadInspectionPDF = async () => {
     const { default: jsPDF } = await import("jspdf")
@@ -212,6 +262,98 @@ export default function SaleDetailPage() {
       toast({ title: "Termo de garantia gerado!", type: "success" })
     } catch (err) {
       console.error("Erro ao gerar termo novo:", err)
+      toast({ title: "Erro ao gerar termo", type: "error" })
+    } finally {
+      setGenerating(null)
+    }
+  }
+
+  const handleDownloadReceiptPDF = async () => {
+    setGenerating("receipt")
+    try {
+      const catalog = product?.catalog || {}
+      const mainProductName = `${catalog.model || "Aparelho"}${catalog.variant ? ` ${catalog.variant}` : ""}${catalog.storage ? ` ${catalog.storage}` : ""}${catalog.color ? ` ${catalog.color}` : ""}`.trim()
+
+      const receiptLines: ReceiptLineItem[] = [
+        {
+          name: mainProductName,
+          imei: product?.imei || null,
+          quantity: parseQtyFromNotes(sale?.notes),
+          unitPrice: totals.valorPrincipal,
+          totalPrice: totals.valorPrincipal,
+          warrantyMonths: Number(sale?.warranty_months || 0),
+          type: "principal",
+        },
+        ...(additionalItems || []).map((item: any) => ({
+          name: getAdditionalItemDisplayName(item.name),
+          imei: item.imei || null,
+          quantity: 1,
+          unitPrice: Number(item.sale_price || 0),
+          totalPrice: Number(item.sale_price || 0),
+          warrantyMonths: Number(sale?.warranty_months || 0),
+          type: item.type === "free" ? "free" as const : "upsell" as const,
+        }))
+      ]
+
+      const additionalItemsSummary = additionalItems.length
+        ? additionalItems.map((item: any) => `${getAdditionalItemDisplayName(item.name)}${item.type === "free" ? " (brinde)" : ""}`).join(", ")
+        : null
+
+      await generateReceiptPDF({
+        saleId: sale?.id || id,
+        saleDate: sale?.sale_date,
+        customerName: customer?.full_name || "Cliente",
+        customerCpf: customer?.cpf || null,
+        customerPhone: customer?.phone || null,
+        paymentMethod: paymentLabel(),
+        saleNotes: sale?.notes || product?.condition_notes || null,
+        additionalItems: additionalItemsSummary,
+        item: {
+          name: mainProductName,
+          imei: product?.imei || null,
+          quantity: 1,
+          unitPrice: totals.valorTotal,
+          totalPrice: totals.valorTotal,
+          warrantyMonths: Number(sale?.warranty_months || 0),
+        },
+        receiptItems: receiptLines,
+      })
+      toast({ title: "Recibo gerado!", type: "success" })
+    } catch (err) {
+      console.error("Erro ao gerar recibo:", err)
+      toast({ title: "Erro ao gerar recibo", type: "error" })
+    } finally {
+      setGenerating(null)
+    }
+  }
+
+  /** Generate warranty PDF for a specific item (main product or additional) */
+  const handleDownloadItemWarrantyPDF = async (itemProduct: any, itemName: string, warrantyMonths: number) => {
+    setGenerating(`warranty-${itemProduct?.id || itemName}`)
+    try {
+      const itemCatalog = itemProduct?.catalog || {}
+      const productName = itemName || `${itemCatalog.model || "Aparelho"}${itemCatalog.variant ? ` ${itemCatalog.variant}` : ""}${itemCatalog.storage ? ` ${itemCatalog.storage}` : ""}${itemCatalog.color ? ` ${itemCatalog.color}` : ""}`.trim()
+      await generateWarrantyTermDocument({
+        saleId: sale?.id || id,
+        saleDate: sale?.sale_date,
+        customerName: customer?.full_name || "Cliente",
+        customerCpf: customer?.cpf || null,
+        customerPhone: customer?.phone || null,
+        paymentMethod: paymentLabel(),
+        saleNotes: sale?.notes || null,
+        additionalItems: null,
+        item: {
+          name: productName,
+          imei: itemProduct?.imei || null,
+          imei2: itemProduct?.imei2 || null,
+          quantity: 1,
+          unitPrice: Number(sale?.sale_price || 0),
+          totalPrice: Number(sale?.sale_price || 0),
+          warrantyMonths,
+        },
+      })
+      toast({ title: "Termo de garantia gerado!", type: "success" })
+    } catch (err) {
       toast({ title: "Erro ao gerar termo", type: "error" })
     } finally {
       setGenerating(null)
@@ -505,6 +647,153 @@ export default function SaleDetailPage() {
     }
   }
 
+  const logAudit = async (action: string, oldData: any, newData: any) => {
+    const { data: { user } } = await supabase.auth.getUser()
+    await (supabase.from("audit_logs") as any).insert({
+      company_id: sale.company_id,
+      user_id: user?.id,
+      table_name: "sales",
+      record_id: id,
+      action,
+      old_data: oldData,
+      new_data: newData
+    })
+    const { data: logs } = await (supabase.from("audit_logs") as any).select("*").eq("table_name", "sales").eq("record_id", id).order("created_at", { ascending: false })
+    if (logs) setAuditLogs(logs)
+  }
+
+  const handleUpdateDate = async () => {
+    if (!editDate) return
+    setIsSubmitting(true)
+    try {
+      const oldDate = sale.sale_date
+      await (supabase.from("sales") as any).update({ sale_date: editDate }).eq("id", id)
+      await logAudit("UPDATE_DATE", { sale_date: oldDate }, { sale_date: editDate })
+      setSale({ ...sale, sale_date: editDate })
+      toast({ title: "Data atualizada com sucesso", type: "success" })
+    } catch (e) {
+      toast({ title: "Erro ao atualizar data", type: "error" })
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const handleAddItem = async () => {
+    if (!newItemName && !selectedInventoryItemId) {
+      toast({ title: "Informe o nome ou selecione um item", type: "error" })
+      return
+    }
+    setIsSubmitting(true)
+    try {
+      const price = parseFloat(newItemSalePrice) || 0
+      const cost = parseFloat(newItemCost) || 0
+      let finalName = newItemName
+
+      if (selectedInventoryItemId) {
+        const invItem = inventoryItems.find((i) => i.id === selectedInventoryItemId)
+        if (invItem) finalName = getProductName(invItem)
+      }
+
+      const { data: newItem, error } = await (supabase.from("sales_additional_items") as any).insert({
+        company_id: sale.company_id,
+        sale_id: id,
+        product_id: selectedInventoryItemId || null,
+        type: newItemType,
+        name: finalName,
+        cost_price: cost,
+        sale_price: price
+      }).select("*, inventory:product_id(id, imei, imei2, serial_number, grade, catalog:catalog_id(*))").single()
+
+      if (error) throw error
+
+      if (selectedInventoryItemId) {
+        await (supabase.from("inventory") as any).update({ status: "sold" }).eq("id", selectedInventoryItemId)
+      }
+
+      const newTotal = Number(sale.sale_price || 0) + price
+      await (supabase.from("sales") as any).update({ sale_price: newTotal }).eq("id", id)
+      setSale({ ...sale, sale_price: newTotal })
+      setAdditionalItems([...additionalItems, newItem])
+
+      const imeiLog = newItem.inventory?.imei || newItem.inventory?.serial_number
+      await logAudit("ADD_ITEM", null, { item: finalName, price, type: newItemType, imei: imeiLog })
+
+      setNewItemName("")
+      setSelectedInventoryItemId("")
+      setNewItemCost("")
+      setNewItemSalePrice("")
+      toast({ title: "Item adicionado com sucesso", type: "success" })
+    } catch (e: any) {
+      console.error("ERRO AO ADICIONAR ITEM:", e)
+      toast({ title: "Erro ao adicionar item", description: e.message || String(e), type: "error" })
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const handleRemoveItem = async (item: any) => {
+    if (!confirm("Deseja realmente remover este item da venda? Ele voltará para o estoque se aplicável.")) return
+    setIsSubmitting(true)
+    try {
+      await (supabase.from("sales_additional_items") as any).delete().eq("id", item.id)
+
+      if (item.product_id) {
+        await (supabase.from("inventory") as any).update({ status: "in_stock" }).eq("id", item.product_id)
+      }
+
+      const newTotal = Number(sale.sale_price || 0) - (Number(item.sale_price) || 0)
+      await (supabase.from("sales") as any).update({ sale_price: newTotal }).eq("id", id)
+
+      setSale({ ...sale, sale_price: newTotal })
+      setAdditionalItems(additionalItems.filter((i) => i.id !== item.id))
+
+      await logAudit("REMOVE_ITEM", { item: item.name, price: item.sale_price, type: item.type }, null)
+      toast({ title: "Item removido com sucesso", type: "success" })
+    } catch (e) {
+      toast({ title: "Erro ao remover item", type: "error" })
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const handleDeleteSale = async () => {
+    setIsSubmitting(true)
+    try {
+      // Revert main product inventory
+      await (supabase.from("inventory") as any).update({ status: "in_stock" }).eq("id", sale.inventory_id)
+
+      // Revert trade-in inventory
+      if (tradeInData?.linked_inventory_id) {
+         await (supabase.from("inventory") as any).delete().eq("id", tradeInData.linked_inventory_id)
+      }
+      if (tradeInData?.id) {
+         await (supabase.from("trade_ins") as any).delete().eq("id", tradeInData.id)
+      }
+
+      // Revert additional items
+      for (const item of additionalItems) {
+         if (item.product_id) {
+           await (supabase.from("inventory") as any).update({ status: "in_stock" }).eq("id", item.product_id)
+         }
+      }
+
+      // Delete additional items
+      await (supabase.from("sales_additional_items") as any).delete().eq("sale_id", id)
+
+      // Delete audit logs
+      await (supabase.from("audit_logs") as any).delete().eq("record_id", id)
+
+      // Delete sale
+      await (supabase.from("sales") as any).delete().eq("id", id)
+
+      toast({ title: "Venda excluída com sucesso", type: "success" })
+      router.push("/vendas")
+    } catch (e) {
+      toast({ title: "Erro ao excluir venda", type: "error" })
+      setIsSubmitting(false)
+    }
+  }
+
   if (loading) return <div className="flex items-center justify-center h-64"><p className="text-gray-400">Carregando...</p></div>
   if (!sale) return null
 
@@ -513,11 +802,7 @@ export default function SaleDetailPage() {
   const okCount = checklist.filter((i: any) => i.status === "ok").length
   const failCount = checklist.filter((i: any) => i.status === "fail").length
 
-  // Calculate main product price (total minus upsells)
-  const upsellTotal = (additionalItems || []).reduce((sum: number, item: any) => {
-    return sum + (Number(item.sale_price) || 0)
-  }, 0)
-  const mainProductPrice = Number(sale?.sale_price || 0) - upsellTotal
+  const mainProductPrice = totals.valorPrincipal
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -531,9 +816,54 @@ export default function SaleDetailPage() {
             <p className="text-xs text-gray-400">ID: {id.slice(0, 8)}</p>
           </div>
         </div>
-        <Badge variant="green">Concluída</Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant="green">Concluída</Badge>
+          <Button variant="outline" size="sm" onClick={() => { setEditDate(sale.sale_date); setIsEditModalOpen(true); }} className="gap-2 shrink-0">
+            <Edit className="w-4 h-4" /> <span className="hidden sm:inline">Editar</span>
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setIsDeleteModalOpen(true)} className="text-danger-500 border-danger-200 hover:bg-danger-50 gap-2 shrink-0">
+            <Trash className="w-4 h-4" /> <span className="hidden sm:inline">Excluir</span>
+          </Button>
+        </div>
       </div>
 
+      {/* ── Resumo Financeiro ── */}
+      <div className="bg-gradient-to-br from-navy-900 to-royal-700 rounded-2xl p-4 sm:p-6 shadow-lg text-white">
+        <div className="flex items-center gap-2 mb-4">
+          <CreditCard className="w-4 h-4 text-white/70" />
+          <h3 className="font-display font-bold text-white font-syne text-sm uppercase tracking-wider">Resumo Financeiro</h3>
+          <span className="ml-auto text-xs bg-white/10 text-white/80 px-2 py-0.5 rounded-full">{totals.quantidadeTotalItens} {totals.quantidadeTotalItens === 1 ? 'item' : 'itens'}</span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <div>
+            <p className="text-xs text-white/60 mb-0.5">Valor Total</p>
+            <p className="text-xl font-bold text-white">{formatBRL(totals.valorTotal)}</p>
+            {totals.valorAdicionais > 0 && (
+              <p className="text-xs text-white/60 mt-0.5">
+                Principal {formatBRL(totals.valorPrincipal)} + Adicionais {formatBRL(totals.valorAdicionais)}
+              </p>
+            )}
+          </div>
+          <div>
+            <p className="text-xs text-white/60 mb-0.5">Lucro Total</p>
+            <p className={`text-xl font-bold ${totals.lucroTotal >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+              {totals.lucroTotal >= 0 ? '+' : ''}{formatBRL(totals.lucroTotal)}
+            </p>
+            {totals.custoAdicionais > 0 && (
+              <p className="text-xs text-white/60 mt-0.5">Custo total {formatBRL(totals.custoTotal)}</p>
+            )}
+          </div>
+          <div className="col-span-2 sm:col-span-1">
+            <p className="text-xs text-white/60 mb-0.5">Margem</p>
+            <p className={`text-xl font-bold ${totals.margemTotal >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+              {totals.margemTotal.toFixed(1)}%
+            </p>
+            <p className="text-xs text-white/60 mt-0.5">{formatDate(sale?.sale_date)}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Aparelho Principal ── */}
       <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
         <div className="flex items-center gap-2 mb-4">
           <div className="w-8 h-8 rounded-lg bg-royal-100 flex items-center justify-center"><ShoppingCart className="w-4 h-4 text-royal-500" /></div>
@@ -549,22 +879,15 @@ export default function SaleDetailPage() {
             <p className="text-sm font-mono text-navy-900">{product?.imei || "—"}</p>
           </div>
           <div className="bg-surface rounded-xl p-4">
-            <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Status</p>
+            <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Grade</p>
             <p className="text-sm font-semibold text-navy-900">{product?.grade || "—"}</p>
           </div>
           <div className="bg-surface rounded-xl p-4">
-            <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Preço</p>
-            <p className="text-sm font-bold text-navy-900">{formatBRL(mainProductPrice)}</p>
+            <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Custo / Venda</p>
+            <p className="text-sm font-bold text-navy-900">{formatBRL(totals.valorPrincipal)}</p>
+            <p className="text-xs text-gray-500 mt-0.5">Custo: {formatBRL(totals.custoPrincipal)}</p>
             {sale?.source_type === "supplier" && (
-              <p className="text-xs text-gray-500 mt-1">Fornecedor{sale?.supplier_name ? `: ${sale.supplier_name}` : ""}</p>
-            )}
-            {sale?.source_type === "supplier" && sale?.supplier_cost != null && (
-              <p className="text-xs text-gray-500">Custo fornecedor: {formatBRL(Number(sale.supplier_cost))}</p>
-            )}
-            {additionalItems && additionalItems.length > 0 && (
-              <p className="text-xs text-gray-500 mt-1">
-                + {additionalItems.length} item{additionalItems.length > 1 ? 's' : ''} adicional{additionalItems.length > 1 ? 'es' : ''}
-              </p>
+              <p className="text-xs text-gray-500">{sale?.supplier_name ? `Forn.: ${sale.supplier_name}` : "Fornecedor"}</p>
             )}
           </div>
         </div>
@@ -611,69 +934,116 @@ export default function SaleDetailPage() {
         )
       })()}
 
-      {/* Additional Items (Upsell / Brinde) - Moved to appear right after main product */}
+      {/* ── Itens da Venda (principal + adicionais unificados) ── */}
       {additionalItems.length > 0 && (
-        <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
-          <div className="flex items-center gap-2 mb-4">
+        <div className="bg-card rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="flex items-center gap-2 p-4 sm:p-6 pb-3">
             <div className="w-8 h-8 rounded-lg bg-royal-100 flex items-center justify-center"><CreditCard className="w-4 h-4 text-royal-500" /></div>
-            <h3 className="font-display font-bold text-navy-900 font-syne">Itens Adicionais da Venda</h3>
+            <h3 className="font-display font-bold text-navy-900 font-syne">Itens da Venda</h3>
+            <span className="ml-auto text-xs bg-gray-100 text-gray-500 font-semibold px-2 py-0.5 rounded-full">{totals.quantidadeTotalItens} itens</span>
           </div>
-          <div className="space-y-2">
-            {(additionalItems || []).map((item) => {
+          {/* Desktop table */}
+          <div className="hidden sm:block overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-t border-gray-100 bg-gray-50/60">
+                  <th className="text-left px-6 py-2.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">Tipo</th>
+                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">Produto</th>
+                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">IMEI / Série</th>
+                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">Custo</th>
+                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">Venda</th>
+                  <th className="text-right px-6 py-2.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">Lucro</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {/* Principal */}
+                <tr className="hover:bg-gray-50/50 transition-colors">
+                  <td className="px-6 py-3"><span className="text-[11px] font-bold bg-royal-100 text-royal-600 px-2 py-0.5 rounded-full">PRINCIPAL</span></td>
+                  <td className="px-4 py-3 font-medium text-navy-900">{fullModel}</td>
+                  <td className="px-4 py-3 font-mono text-gray-500 text-xs">{product?.imei || product?.serial_number || "—"}</td>
+                  <td className="px-4 py-3 text-right text-gray-600">{formatBRL(totals.custoPrincipal)}</td>
+                  <td className="px-4 py-3 text-right font-semibold text-navy-900">{formatBRL(totals.valorPrincipal)}</td>
+                  <td className={`px-6 py-3 text-right font-bold ${totals.lucroPrincipal >= 0 ? 'text-success-600' : 'text-danger-500'}`}>
+                    {totals.lucroPrincipal >= 0 ? '+' : ''}{formatBRL(totals.lucroPrincipal)}
+                  </td>
+                </tr>
+                {/* Additional items */}
+                {additionalItems.map((item: any) => {
+                  const isUpsell = item.type === "upsell"
+                  const cost = Number(item.cost_price || 0)
+                  const saleP = Number(item.sale_price || 0)
+                  const profit = Number(item.profit ?? (isUpsell ? saleP - cost : -cost))
+                  const imei = item.inventory?.imei || item.inventory?.serial_number || "—"
+                  return (
+                    <tr key={item.id} className="hover:bg-gray-50/50 transition-colors">
+                      <td className="px-6 py-3">
+                        <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${isUpsell ? 'bg-success-100 text-success-600' : 'bg-amber-100 text-amber-600'}`}>
+                          {isUpsell ? 'UPSELL' : 'BRINDE'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 font-medium text-navy-900">{getAdditionalItemDisplayName(item.name)}</td>
+                      <td className="px-4 py-3 font-mono text-gray-500 text-xs">{imei}</td>
+                      <td className="px-4 py-3 text-right text-gray-600">{formatBRL(cost)}</td>
+                      <td className="px-4 py-3 text-right font-semibold text-navy-900">{isUpsell ? formatBRL(saleP) : <span className="text-gray-400">—</span>}</td>
+                      <td className={`px-6 py-3 text-right font-bold ${profit >= 0 ? 'text-success-600' : 'text-danger-500'}`}>
+                        {profit >= 0 ? '+' : ''}{formatBRL(profit)}
+                      </td>
+                    </tr>
+                  )
+                })}
+                {/* Total row */}
+                <tr className="bg-navy-900/3 border-t-2 border-gray-200">
+                  <td colSpan={3} className="px-6 py-3 font-bold text-navy-900 text-sm">Total</td>
+                  <td className="px-4 py-3 text-right font-semibold text-gray-700">{formatBRL(totals.custoTotal)}</td>
+                  <td className="px-4 py-3 text-right font-bold text-navy-900">{formatBRL(totals.valorTotal)}</td>
+                  <td className={`px-6 py-3 text-right font-bold text-base ${totals.lucroTotal >= 0 ? 'text-success-600' : 'text-danger-500'}`}>
+                    {totals.lucroTotal >= 0 ? '+' : ''}{formatBRL(totals.lucroTotal)}
+                    <span className="text-xs font-normal text-gray-400 ml-1">({totals.margemTotal.toFixed(1)}%)</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          {/* Mobile cards */}
+          <div className="sm:hidden p-4 space-y-2">
+            <div className="rounded-xl bg-royal-50 border border-royal-100 p-3">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-[11px] font-bold bg-royal-100 text-royal-600 px-2 py-0.5 rounded-full">PRINCIPAL</span>
+                <p className="text-sm font-semibold text-navy-900 flex-1 truncate">{fullModel}</p>
+              </div>
+              <div className="flex items-center justify-between text-xs text-gray-500">
+                <span>Custo: {formatBRL(totals.custoPrincipal)} · Venda: {formatBRL(totals.valorPrincipal)}</span>
+                <span className={`font-bold ${totals.lucroPrincipal >= 0 ? 'text-success-600' : 'text-danger-500'}`}>{totals.lucroPrincipal >= 0 ? '+' : ''}{formatBRL(totals.lucroPrincipal)}</span>
+              </div>
+            </div>
+            {additionalItems.map((item: any) => {
               const isUpsell = item.type === "upsell"
-              const profit = Number(item.profit || 0)
+              const cost = Number(item.cost_price || 0)
+              const saleP = Number(item.sale_price || 0)
+              const profit = Number(item.profit ?? (isUpsell ? saleP - cost : -cost))
               return (
-                <div key={item.id} className={`rounded-xl p-3 border ${isUpsell ? "bg-success-100/10 border-success-500/10" : "bg-danger-100/10 border-danger-500/10"}`}>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-navy-900">
-                        {getAdditionalItemDisplayName(item.name)}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {isUpsell ? "Upsell (pago)" : "Brinde (gratuito)"} · Custo: {formatBRL(item.cost_price)}
-                        {isUpsell && item.sale_price ? ` · Venda: ${formatBRL(item.sale_price)}` : null}
-                      </p>
-                    </div>
-                    <span className={`text-sm font-bold ${profit >= 0 ? "text-success-500" : "text-danger-500"}`}>
-                      {profit >= 0 ? "+" : ""}{formatBRL(profit)}
-                    </span>
+                <div key={item.id} className={`rounded-xl p-3 border ${isUpsell ? 'bg-success-50 border-success-200' : 'bg-amber-50 border-amber-200'}`}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${isUpsell ? 'bg-success-100 text-success-600' : 'bg-amber-100 text-amber-600'}`}>{isUpsell ? 'UPSELL' : 'BRINDE'}</span>
+                    <p className="text-sm font-semibold text-navy-900 flex-1 truncate">{getAdditionalItemDisplayName(item.name)}</p>
+                  </div>
+                  <div className="text-xs text-gray-400 mb-1">
+                    {item.inventory?.imei || item.inventory?.serial_number ? `IMEI/Série: ${item.inventory.imei || item.inventory.serial_number}` : "Sem vínculo de IMEI"}
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-gray-500">
+                    <span>Custo: {formatBRL(cost)}{isUpsell ? ` · Venda: ${formatBRL(saleP)}` : ''}</span>
+                    <span className={`font-bold ${profit >= 0 ? 'text-success-600' : 'text-danger-500'}`}>{profit >= 0 ? '+' : ''}{formatBRL(profit)}</span>
                   </div>
                 </div>
               )
             })}
-            {/* Lucro total */}
-            {(() => {
-              const addProfit = (additionalItems || []).reduce((sum, i) => sum + Number(i.profit || 0), 0)
-              const mainCost = product?.purchase_price || 0
-              // Detect quantity from notes format "[Nx ...]"
-              const notes = sale?.notes || ""
-              const qtyMatch = notes.match(/^\[(\d+)x/)
-              const qty = qtyMatch ? parseInt(qtyMatch[1]) : 1
-              const mainProfit = mainProductPrice - (mainCost * qty)
-              const totalProfit = mainProfit + addProfit
-              return (
-                <div className="pt-2 border-t border-gray-100 mt-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-500">Lucro principal</span>
-                    <span className={`font-semibold ${mainProfit >= 0 ? "text-success-500" : "text-danger-500"}`}>
-                      {formatBRL(mainProfit)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-500">Impacto adicionais</span>
-                    <span className={`font-semibold ${addProfit >= 0 ? "text-success-500" : "text-danger-500"}`}>
-                      {addProfit >= 0 ? "+" : ""}{formatBRL(addProfit)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-sm pt-2 border-t border-gray-100">
-                    <span className="font-semibold text-navy-900">Lucro total</span>
-                    <span className={`font-bold ${totalProfit >= 0 ? "text-success-500" : "text-danger-500"}`}>
-                      {formatBRL(totalProfit)}
-                    </span>
-                  </div>
-                </div>
-              )
-            })()}
+            <div className="flex items-center justify-between pt-2 border-t border-gray-200 text-sm">
+              <span className="font-bold text-navy-900">Total</span>
+              <div className="text-right">
+                <p className="font-bold text-navy-900">{formatBRL(totals.valorTotal)}</p>
+                <p className={`text-xs font-bold ${totals.lucroTotal >= 0 ? 'text-success-600' : 'text-danger-500'}`}>{totals.lucroTotal >= 0 ? '+' : ''}{formatBRL(totals.lucroTotal)} · {totals.margemTotal.toFixed(1)}%</p>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -763,37 +1133,440 @@ export default function SaleDetailPage() {
       )}
 
 
+      {/* ── Seção A: Documentos da Venda ── */}
       <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
-        <h3 className="font-display font-bold text-navy-900 mb-4 font-syne">Documentos da Venda</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Button
-            size="lg"
-            variant="outline"
-            onClick={handleDownloadInspectionPDF}
-            isLoading={generatingPdf}
-            className="flex items-center gap-3 p-6 h-auto"
-          >
-            <FileText className="w-6 h-6 text-navy-900 shrink-0" />
-            <div className="text-left">
-              <p className="font-semibold text-navy-900">Laudo Técnico</p>
-              <p className="text-xs text-gray-400">Checklist completo</p>
-            </div>
-          </Button>
-          <Button
-            size="lg"
-            variant="outline"
-            onClick={handleDownloadWarrantyTermPDF}
-            isLoading={generating === "warranty"}
-            className="flex items-center gap-3 p-6 h-auto"
-          >
-            <ShieldCheck className="w-6 h-6 text-success-500 shrink-0" />
-            <div className="text-left">
-              <p className="font-semibold text-navy-900">Termo de Garantia</p>
-              <p className="text-xs text-gray-400">Certificado de cobertura</p>
-            </div>
-          </Button>
+        <div className="flex items-center gap-2 mb-4">
+          <div className="w-8 h-8 rounded-lg bg-royal-100 flex items-center justify-center"><FileText className="w-4 h-4 text-royal-500" /></div>
+          <h3 className="font-display font-bold text-navy-900 font-syne">Documentos da Venda</h3>
+        </div>
+        <button
+          onClick={handleDownloadReceiptPDF}
+          disabled={generating === "receipt"}
+          className="w-full flex items-center gap-4 p-4 rounded-xl border border-gray-100 bg-surface hover:border-royal-200 hover:bg-royal-50/30 transition-all text-left disabled:opacity-60 disabled:cursor-wait"
+        >
+          <div className="w-10 h-10 rounded-xl bg-royal-100 flex items-center justify-center shrink-0">
+            {generating === "receipt" ? <Loader2 className="w-5 h-5 text-royal-500 animate-spin" /> : <Download className="w-5 h-5 text-royal-500" />}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-navy-900">Recibo da Venda</p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Negociação completa · Total: {formatBRL(totals.valorTotal)}
+              {totals.quantidadeTotalItens > 1 && ` · ${totals.quantidadeTotalItens} itens`}
+            </p>
+          </div>
+          <span className="text-xs text-royal-500 font-semibold shrink-0">Baixar PDF</span>
+        </button>
+      </div>
+
+      {/* ── Seção B: Documentos por Produto ── */}
+      <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
+        <div className="flex items-center gap-2 mb-4">
+          <div className="w-8 h-8 rounded-lg bg-royal-100 flex items-center justify-center"><ShieldCheck className="w-4 h-4 text-royal-500" /></div>
+          <h3 className="font-display font-bold text-navy-900 font-syne">Documentos por Produto</h3>
+          <span className="ml-auto text-xs bg-gray-100 text-gray-500 font-semibold px-2 py-0.5 rounded-full">{totals.quantidadeTotalItens} {totals.quantidadeTotalItens === 1 ? "item" : "itens"}</span>
+        </div>
+        <div className="space-y-3">
+          {/* Produto Principal */}
+          {(() => {
+            const isSealed = product?.grade === "Lacrado" || product?.grade === "Novo"
+            const hasChecklist = checklist.length > 0
+            const warrantyMonths = Number(sale?.warranty_months || 0)
+            return (
+              <div className="rounded-xl border border-gray-100 bg-surface p-4">
+                <div className="flex items-start gap-3 mb-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="font-semibold text-sm text-navy-900">{fullModel}</p>
+                      <span className="text-[10px] font-bold bg-royal-100 text-royal-600 px-1.5 py-0.5 rounded-full">PRINCIPAL</span>
+                      {isSealed && <span className="text-[10px] font-bold bg-emerald-100 text-emerald-600 px-1.5 py-0.5 rounded-full">LACRADO</span>}
+                    </div>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {product?.imei ? `IMEI: ${product.imei}` : product?.serial_number ? `S/N: ${product.serial_number}` : "Sem IMEI"}
+                      {product?.grade && ` · ${product.grade}`}
+                      {warrantyMonths > 0 && ` · Garantia: ${warrantyMonths} mês${warrantyMonths > 1 ? "es" : ""}`}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  <button
+                    onClick={handleDownloadInspectionPDF}
+                    disabled={generatingPdf || isSealed || !hasChecklist}
+                    title={isSealed ? "Laudo não aplicável para produto lacrado" : !hasChecklist ? "Sem checklist disponível" : "Baixar laudo técnico"}
+                    className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-all
+                      disabled:opacity-40 disabled:cursor-not-allowed
+                      enabled:hover:bg-navy-900 enabled:hover:text-white enabled:hover:border-navy-900
+                      border-gray-200 text-gray-600 bg-white"
+                  >
+                    {generatingPdf ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
+                    {isSealed ? "Laudo N/A" : "Baixar Laudo"}
+                  </button>
+                  <button
+                    onClick={() => handleDownloadItemWarrantyPDF(product, fullModel, warrantyMonths)}
+                    disabled={generating?.startsWith("warranty-") || warrantyMonths === 0}
+                    title={warrantyMonths === 0 ? "Sem garantia registrada" : "Baixar termo de garantia"}
+                    className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-all
+                      disabled:opacity-40 disabled:cursor-not-allowed
+                      enabled:hover:bg-success-500 enabled:hover:text-white enabled:hover:border-success-500
+                      border-gray-200 text-gray-600 bg-white"
+                  >
+                    {generating === `warranty-${product?.id}` ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
+                    Baixar Garantia
+                  </button>
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* Itens Adicionais */}
+          {additionalItems.map((item: any) => {
+            const hasInventoryLink = !!item.product_id
+            const invItem = item.inventory || inventoryItems.find((i: any) => i.id === item.product_id)
+            const invItemGrade = invItem?.grade || ""
+            const isSealed = invItemGrade === "Lacrado" || invItemGrade === "Novo"
+            const isUpsell = item.type === "upsell"
+            const warrantyMonths = Number(sale?.warranty_months || 0)
+            const itemImei = invItem?.imei || item.imei || null
+            const itemSerial = invItem?.serial_number || null
+            const itemName = getAdditionalItemDisplayName(item.name)
+            return (
+              <div key={item.id} className="rounded-xl border border-gray-100 bg-surface p-4">
+                <div className="flex items-start gap-3 mb-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="font-semibold text-sm text-navy-900">{itemName}</p>
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${isUpsell ? "bg-success-100 text-success-600" : "bg-amber-100 text-amber-600"}`}>
+                        {isUpsell ? "UPSELL" : "BRINDE"}
+                      </span>
+                      {isSealed && <span className="text-[10px] font-bold bg-emerald-100 text-emerald-600 px-1.5 py-0.5 rounded-full">LACRADO</span>}
+                      {!hasInventoryLink && <span className="text-[10px] font-bold bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded-full">MANUAL</span>}
+                    </div>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {itemImei ? `IMEI: ${itemImei}` : itemSerial ? `S/N: ${itemSerial}` : "Sem IMEI"}
+                      {invItemGrade && ` · ${invItemGrade}`}
+                      {warrantyMonths > 0 && ` · Garantia: ${warrantyMonths} mês${warrantyMonths > 1 ? "es" : ""}`}
+                    </p>
+                    {!hasInventoryLink && (
+                      <p className="text-xs text-amber-500 mt-0.5">Documento indisponível para item manual</p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  <button
+                    disabled={!hasInventoryLink || isSealed}
+                    title={!hasInventoryLink ? "Item manual — sem laudo disponível" : isSealed ? "Laudo não aplicável para produto lacrado" : "Baixar laudo técnico"}
+                    className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-all
+                      disabled:opacity-40 disabled:cursor-not-allowed
+                      enabled:hover:bg-navy-900 enabled:hover:text-white enabled:hover:border-navy-900
+                      border-gray-200 text-gray-600 bg-white"
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    {isSealed ? "Laudo N/A" : "Baixar Laudo"}
+                  </button>
+                  <button
+                    onClick={() => hasInventoryLink && handleDownloadItemWarrantyPDF(invItem, itemName, warrantyMonths)}
+                    disabled={!hasInventoryLink || warrantyMonths === 0}
+                    title={!hasInventoryLink ? "Item manual — sem garantia disponível" : warrantyMonths === 0 ? "Sem garantia registrada" : "Baixar termo de garantia"}
+                    className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-all
+                      disabled:opacity-40 disabled:cursor-not-allowed
+                      enabled:hover:bg-success-500 enabled:hover:text-white enabled:hover:border-success-500
+                      border-gray-200 text-gray-600 bg-white"
+                  >
+                    {generating === `warranty-${invItem?.id || item.name}` ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
+                    Baixar Garantia
+                  </button>
+                </div>
+              </div>
+            )
+          })}
         </div>
       </div>
+
+      {/* History Section */}
+      <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
+        <div className="flex items-center gap-2 mb-4">
+          <div className="w-8 h-8 rounded-lg bg-royal-100 flex items-center justify-center"><History className="w-4 h-4 text-royal-500" /></div>
+          <h3 className="font-display font-bold text-navy-900 font-syne">Histórico de Alterações</h3>
+        </div>
+        {auditLogs.length === 0 ? (
+          <p className="text-sm text-gray-400">Nenhuma alteração registrada.</p>
+        ) : (
+          <div className="space-y-4">
+            {auditLogs.map((log) => (
+              <div key={log.id} className="flex gap-3 text-sm border-b border-gray-50 pb-3 last:border-0 last:pb-0">
+                <div className="mt-0.5"><div className="w-2 h-2 rounded-full bg-royal-500" /></div>
+                <div className="flex-1">
+                  <p className="text-navy-900 font-medium">
+                    {log.action === "UPDATE_DATE" && "Data da venda alterada"}
+                    {log.action === "ADD_ITEM" && "Item adicionado à venda"}
+                    {log.action === "REMOVE_ITEM" && "Item removido da venda"}
+                  </p>
+                  <div className="text-gray-500 mt-1">
+                    {log.action === "UPDATE_DATE" && (
+                      <span>De {formatDate((log.old_data as any)?.sale_date)} para {formatDate((log.new_data as any)?.sale_date)}</span>
+                    )}
+                    {log.action === "ADD_ITEM" && (
+                      <span>{(log.new_data as any)?.item} - Valor: {formatBRL((log.new_data as any)?.price)} ({(log.new_data as any)?.type === "upsell" ? "Upsell" : "Brinde"})</span>
+                    )}
+                    {log.action === "REMOVE_ITEM" && (
+                      <span>{(log.old_data as any)?.item} - Valor: {formatBRL((log.old_data as any)?.price)} ({(log.old_data as any)?.type === "upsell" ? "Upsell" : "Brinde"})</span>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">{new Date(log.created_at).toLocaleString("pt-BR")}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Edit Modal */}
+      {isEditModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy-900/40 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[90vh]">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between shrink-0 bg-white">
+              <div>
+                <h2 className="font-display font-bold text-navy-900 text-lg font-syne">Editar Venda</h2>
+                <p className="text-xs text-gray-400 mt-0.5">ID: {id.slice(0, 8)}</p>
+              </div>
+              <button
+                onClick={() => setIsEditModalOpen(false)}
+                className="w-8 h-8 rounded-lg text-gray-400 hover:text-navy-900 hover:bg-gray-100 flex items-center justify-center transition-colors"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto flex-1 space-y-4">
+
+              {/* ── Bloco 1: Data da Venda ── */}
+              <div className="bg-surface rounded-2xl p-4 border border-gray-100">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="w-7 h-7 rounded-lg bg-royal-100 flex items-center justify-center">
+                    <Calendar className="w-3.5 h-3.5 text-royal-500" />
+                  </div>
+                  <h3 className="text-sm font-semibold text-navy-900">Data da Venda</h3>
+                </div>
+                <div className="flex gap-2 items-end">
+                  <div className="flex-1">
+                    <label className="block text-xs text-gray-500 mb-1">Data de faturamento</label>
+                    <Input type="date" value={editDate} onChange={(e) => setEditDate(e.target.value)} />
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleUpdateDate}
+                    isLoading={isSubmitting}
+                    disabled={editDate === sale.sale_date || isSubmitting}
+                    className="h-11 px-4 shrink-0 text-royal-500 border-royal-200 hover:bg-royal-50"
+                  >
+                    Salvar
+                  </Button>
+                </div>
+              </div>
+
+              {/* ── Bloco 2: Itens da Venda ── */}
+              <div className="bg-surface rounded-2xl p-4 border border-gray-100">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="w-7 h-7 rounded-lg bg-royal-100 flex items-center justify-center">
+                    <ShoppingCart className="w-3.5 h-3.5 text-royal-500" />
+                  </div>
+                  <h3 className="text-sm font-semibold text-navy-900">Itens da Venda</h3>
+                  {additionalItems.length > 0 && (
+                    <span className="ml-auto text-xs bg-royal-100 text-royal-600 font-semibold px-2 py-0.5 rounded-full">{additionalItems.length}</span>
+                  )}
+                </div>
+                {additionalItems.length === 0 ? (
+                  <div className="text-center py-6">
+                    <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-2">
+                      <ShoppingCart className="w-5 h-5 text-gray-300" />
+                    </div>
+                    <p className="text-sm text-gray-400 font-medium">Nenhum item adicional nesta venda.</p>
+                    <p className="text-xs text-gray-300 mt-0.5">Use o formulário abaixo para adicionar.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {additionalItems.map((item) => {
+                      const isUpsell = item.type === "upsell"
+                      const cost = Number(item.cost_price || 0)
+                      const saleP = Number(item.sale_price || 0)
+                      const profit = isUpsell ? saleP - cost : -cost
+                      const margin = isUpsell && saleP > 0 ? ((profit / saleP) * 100).toFixed(1) : null
+                      return (
+                        <div
+                          key={item.id}
+                          className={`rounded-xl border p-3 flex items-start gap-3 transition-colors ${isUpsell ? "bg-success-100/10 border-success-500/15" : "bg-danger-100/10 border-danger-500/15"}`}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <p className="text-sm font-semibold text-navy-900 truncate">{getAdditionalItemDisplayName(item.name)}</p>
+                              <span className={`shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-full tracking-wide ${isUpsell ? "bg-success-100 text-success-600" : "bg-danger-100 text-danger-600"}`}>
+                                {isUpsell ? "UPSELL" : "BRINDE"}
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-gray-500">
+                              <span>Custo: <span className="font-medium text-navy-800">{formatBRL(cost)}</span></span>
+                              {isUpsell && <span>Venda: <span className="font-medium text-navy-800">{formatBRL(saleP)}</span></span>}
+                              <span className={`font-semibold ${profit >= 0 ? "text-success-600" : "text-danger-500"}`}>
+                                Lucro: {profit >= 0 ? "+" : ""}{formatBRL(profit)}
+                                {margin && <span className="text-gray-400 font-normal"> ({margin}%)</span>}
+                              </span>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => handleRemoveItem(item)}
+                            disabled={isSubmitting}
+                            title="Remover item da venda"
+                            className="shrink-0 mt-0.5 w-7 h-7 flex items-center justify-center text-gray-300 hover:text-danger-500 hover:bg-danger-50 rounded-lg transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* ── Bloco 3: Adicionar Novo Item ── */}
+              <div className="rounded-2xl border-2 border-dashed border-royal-200 bg-royal-50/20 p-4">
+                <div className="flex items-center gap-2 mb-4">
+                  <div className="w-7 h-7 rounded-lg bg-royal-500 flex items-center justify-center shadow-sm">
+                    <Plus className="w-3.5 h-3.5 text-white" />
+                  </div>
+                  <h3 className="text-sm font-semibold text-navy-900">Adicionar Novo Item</h3>
+                </div>
+
+                <div className="space-y-3">
+                  {/* Seletor de estoque Inteligente */}
+                  <div>
+                    <label className="block text-xs font-medium text-navy-900 mb-1.5">Produto do Estoque <span className="text-gray-400 font-normal">(opcional)</span></label>
+
+                    {selectedInventoryItemId ? (
+                      <div className="w-full rounded-xl border border-success-200 bg-success-50/50 p-3 flex items-center justify-between">
+                        <div className="flex-1 min-w-0">
+                           <div className="flex items-center gap-2">
+                             <CheckCircle2 className="w-4 h-4 text-success-500 shrink-0" />
+                             <p className="text-sm font-semibold text-navy-900 truncate">
+                               {getProductName(inventoryItems.find(i => i.id === selectedInventoryItemId))}
+                             </p>
+                           </div>
+                           <p className="text-xs text-gray-500 mt-0.5 ml-6">Custo vinculado automaticamente</p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setSelectedInventoryItemId("")
+                            setNewItemName("")
+                            setNewItemCost("")
+                            setNewItemSalePrice("")
+                          }}
+                          className="text-xs text-danger-500 hover:text-danger-600 font-medium px-2 py-1 rounded-md hover:bg-danger-50 transition-colors"
+                        >
+                          Trocar
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="relative">
+                        <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <Input
+                          placeholder="Buscar por modelo, IMEI ou cor..."
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          onFocus={() => setIsSearchFocused(true)}
+                          onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
+                          className="pl-9 h-11"
+                        />
+
+                        {/* Dropdown de Resultados */}
+                        {isSearchFocused && (
+                          <div
+                            className="absolute z-10 top-full left-0 right-0 mt-1 bg-white border border-gray-100 shadow-xl rounded-xl max-h-64 overflow-y-auto"
+                            onMouseDown={(e) => e.preventDefault()}
+                          >
+                            {availableInventoryItems.length === 0 ? (
+                              <div className="p-4 text-center text-sm text-gray-500">
+                                Nenhum produto encontrado.
+                              </div>
+                            ) : (
+                              <div className="p-1">
+                                {availableInventoryItems.slice(0, 15).map(inv => (
+                                  <button
+                                    key={inv.id}
+                                    onClick={() => {
+                                      setSelectedInventoryItemId(inv.id)
+                                      setNewItemName(getProductName(inv))
+                                      setNewItemCost(inv.purchase_price?.toString() || "0")
+                                      setNewItemSalePrice(inv.suggested_price?.toString() || "0")
+                                      setIsSearchFocused(false)
+                                      setSearchQuery("")
+                                    }}
+                                    className="w-full text-left px-3 py-2.5 rounded-lg hover:bg-gray-50 flex items-start gap-3 transition-colors"
+                                  >
+                                    <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center shrink-0 mt-0.5">
+                                      <Search className="w-3.5 h-3.5 text-gray-400" />
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-sm font-semibold text-navy-900 truncate">{getProductName(inv)}</p>
+                                      <div className="flex items-center gap-2 mt-0.5 text-xs text-gray-500">
+                                        <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded text-[10px] text-gray-600 font-semibold">
+                                          {inv.imei ? inv.imei.slice(-6) : inv.serial_number?.slice(-6) || "S/N"}
+                                        </span>
+                                        <span>Custo: {formatBRL(inv.purchase_price)}</span>
+                                        {inv.condition_notes && <span className="truncate">· {inv.condition_notes}</span>}
+                                        {inv.catalog?.battery_health && <span>· Bat: {inv.catalog.battery_health}%</span>}
+                                      </div>
+                                    </div>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <Input label="Nome do Item" value={newItemName} onChange={(e) => setNewItemName(e.target.value)} disabled={!!selectedInventoryItemId} />
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <Input label="Custo (R$)" type="number" value={newItemCost} onChange={(e) => setNewItemCost(e.target.value)} disabled={!!selectedInventoryItemId} />
+                    <Input label="Valor Venda (R$)" type="number" value={newItemSalePrice} onChange={(e) => setNewItemSalePrice(e.target.value)} />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-navy-900 mb-1">Tipo</label>
+                    <div className="flex gap-2">
+                      <Button variant={newItemType === "upsell" ? "primary" : "outline"} className="flex-1" onClick={() => setNewItemType("upsell")} type="button">Upsell (Pago)</Button>
+                      <Button variant={newItemType === "free" ? "primary" : "outline"} className="flex-1" onClick={() => setNewItemType("free")} type="button">Brinde</Button>
+                    </div>
+                  </div>
+
+                  <Button variant="primary" className="w-full" onClick={handleAddItem} isLoading={isSubmitting}>
+                    <Plus className="w-4 h-4 mr-2" /> Adicionar Item
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Modal */}
+      {isDeleteModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy-900/40 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden p-6 text-center">
+            <div className="w-12 h-12 rounded-full bg-danger-100 flex items-center justify-center mx-auto mb-4">
+              <AlertTriangle className="w-6 h-6 text-danger-500" />
+            </div>
+            <h2 className="text-xl font-bold text-navy-900 mb-2">Excluir Venda?</h2>
+            <p className="text-sm text-gray-500 mb-6">Esta ação é irreversível. O aparelho principal, itens adicionais do estoque e trade-ins voltarão ao status "Em estoque" ou serão desfeitos. Todos os logs também serão perdidos.</p>
+            <div className="flex gap-3">
+              <Button variant="outline" className="flex-1" onClick={() => setIsDeleteModalOpen(false)}>Cancelar</Button>
+              <Button variant="primary" className="flex-1 bg-danger-500 border-danger-500 hover:bg-danger-600" onClick={handleDeleteSale} isLoading={isSubmitting}>Excluir</Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Hidden PDF content for Laudo Técnico rendering */}
       <div style={{ position: "fixed", left: "-10000px", top: 0, zIndex: -1 }}>

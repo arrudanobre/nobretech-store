@@ -325,6 +325,22 @@ CREATE TABLE IF NOT EXISTS supplier_prices (
   created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Financial transactions -----------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS transactions (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id     UUID REFERENCES companies(id) ON DELETE CASCADE,
+  type           TEXT NOT NULL CHECK (type IN ('income', 'expense')),
+  category       TEXT NOT NULL,
+  description    TEXT,
+  amount         NUMERIC(10,2) NOT NULL,
+  date           DATE NOT NULL,
+  payment_method TEXT,
+  notes          TEXT,
+  created_at     TIMESTAMPTZ DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Additional sale items ------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS sales_additional_items (
@@ -378,6 +394,8 @@ CREATE INDEX IF NOT EXISTS idx_quotes_company_supplier ON quotes (company_id, su
 CREATE INDEX IF NOT EXISTS idx_supplier_prices_category_model ON supplier_prices (category, model);
 CREATE INDEX IF NOT EXISTS idx_supplier_prices_grade ON supplier_prices (grade);
 CREATE INDEX IF NOT EXISTS idx_supplier_prices_company ON supplier_prices (company_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_company ON transactions (company_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions (date);
 CREATE INDEX IF NOT EXISTS idx_additional_items_sale ON sales_additional_items (sale_id);
 CREATE INDEX IF NOT EXISTS idx_additional_items_company ON sales_additional_items (company_id);
 
