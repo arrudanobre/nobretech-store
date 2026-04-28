@@ -36,6 +36,7 @@ type InventoryProduct = {
   cost: number
   suggested: number
   battery: number
+  status?: string
   type?: "own" | "supplier"
   supplier_name?: string | null
 }
@@ -488,6 +489,8 @@ function NewSaleContent() {
   const [isSalePriceManual, setIsSalePriceManual] = useState(false)
   const [supplierCostInput, setSupplierCostInput] = useState("")
   const [paymentMethod, setPaymentMethod] = useState("")
+  const [isReservation, setIsReservation] = useState(false)
+  const [paymentDueDate, setPaymentDueDate] = useState("")
   const [warrantyMonths, setWarrantyMonths] = useState("3")
   const [hasTradeIn, setHasTradeIn] = useState(false)
   const [tradeIn, setTradeIn] = useState({ category: "", modelIdx: 0, storage: "", color: "", imei: "", grade: "", batteryHealth: "", value: "" })
@@ -582,6 +585,7 @@ function NewSaleContent() {
             cost: item.purchase_price || 0,
             suggested: item.suggested_price || 0,
             battery: item.battery_health || 0,
+            status: item.status || "active",
             type: item.type || "own",
             supplier_name: item.supplier_name || null,
           }
@@ -611,8 +615,8 @@ function NewSaleContent() {
           return
         }
 
-        if (items.status === "sold") {
-          toast({ title: "Produto já vendido", description: "Este aparelho já foi vendido e não está mais disponível.", type: "error" })
+        if (items.status === "sold" || items.status === "reserved") {
+          toast({ title: items.status === "reserved" ? "Produto reservado" : "Produto já vendido", description: "Este aparelho não está disponível para nova venda.", type: "error" })
           return
         }
 
@@ -626,6 +630,7 @@ function NewSaleContent() {
           cost: items.purchase_price || 0,
           suggested: items.suggested_price || 0,
           battery: items.battery_health || 0,
+          status: items.status || "active",
           type: items.type || "own",
           supplier_name: items.supplier_name || null,
         }
@@ -952,7 +957,7 @@ function NewSaleContent() {
     switch (step) {
       case 1: return !!selectedProduct && !loadingInventory && quantity <= maxAvailableQty
       case 2: return customer.name && validateCPF(customer.cpf)
-      case 3: return salePrice && paymentMethod && (selectedProduct?.type !== "supplier" || !!supplierCostInput)
+      case 3: return salePrice && paymentMethod && (!isReservation || !!paymentDueDate) && (selectedProduct?.type !== "supplier" || !!supplierCostInput)
       case 4: return true
       case 5: return true
       default: return false
@@ -1051,6 +1056,8 @@ function NewSaleContent() {
           source_type: selectedProduct?.type || "own",
           supplier_name: selectedProduct?.type === "supplier" ? (selectedProduct.supplier_name || null) : null,
           supplier_cost: selectedProduct?.type === "supplier" ? (parseFloat(supplierCostInput) || 0) : null,
+          sale_status: isReservation ? "reserved" : "completed",
+          payment_due_date: isReservation ? paymentDueDate : null,
           sale_date: today,
           notes: quantity > 1 ? `[${quantity}x ${selectedProduct!.name}]` + (saleNotes ? `\n${saleNotes}` : "") : saleNotes || null,
           has_trade_in: hasTradeIn,
@@ -1061,6 +1068,10 @@ function NewSaleContent() {
       if (saleError) {
         console.error("Erro ao registrar venda:", saleError)
         throw new Error(saleError.message)
+      }
+
+      if (isReservation && selectedProduct?.type !== "supplier") {
+        await atualizarStatusEstoque(selectedProduct!.id, "reserved")
       }
 
       // 2b. Save additional item (upsell / brinde) with quantity
@@ -1096,7 +1107,7 @@ function NewSaleContent() {
             // We still proceed, but log a warning
           }
 
-          await atualizarStatusEstoque(additionalSelectedItem.itemId, "sold")
+          await atualizarStatusEstoque(additionalSelectedItem.itemId, isReservation ? "reserved" : "sold")
         } catch (invError) {
           console.error("Erro ao atualizar estoque do item adicional:", invError)
           // Não fazemos throw aqui para não quebrar o fluxo principal
@@ -1141,7 +1152,7 @@ function NewSaleContent() {
         }
       }
 
-      try {
+      if (!isReservation) try {
         const additionalItemsSummary = additionalSelectedItem
           ? `${additionalSelectedItem.qty || 1}x ${getAdditionalItemDisplayName(additionalSelectedItem.name)}${additionalSelectedItem.type === "free" ? " (brinde)" : ""}`
           : null
@@ -1177,9 +1188,27 @@ function NewSaleContent() {
         })
       }
 
+      if (isReservation) {
+        await (supabase.from("transactions") as any).insert({
+          company_id: companyId,
+          type: "income",
+          category: "Venda de produtos",
+          description: `Reserva · ${selectedProduct!.name}`,
+          amount: finalTotal - (hasTradeIn ? calculateTradeInValue() : 0),
+          date: today,
+          due_date: paymentDueDate,
+          payment_method: paymentMethod,
+          status: "pending",
+          source_type: "sale",
+          source_id: sale.id,
+        })
+      }
+
       toast({
-        title: "Venda registrada!",
-        description: `Venda de ${selectedProduct!.name} concluída com sucesso. Recibo e garantia emitidos.`,
+        title: isReservation ? "Venda reservada!" : "Venda registrada!",
+        description: isReservation
+          ? `Reserva de ${selectedProduct!.name} criada até ${paymentDueDate.split("-").reverse().join("/")}.`
+          : `Venda de ${selectedProduct!.name} concluída com sucesso. Recibo e garantia emitidos.`,
         type: "success",
       })
       router.push("/vendas")
@@ -1389,6 +1418,30 @@ function NewSaleContent() {
             )}
             {totalProfit > 0 && (
               <p className="text-xs text-success-500 mt-0.5 font-medium">Lucro total: {formatBRL(totalProfit)}</p>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-warning-500/20 bg-warning-100/20 p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-navy-900">Reservar venda?</p>
+                <p className="text-xs text-gray-500">Marca o estoque como reservado e cria uma conta a receber.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsReservation(!isReservation)}
+                className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${isReservation ? "bg-warning-500" : "bg-gray-300"}`}
+              >
+                <div className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${isReservation ? "translate-x-5" : "translate-x-0.5"}`} />
+              </button>
+            </div>
+            {isReservation && (
+              <Input
+                label="Data prevista de pagamento"
+                type="date"
+                value={paymentDueDate}
+                onChange={(event) => setPaymentDueDate(event.target.value)}
+              />
             )}
           </div>
 
@@ -1899,6 +1952,14 @@ function NewSaleContent() {
             <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Garantia</h4>
             <p className="text-sm text-navy-900">{warrantyMonths} meses a partir de hoje</p>
           </div>
+
+          {isReservation && (
+            <div className="rounded-xl border border-warning-500/20 bg-warning-100/20 p-4">
+              <h4 className="text-xs font-semibold text-warning-700 uppercase tracking-wider mb-2">Reserva</h4>
+              <p className="text-sm text-navy-900">A venda ficará aguardando pagamento até {paymentDueDate ? paymentDueDate.split("-").reverse().join("/") : "—"}.</p>
+              <p className="mt-1 text-xs text-gray-500">O estoque será bloqueado como reservado e a cobrança aparecerá em Contas a Receber.</p>
+            </div>
+          )}
 
           {additionalSelectedItem && (
             <div className="bg-surface rounded-xl p-4 space-y-3">

@@ -17,6 +17,7 @@ const TABLES_WITH_COMPANY = new Set([
   "quotes",
   "financial_settings",
   "finance_accounts",
+  "finance_chart_accounts",
   "supplier_prices",
   "sales_additional_items",
   "audit_logs",

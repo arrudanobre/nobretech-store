@@ -20,6 +20,39 @@ function formatPayment(method?: string) {
     .replace("cash", "Dinheiro")
 }
 
+function getWarrantyDays(warrantyEnd?: string | null) {
+  if (!warrantyEnd) return null
+  const today = new Date().toISOString().split("T")[0]
+  return Math.max(0, daysBetween(today, warrantyEnd))
+}
+
+function getSaleStatusMeta(status?: string | null) {
+  switch (status || "completed") {
+    case "reserved":
+      return { label: "Pendente pagamento", variant: "yellow" as const }
+    case "cancelled":
+      return { label: "Cancelada", variant: "red" as const }
+    default:
+      return { label: "Concluída", variant: "green" as const }
+  }
+}
+
+function getWarrantyBadge(sale: any) {
+  if ((sale.sale_status || "completed") === "reserved") {
+    return { label: "Após pagamento", variant: "gray" as const }
+  }
+
+  if (!Number(sale.warranty_months || 0) || !sale.warranty_end) {
+    return { label: "Sem garantia", variant: "gray" as const }
+  }
+
+  const warrantyDays = getWarrantyDays(sale.warranty_end) ?? 0
+  return {
+    label: `${warrantyDays}d`,
+    variant: warrantyDays > 15 ? "green" as const : warrantyDays > 0 ? "yellow" as const : "red" as const,
+  }
+}
+
 export default function SalesPage() {
   const [search, setSearch] = useState("")
   const [sales, setSales] = useState<any[]>([])
@@ -75,7 +108,7 @@ export default function SalesPage() {
       const saleMonth = (s.sale_date || "").slice(0, 7)
       const now = new Date()
       const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
-      return saleMonth === thisMonth
+      return saleMonth === thisMonth && (s.sale_status || "completed") === "completed"
     })
     .reduce((sum, s) => sum + Number(s.sale_price || 0), 0)
 
@@ -124,6 +157,7 @@ export default function SalesPage() {
                   <th className="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Produto / Cliente</th>
                   <th className="text-center px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Itens</th>
                   <th className="text-left px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Pagamento</th>
+                  <th className="text-left px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Status</th>
                   <th className="text-right px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Total</th>
                   <th className="text-right px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Lucro</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Garantia</th>
@@ -140,7 +174,8 @@ export default function SalesPage() {
                     additionalItems,
                     supplierCost: s.supplier_cost,
                   })
-                  const warrantyDays = daysBetween(s.warranty_end)
+                  const statusMeta = getSaleStatusMeta(s.sale_status)
+                  const warrantyMeta = getWarrantyBadge(s)
                   const productName = getProductName(s.inventory || {})
                   const customerName = s.customers?.full_name || "—"
                   const upsellItems = additionalItems.filter((i: any) => i.type === "upsell")
@@ -166,14 +201,19 @@ export default function SalesPage() {
                         </span>
                       </td>
                       <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{formatPayment(s.payment_method)}</td>
+                      <td className="px-3 py-3 whitespace-nowrap">
+                        <Badge variant={statusMeta.variant} dot>
+                          {statusMeta.label}
+                        </Badge>
+                      </td>
                       <td className="px-4 py-3 text-right font-bold text-navy-900 whitespace-nowrap">{formatBRL(totals.valorTotal)}</td>
                       <td className={`px-4 py-3 text-right font-bold whitespace-nowrap ${totals.lucroTotal >= 0 ? "text-success-600" : "text-danger-500"}`}>
                         {totals.lucroTotal >= 0 ? "+" : ""}{formatBRL(totals.lucroTotal)}
                         <span className="text-xs font-normal text-gray-400 ml-1">({totals.margemTotal.toFixed(1)}%)</span>
                       </td>
                       <td className="px-4 py-3">
-                        <Badge variant={warrantyDays > 15 ? "green" : warrantyDays > 0 ? "yellow" : "red"} dot>
-                          {Math.max(0, warrantyDays)}d
+                        <Badge variant={warrantyMeta.variant} dot>
+                          {warrantyMeta.label}
                         </Badge>
                       </td>
                       <td className="px-4 py-3">
@@ -197,7 +237,8 @@ export default function SalesPage() {
                 additionalItems,
                 supplierCost: s.supplier_cost,
               })
-              const warrantyDays = daysBetween(s.warranty_end)
+              const statusMeta = getSaleStatusMeta(s.sale_status)
+              const warrantyMeta = getWarrantyBadge(s)
               const productName = getProductName(s.inventory || {})
               const customerName = s.customers?.full_name || "—"
               const upsellItems = additionalItems.filter((i: any) => i.type === "upsell")
@@ -228,8 +269,11 @@ export default function SalesPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 mt-2">
-                    <Badge variant={warrantyDays > 15 ? "green" : warrantyDays > 0 ? "yellow" : "red"} dot>
-                      Garantia: {Math.max(0, warrantyDays)} dias
+                    <Badge variant={statusMeta.variant} dot>
+                      {statusMeta.label}
+                    </Badge>
+                    <Badge variant={warrantyMeta.variant} dot>
+                      Garantia: {warrantyMeta.label}
                     </Badge>
                     {totals.lucroTotal !== 0 && (
                       <Badge variant={totals.lucroTotal > 0 ? "green" : "red"} dot>

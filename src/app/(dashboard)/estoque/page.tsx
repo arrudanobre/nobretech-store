@@ -265,6 +265,7 @@ export default function InventoryPage() {
           >
             <option value="all">Todos</option>
             <option value="in_stock">Disponível</option>
+            <option value="reserved">Reservado</option>
             <option value="sold">Vendido</option>
             <option value="under_repair">Em reparo</option>
           </select>

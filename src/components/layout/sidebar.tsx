@@ -54,11 +54,11 @@ const staticNavItems: (Omit<NavItem, "badge"> & { badge?: { count?: number; defa
     items: [
       { label: "Painel Financeiro", href: "/financeiro" },
       { label: "Entradas e Saídas", href: "/financeiro/transacoes" },
+      { label: "Contas a Receber", href: "/financeiro/receber" },
+      { label: "Contas a Pagar", href: "/financeiro/pagar" },
       { label: "Gastos Mensais", href: "/financeiro/gastos" },
       { label: "Taxas da Maquininha", href: "/financeiro/taxas" },
       { label: "DRE", href: "#", disabled: true },
-      { label: "Contas a Receber", href: "#", disabled: true },
-      { label: "Contas a Pagar", href: "#", disabled: true },
     ]
   },
   { label: "Laudos", href: "/historico", icon: FileText },
@@ -179,13 +179,16 @@ export function Sidebar() {
 
                 {!collapsed && hasItems && isOpen && (
                   <ul className="mt-1 ml-9 space-y-1 pr-2">
-                    {item.items!.map((subItem) => {
-                      const isSubActive = pathname === subItem.href
-                      if (subItem.disabled) {
-                        return (
-                          <li key={subItem.label}>
-                            <div className="flex items-center justify-between px-3 py-2 text-xs text-white/30 cursor-not-allowed">
-                              <span>{subItem.label}</span>
+	                    {item.items!.map((subItem) => {
+	                      const isSubActive = pathname === subItem.href
+	                      const isSubItemDisabled =
+	                        subItem.disabled === true &&
+	                        !["/financeiro/receber", "/financeiro/pagar"].includes(subItem.href)
+	                      if (isSubItemDisabled) {
+	                        return (
+	                          <li key={subItem.label}>
+	                            <div className="flex items-center justify-between px-3 py-2 text-xs text-white/30 cursor-not-allowed">
+	                              <span>{subItem.label}</span>
                               <span className="bg-navy-800 px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wider">Em breve</span>
                             </div>
                           </li>
@@ -326,23 +329,25 @@ export function MobileNav({ isOpen, onOpenChange }: { isOpen: boolean; onOpenCha
                           </span>
                         )}
                       </Link>
-                      {item.items && (
-                        <div className="ml-8 mt-1 space-y-1">
-                          {item.items.filter((subItem) => !subItem.disabled).map((subItem) => (
-                            <Link
-                              key={subItem.href}
-                              href={subItem.href}
-                              onClick={() => onOpenChange(false)}
-                              className={cn(
+	                      {item.items && (
+	                        <div className="ml-8 mt-1 space-y-1">
+	                          {item.items
+	                            .filter((subItem) => !subItem.disabled || ["/financeiro/receber", "/financeiro/pagar"].includes(subItem.href))
+	                            .map((subItem) => (
+	                            <Link
+	                              key={subItem.href}
+	                              href={subItem.href}
+	                              onClick={() => onOpenChange(false)}
+	                              className={cn(
                                 "block rounded-lg px-3 py-2 text-xs",
                                 pathname === subItem.href ? "bg-royal-50 text-royal-600 font-medium" : "text-gray-500 hover:bg-gray-50"
                               )}
-                            >
-                              {subItem.label}
-                            </Link>
-                          ))}
-                        </div>
-                      )}
+	                            >
+	                              {subItem.label}
+	                            </Link>
+	                          ))}
+	                        </div>
+	                      )}
                     </li>
                   )
                 })}
@@ -405,29 +410,16 @@ export function MobileNav({ isOpen, onOpenChange }: { isOpen: boolean; onOpenCha
   )
 }
 
-import { useRouter } from "next/navigation"
-
 export function DashboardLayout({ children, title }: { children: React.ReactNode; title: string }) {
   const [counts, setCounts] = useState<Record<string, number>>({ estoque: 0, garantias: 0 })
   const [refreshKey, setRefreshKey] = useState(0)
-  const [checkingAuth, setCheckingAuth] = useState(true)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
-  const router = useRouter()
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), [])
 
   useEffect(() => {
-    const checkAuthAndFetch = async () => {
+    const fetchCounts = async () => {
       try {
-        // 1. Guard check
-        const { data: { session } } = await supabase.auth.getSession()
-        if (!session) {
-          router.push("/login")
-          return
-        }
-        setCheckingAuth(false)
-
-        // 2. Data fetching
         const { data, error } = await (supabase
           .from("inventory") as any)
           .select("id")
@@ -462,18 +454,10 @@ export function DashboardLayout({ children, title }: { children: React.ReactNode
       }
     }
 
-    checkAuthAndFetch()
-    const interval = setInterval(checkAuthAndFetch, 5000)
+    fetchCounts()
+    const interval = setInterval(fetchCounts, 5000)
     return () => clearInterval(interval)
-  }, [refreshKey, router])
-
-  if (checkingAuth) {
-    return (
-      <div className="min-h-screen bg-navy-950 flex items-center justify-center">
-        <div className="w-12 h-12 border-4 border-royal-500 border-t-transparent rounded-full animate-spin" />
-      </div>
-    )
-  }
+  }, [refreshKey])
 
   return (
     <BadgeCountContext.Provider value={{ counts, refresh }}>

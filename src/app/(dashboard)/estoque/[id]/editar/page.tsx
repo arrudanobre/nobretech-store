@@ -15,6 +15,7 @@ import { getComputedInventoryStatus, mapLifecycleToLegacyCompatibleStatus } from
 const STATUS_OPTIONS = [
   { value: "active", label: "Ativo" },
   { value: "pending", label: "Cadastro incompleto" },
+  { value: "reserved", label: "Reservado" },
   { value: "sold", label: "Vendido" },
   { value: "under_repair", label: "Em reparo" },
   { value: "returned", label: "Devolvido" },

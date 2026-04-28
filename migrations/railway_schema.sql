@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS inventory (
   origin          TEXT DEFAULT 'purchase' NOT NULL CHECK (origin IN ('purchase', 'trade_in', 'return')),
   source_sale_id  UUID,
   suggested_price NUMERIC(10,2),
-  status          TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'in_stock', 'sold', 'returned', 'under_repair', 'trade_in_received')),
+  status          TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'in_stock', 'reserved', 'sold', 'returned', 'under_repair', 'trade_in_received')),
   checklist_id    UUID REFERENCES checklists(id),
   quantity        INT DEFAULT 1,
   photos          TEXT[],
@@ -175,6 +175,8 @@ CREATE TABLE IF NOT EXISTS sales (
   source_type      TEXT DEFAULT 'own' NOT NULL CHECK (source_type IN ('own', 'supplier')),
   supplier_name    TEXT,
   supplier_cost    NUMERIC(10,2),
+  sale_status      TEXT NOT NULL DEFAULT 'completed' CHECK (sale_status IN ('reserved', 'completed', 'cancelled')),
+  payment_due_date DATE,
   sale_date        DATE NOT NULL DEFAULT CURRENT_DATE,
   notes            TEXT,
   created_at       TIMESTAMPTZ DEFAULT NOW()
@@ -341,10 +343,30 @@ CREATE TABLE IF NOT EXISTS finance_accounts (
   updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS finance_chart_accounts (
+  id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id            UUID REFERENCES companies(id) ON DELETE CASCADE,
+  code                  TEXT NOT NULL,
+  name                  TEXT NOT NULL,
+  cash_flow_type        TEXT NOT NULL CHECK (cash_flow_type IN ('income', 'expense', 'none')),
+  financial_type        TEXT NOT NULL CHECK (financial_type IN ('revenue', 'operating_expense', 'inventory_asset', 'cogs', 'tax', 'owner_equity', 'transfer', 'adjustment')),
+  statement_section     TEXT NOT NULL CHECK (statement_section IN ('cash', 'dre', 'inventory', 'equity', 'transfer', 'adjustment')),
+  affects_cash          BOOLEAN NOT NULL DEFAULT TRUE,
+  affects_dre           BOOLEAN NOT NULL DEFAULT FALSE,
+  affects_inventory     BOOLEAN NOT NULL DEFAULT FALSE,
+  affects_owner_equity  BOOLEAN NOT NULL DEFAULT FALSE,
+  sort_order            INT NOT NULL DEFAULT 0,
+  is_active             BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at            TIMESTAMPTZ DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (company_id, code)
+);
+
 CREATE TABLE IF NOT EXISTS transactions (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id     UUID REFERENCES companies(id) ON DELETE CASCADE,
   account_id     UUID REFERENCES finance_accounts(id) ON DELETE SET NULL,
+  chart_account_id UUID REFERENCES finance_chart_accounts(id) ON DELETE SET NULL,
   type           TEXT NOT NULL CHECK (type IN ('income', 'expense')),
   category       TEXT NOT NULL,
   description    TEXT,
@@ -408,6 +430,7 @@ CREATE INDEX IF NOT EXISTS idx_inventory_purchase_date ON inventory (purchase_da
 CREATE INDEX IF NOT EXISTS idx_inventory_supplier ON inventory (supplier_id);
 CREATE INDEX IF NOT EXISTS idx_inventory_source_sale ON inventory (source_sale_id);
 CREATE INDEX IF NOT EXISTS idx_sales_company_date ON sales (company_id, sale_date);
+CREATE INDEX IF NOT EXISTS idx_sales_status_due ON sales (company_id, sale_status, payment_due_date);
 CREATE INDEX IF NOT EXISTS idx_warranties_company_end ON warranties (company_id, end_date, status);
 CREATE INDEX IF NOT EXISTS idx_problems_company_status ON problems (company_id, status, priority);
 CREATE INDEX IF NOT EXISTS idx_quotes_company_supplier ON quotes (company_id, supplier_id);
@@ -417,11 +440,13 @@ CREATE INDEX IF NOT EXISTS idx_supplier_prices_company ON supplier_prices (compa
 CREATE INDEX IF NOT EXISTS idx_transactions_company ON transactions (company_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions (date);
 CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions (account_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_chart_account ON transactions (chart_account_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions (status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_unique_source
   ON transactions (company_id, source_type, source_id)
   WHERE source_type IS NOT NULL AND source_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_finance_accounts_company ON finance_accounts (company_id);
+CREATE INDEX IF NOT EXISTS idx_finance_chart_accounts_company ON finance_chart_accounts (company_id, is_active, sort_order);
 CREATE INDEX IF NOT EXISTS idx_additional_items_sale ON sales_additional_items (sale_id);
 CREATE INDEX IF NOT EXISTS idx_additional_items_company ON sales_additional_items (company_id);
 
@@ -460,7 +485,7 @@ RETURNS TRIGGER AS $$
 DECLARE
   is_complete BOOLEAN;
 BEGIN
-  IF NEW.status IN ('sold', 'returned', 'under_repair') THEN
+  IF NEW.status IN ('reserved', 'sold', 'returned', 'under_repair') THEN
     RETURN NEW;
   END IF;
 
@@ -512,6 +537,10 @@ EXECUTE FUNCTION fn_inventory_auto_status();
 CREATE OR REPLACE FUNCTION fn_create_warranty_on_sale()
 RETURNS TRIGGER AS $$
 BEGIN
+  IF COALESCE(NEW.sale_status, 'completed') <> 'completed' THEN
+    RETURN NEW;
+  END IF;
+
   IF NEW.warranty_months > 0 THEN
     INSERT INTO warranties (company_id, sale_id, inventory_id, customer_id, start_date, end_date, status)
     VALUES (

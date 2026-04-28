@@ -464,9 +464,9 @@ export function getComputedInventoryStatus(item: {
   catalog_id?: string | null
   notes?: string | null
   condition_notes?: string | null
-}): "pending" | "active" | "sold" | "returned" | "under_repair" {
+}): "pending" | "active" | "reserved" | "sold" | "returned" | "under_repair" {
   const normalized = normalizeInventoryStatus(item.status)
-  if (normalized === "sold" || normalized === "returned" || normalized === "under_repair") {
+  if (normalized === "reserved" || normalized === "sold" || normalized === "returned" || normalized === "under_repair") {
     return normalized
   }
   return isInventoryReadyForSale(item) ? "active" : "pending"
@@ -480,6 +480,8 @@ export function getInventoryStatusMeta(status?: string | null): { label: string;
       return { label: "Cadastro incompleto", badge: "yellow" }
     case "sold":
       return { label: "Vendido", badge: "gray" }
+    case "reserved":
+      return { label: "Reservado", badge: "yellow" }
     case "under_repair":
       return { label: "Em reparo", badge: "red" }
     case "returned":
