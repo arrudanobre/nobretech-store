@@ -233,24 +233,24 @@ export default function FinanceiroPage() {
 
   const metrics = useMemo(() => {
     const completedSales = sales.filter((sale) => (sale.sale_status || "completed") === "completed")
-    const manualIncome = transactions.filter((t) => t.source_type !== "sale" && isRevenueIncome(t)).reduce((sum, t) => sum + Number(t.amount), 0)
     const reconciledTransactions = transactions.filter((t) => t.status === "reconciled")
+    const manualIncome = reconciledTransactions.filter((t) => t.source_type !== "sale" && isRevenueIncome(t)).reduce((sum, t) => sum + Number(t.amount), 0)
     const cashInflows = reconciledTransactions.filter((t) => t.type === "income").reduce((sum, t) => sum + Number(t.amount), 0)
     const cashOutflows = reconciledTransactions.filter((t) => t.type === "expense").reduce((sum, t) => sum + Number(t.amount), 0)
     const reconciledInventoryPurchases = reconciledTransactions.filter(isInventoryCashOut).reduce((sum, t) => sum + Number(t.amount), 0)
     const reconciledOperatingOutflows = reconciledTransactions.filter(isResultExpense).reduce((sum, t) => sum + Number(t.amount), 0)
     const reconciledOwnerWithdrawals = reconciledTransactions.filter(isOwnerWithdrawal).reduce((sum, t) => sum + Number(t.amount), 0)
-    const inventoryPurchases = transactions.filter(isInventoryCashOut).reduce((sum, t) => sum + Number(t.amount), 0)
-    const ownerWithdrawals = transactions.filter(isOwnerWithdrawal).reduce((sum, t) => sum + Number(t.amount), 0)
-    const ownerContributions = transactions.filter(isOwnerContribution).reduce((sum, t) => sum + Number(t.amount), 0)
-    const operatingExpenses = transactions.filter(isResultExpense).reduce((sum, t) => sum + Number(t.amount), 0)
+    const inventoryPurchases = reconciledTransactions.filter(isInventoryCashOut).reduce((sum, t) => sum + Number(t.amount), 0)
+    const ownerWithdrawals = reconciledTransactions.filter(isOwnerWithdrawal).reduce((sum, t) => sum + Number(t.amount), 0)
+    const ownerContributions = reconciledTransactions.filter(isOwnerContribution).reduce((sum, t) => sum + Number(t.amount), 0)
+    const operatingExpenses = reconciledTransactions.filter(isResultExpense).reduce((sum, t) => sum + Number(t.amount), 0)
     const salesRevenue = completedSales.reduce((sum, sale) => sum + saleNetRevenue(sale), 0)
     const cmv = completedSales.reduce((sum, sale) => sum + saleCost(sale), 0)
     const netRevenue = salesRevenue + manualIncome
     const grossProfit = salesRevenue - cmv
     const netProfit = netRevenue - cmv - operatingExpenses
     const grossMargin = salesRevenue > 0 ? (grossProfit / salesRevenue) * 100 : 0
-    const fixedExpenses = transactions
+    const fixedExpenses = reconciledTransactions
       .filter((t) => isResultExpense(t) && t.category !== "Impostos / Taxas")
       .reduce((sum, t) => sum + Number(t.amount), 0)
     const grossMarginRate = salesRevenue > 0 ? grossProfit / salesRevenue : 0
@@ -308,7 +308,7 @@ export default function FinanceiroPage() {
 
   const expensesByCategory = useMemo(() => {
     const grouped = new Map<string, number>()
-    for (const t of transactions.filter((item) => item.type === "expense")) {
+    for (const t of transactions.filter((item) => item.status === "reconciled" && item.type === "expense")) {
       grouped.set(t.category, (grouped.get(t.category) || 0) + Number(t.amount))
     }
     return Array.from(grouped.entries())
@@ -586,24 +586,24 @@ export default function FinanceiroPage() {
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <div className="min-w-0 rounded-xl border border-gray-100 bg-surface p-4">
               <p className="text-xs font-semibold uppercase text-gray-400">Ponto de equilíbrio</p>
-              <p className="mt-2 break-words text-[1.65rem] font-bold leading-tight text-navy-900">{formatBRL(metrics.breakEvenRevenue)}</p>
+              <p className="mt-2 whitespace-nowrap text-xl font-bold leading-tight text-navy-900 tabular-nums 2xl:text-2xl">{formatBRL(metrics.breakEvenRevenue)}</p>
               <p className="mt-1 text-xs text-gray-500">
                 {metrics.fixedExpenses > 0 ? "Meta mínima de vendas no mês" : "Lance despesas fixas para calcular"}
               </p>
             </div>
             <div className="min-w-0 rounded-xl border border-gray-100 bg-surface p-4">
               <p className="text-xs font-semibold uppercase text-gray-400">Lucro bruto</p>
-              <p className="mt-2 break-words text-[1.65rem] font-bold leading-tight text-navy-900">{formatBRL(metrics.grossProfit)}</p>
+              <p className="mt-2 whitespace-nowrap text-xl font-bold leading-tight text-navy-900 tabular-nums 2xl:text-2xl">{formatBRL(metrics.grossProfit)}</p>
               <p className="mt-1 text-xs text-gray-500">Antes das despesas lançadas</p>
             </div>
             <div className="min-w-0 rounded-xl border border-gray-100 bg-surface p-4">
               <p className="text-xs font-semibold uppercase text-gray-400">A conciliar</p>
-              <p className="mt-2 break-words text-[1.65rem] font-bold leading-tight text-navy-900">{formatBRL(metrics.pendingAmount)}</p>
+              <p className="mt-2 whitespace-nowrap text-xl font-bold leading-tight text-navy-900 tabular-nums 2xl:text-2xl">{formatBRL(metrics.pendingAmount)}</p>
               <p className="mt-1 text-xs text-gray-500">{metrics.pendingSales.length + metrics.pendingTransactions.length} movimento(s)</p>
             </div>
             <div className="min-w-0 rounded-xl border border-gray-100 bg-surface p-4">
               <p className="text-xs font-semibold uppercase text-gray-400">Sócios</p>
-              <p className="mt-2 break-words text-[1.65rem] font-bold leading-tight text-navy-900">{formatBRL(metrics.ownerContributions - metrics.ownerWithdrawals)}</p>
+              <p className="mt-2 whitespace-nowrap text-xl font-bold leading-tight text-navy-900 tabular-nums 2xl:text-2xl">{formatBRL(metrics.ownerContributions - metrics.ownerWithdrawals)}</p>
               <p className="mt-1 text-xs text-gray-500">Aportes menos retiradas</p>
             </div>
           </div>
@@ -833,7 +833,7 @@ function MetricCard({ title, value, hint, icon: Icon, tone }: { title: string; v
           <Icon className="h-5 w-5" />
         </div>
       </div>
-      <p className="text-2xl font-bold text-navy-900">{value}</p>
+      <p className="whitespace-nowrap text-[1.55rem] font-bold leading-tight text-navy-900 tabular-nums 2xl:text-2xl">{value}</p>
       <p className="mt-2 text-xs text-gray-500">{hint}</p>
     </Card>
   )
