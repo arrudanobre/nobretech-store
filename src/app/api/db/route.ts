@@ -16,6 +16,7 @@ const TABLES_WITH_COMPANY = new Set([
   "problems",
   "quotes",
   "financial_settings",
+  "finance_accounts",
   "supplier_prices",
   "sales_additional_items",
   "audit_logs",
@@ -66,6 +67,8 @@ const NUMERIC_COLUMNS = new Set([
   "price",
   "cost_price",
   "profit",
+  "opening_balance",
+  "current_balance",
 ])
 
 function ident(value: string) {

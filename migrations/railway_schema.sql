@@ -327,15 +327,35 @@ CREATE TABLE IF NOT EXISTS supplier_prices (
 
 -- Financial transactions -----------------------------------------------------
 
+CREATE TABLE IF NOT EXISTS finance_accounts (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id      UUID REFERENCES companies(id) ON DELETE CASCADE,
+  name            TEXT NOT NULL,
+  institution     TEXT,
+  account_type    TEXT NOT NULL DEFAULT 'checking' CHECK (account_type IN ('checking', 'savings', 'cash', 'credit', 'investment', 'other')),
+  opening_balance NUMERIC(12,2) NOT NULL DEFAULT 0,
+  current_balance NUMERIC(12,2),
+  color           TEXT DEFAULT '#2563eb',
+  is_active       BOOLEAN DEFAULT TRUE,
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS transactions (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id     UUID REFERENCES companies(id) ON DELETE CASCADE,
+  account_id     UUID REFERENCES finance_accounts(id) ON DELETE SET NULL,
   type           TEXT NOT NULL CHECK (type IN ('income', 'expense')),
   category       TEXT NOT NULL,
   description    TEXT,
   amount         NUMERIC(10,2) NOT NULL,
   date           DATE NOT NULL,
+  due_date       DATE,
   payment_method TEXT,
+  status         TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'reconciled', 'cancelled')),
+  reconciled_at  TIMESTAMPTZ,
+  source_type    TEXT,
+  source_id      UUID,
   notes          TEXT,
   created_at     TIMESTAMPTZ DEFAULT NOW(),
   updated_at     TIMESTAMPTZ DEFAULT NOW()
@@ -396,6 +416,12 @@ CREATE INDEX IF NOT EXISTS idx_supplier_prices_grade ON supplier_prices (grade);
 CREATE INDEX IF NOT EXISTS idx_supplier_prices_company ON supplier_prices (company_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_company ON transactions (company_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions (date);
+CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions (account_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions (status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_unique_source
+  ON transactions (company_id, source_type, source_id)
+  WHERE source_type IS NOT NULL AND source_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_finance_accounts_company ON finance_accounts (company_id);
 CREATE INDEX IF NOT EXISTS idx_additional_items_sale ON sales_additional_items (sale_id);
 CREATE INDEX IF NOT EXISTS idx_additional_items_company ON sales_additional_items (company_id);
 
