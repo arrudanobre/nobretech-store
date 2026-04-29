@@ -36,6 +36,7 @@ type ChartAccount = {
   financial_type: string
   statement_section: string
   sort_order: number
+  affects_dre?: boolean
   parent_code?: string | null
   level?: number | null
 }
@@ -110,6 +111,14 @@ function formatDreType(type: string) {
     adjustment: "Ajuste",
   }
   return labels[type] || type
+}
+
+function isDreAccountForMovement(account: ChartAccount, type: "income" | "expense") {
+  if (account.level === 1 || account.cash_flow_type !== type) return false
+  if (account.affects_dre === false || account.statement_section !== "dre") return false
+  const incomeTypes = ["revenue", "financial_revenue"]
+  const expenseTypes = ["deduction", "cogs", "operating_expense", "financial_expense", "tax"]
+  return type === "income" ? incomeTypes.includes(account.financial_type) : expenseTypes.includes(account.financial_type)
 }
 
 export default function TransacoesPage() {
@@ -241,13 +250,13 @@ export default function TransacoesPage() {
   }, [chartAccounts])
 
   const selectableChartAccounts = useMemo(() => {
-    return chartAccounts.filter((account) => account.cash_flow_type === formType && account.level !== 1)
+    return chartAccounts.filter((account) => isDreAccountForMovement(account, formType))
   }, [chartAccounts, formType])
 
   const findFallbackChartAccount = (type: "income" | "expense", category: string) => {
-    return chartAccounts.find((account) => account.cash_flow_type === type && account.name === category)
-      || chartAccounts.find((account) => account.cash_flow_type === type && account.name === (type === "income" ? "Receitas diversas" : "Outras despesas operacionais"))
-      || chartAccounts.find((account) => account.cash_flow_type === type && account.level !== 1)
+    return chartAccounts.find((account) => isDreAccountForMovement(account, type) && account.name === category)
+      || chartAccounts.find((account) => isDreAccountForMovement(account, type) && account.name === (type === "income" ? "Receitas diversas" : "Outras despesas operacionais"))
+      || chartAccounts.find((account) => isDreAccountForMovement(account, type))
       || null
   }
 
