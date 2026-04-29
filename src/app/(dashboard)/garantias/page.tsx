@@ -5,15 +5,44 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useToast } from "@/components/ui/toaster"
-import { formatBRL, formatDate, daysBetween } from "@/lib/helpers"
+import { formatBRL, formatDate, daysBetween, todayISO, addDaysISO } from "@/lib/helpers"
 import { supabase } from "@/lib/supabase"
 import { generateWarrantyPDF as generateWarrantyTermDocument, generateReceiptPDF as generateReceiptDocument, type SaleDocumentData } from "@/lib/sale-documents"
 import { Search, ShieldCheck, Download, FileText } from "lucide-react"
 import jsPDF from "jspdf"
 
-function warrantyProgressBar(daysRemaining: number, maxDays: number): number {
-  const pct = Math.max(0, Math.min(100, (daysRemaining / maxDays) * 100))
-  return Math.round(pct)
+function getWarrantyProductName(w: any) {
+  const catalog = w.inventory?.product_catalog
+  if (!catalog) return "Produto não identificado"
+  return `${catalog.model || ""}${catalog.variant ? ` ${catalog.variant}` : ""}${catalog.storage ? ` ${catalog.storage}` : ""}${catalog.color ? ` ${catalog.color}` : ""}`.trim()
+}
+
+function getWarrantyPeriod(w: any) {
+  const start = w.sales?.sale_date || w.sales?.warranty_start || w.start_date
+  const months = Number(w.sales?.warranty_months || 0)
+  const totalDays = Math.max(0, months * 30)
+  const end = totalDays > 0 ? addDaysISO(start, totalDays) : (w.sales?.warranty_end || w.end_date)
+  const remainingDays = Math.max(0, daysBetween(todayISO(), end))
+
+  return { start, end, totalDays, remainingDays }
+}
+
+function getWarrantyStatusMeta(w: any) {
+  const period = getWarrantyPeriod(w)
+
+  if (w.status === "expired" || period.remainingDays <= 0) {
+    return { label: "Vencida", variant: "red" as const, period }
+  }
+
+  if (w.status === "voided") {
+    return { label: "Cancelada", variant: "gray" as const, period }
+  }
+
+  if (w.status === "expiring_soon" || period.remainingDays <= 15) {
+    return { label: "Vencendo", variant: "yellow" as const, period }
+  }
+
+  return { label: "Ativa", variant: "green" as const, period }
 }
 
 export default function WarrantiesPage() {
@@ -164,8 +193,9 @@ export default function WarrantiesPage() {
       const grade = w.inventory?.grade || "—"
       const battery = w.inventory?.battery_health ? `${w.inventory.battery_health}%` : "—"
 
-      const startDate = w.start_date || w.sales?.warranty_start || "—"
-      const endDate = w.end_date || w.sales?.warranty_end || "—"
+      const warrantyPeriod = getWarrantyPeriod(w)
+      const startDate = warrantyPeriod.start || "—"
+      const endDate = warrantyPeriod.end || "—"
       const warrantyMonths = w.sales?.warranty_months || "—"
       const salePrice = w.sales?.sale_price || 0
 
@@ -542,72 +572,141 @@ export default function WarrantiesPage() {
           </p>
         </div>
       ) : (
-        <div className="space-y-3">
-          {filtered.map((w) => {
-            const totalDays = daysBetween(w.start_date, w.end_date)
-            const remaining = daysBetween(new Date().toISOString().split("T")[0], w.end_date)
-            const progress = warrantyProgressBar(Math.max(0, remaining), totalDays)
-            const barColor = remaining <= 7 ? "bg-danger-500" : remaining <= 15 ? "bg-warning-500" : "bg-success-500"
-            const badgeVariant = w.status === "active" ? "green" : w.status === "expiring_soon" ? "yellow" : w.status === "expired" ? "red" : "gray"
-            const badgeLabel = w.status === "active" ? "Ativa" : w.status === "expiring_soon" ? "Vencendo" : w.status === "expired" ? "Vencida" : "Cancelada"
+        <div className="bg-card rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="hidden lg:block">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50/80 border-b border-gray-100">
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Produto / Cliente</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Período</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Status</th>
+                  <th className="text-right px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Garantia</th>
+                  <th className="text-right px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Valor</th>
+                  <th className="text-right px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Ações</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {filtered.map((w) => {
+                  const productName = getWarrantyProductName(w)
+                  const customerName = w.customers?.full_name || "Cliente não identificado"
+                  const salePrice = Number(w.sales?.sale_price || 0)
+                  const statusMeta = getWarrantyStatusMeta(w)
 
-            const productName = w.inventory?.product_catalog
-              ? `${w.inventory.product_catalog.model} ${w.inventory.product_catalog.storage || ""} ${w.inventory.product_catalog.color || ""}`.trim()
-              : "Produto não identificado"
-            const customerName = w.customers?.full_name || "Cliente não identificado"
-            const salePrice = w.sales?.sale_price || 0
+                  return (
+                    <tr key={w.id} className="hover:bg-gray-50/60 transition-colors">
+                      <td className="px-5 py-3">
+                        <p className="font-semibold text-navy-900 truncate max-w-[260px]">{productName}</p>
+                        <p className="text-xs text-gray-400">{customerName}</p>
+                      </td>
+                      <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
+                        {formatDate(statusMeta.period.start)} → {formatDate(statusMeta.period.end)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge variant={statusMeta.variant} dot>
+                          {statusMeta.label}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                        <p className="font-semibold text-navy-900">{statusMeta.period.totalDays}d total</p>
+                        <p className="text-xs text-gray-400">{statusMeta.period.remainingDays}d restantes</p>
+                      </td>
+                      <td className="px-4 py-3 text-right font-bold text-navy-900 whitespace-nowrap">
+                        {formatBRL(salePrice)}
+                      </td>
+                      <td className="px-5 py-3">
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => generateWarrantyReceiptPDF(w)}
+                            isLoading={generating === w.id + '_receipt'}
+                            disabled={!w.sales?.id}
+                            title={!w.sales?.id ? "Recibo não disponível" : undefined}
+                            className={!w.sales?.id ? "opacity-50 cursor-not-allowed" : ""}
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            Recibo
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => generateWarrantyTermPDF(w)}
+                            isLoading={generating === w.id + '_term'}
+                          >
+                            <FileText className="w-3.5 h-3.5" />
+                            Termo
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
 
-            return (
-              <div key={w.id} className="bg-card rounded-xl border border-gray-100 p-4 shadow-sm">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="font-semibold text-sm text-navy-900 truncate">{productName}</p>
-                    <p className="text-xs text-gray-500 mt-0.5">{customerName}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      {formatDate(w.start_date)} → {formatDate(w.end_date)}
-                    </p>
+          <div className="lg:hidden divide-y divide-gray-50">
+            {filtered.map((w) => {
+              const productName = getWarrantyProductName(w)
+              const customerName = w.customers?.full_name || "Cliente não identificado"
+              const salePrice = Number(w.sales?.sale_price || 0)
+              const statusMeta = getWarrantyStatusMeta(w)
+
+              return (
+                <div key={w.id} className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-navy-900 truncate">{productName}</p>
+                      <p className="text-xs text-gray-400">{customerName}</p>
+                    </div>
+                    <Badge variant={statusMeta.variant} dot>
+                      {statusMeta.label}
+                    </Badge>
                   </div>
-                  <div className="text-right shrink-0">
-                    <Badge variant={badgeVariant} dot className="mb-1">{badgeLabel}</Badge>
-                    <p className={`text-2xl font-bold ${remaining <= 7 ? "text-danger-500" : remaining <= 15 ? "text-warning-500" : "text-success-500"}`}>
-                      {Math.max(0, remaining)}
-                    </p>
-                    <p className="text-xs text-gray-400">dias restantes</p>
+
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <p className="text-gray-400">Período</p>
+                      <p className="font-medium text-gray-600">
+                        {formatDate(statusMeta.period.start)} → {formatDate(statusMeta.period.end)}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-gray-400">Garantia</p>
+                      <p className="font-semibold text-navy-900">{statusMeta.period.totalDays}d total</p>
+                      <p className="text-gray-400">{statusMeta.period.remainingDays}d restantes</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-bold text-navy-900">{formatBRL(salePrice)}</p>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => generateWarrantyReceiptPDF(w)}
+                        isLoading={generating === w.id + '_receipt'}
+                        disabled={!w.sales?.id}
+                        className={!w.sales?.id ? "opacity-50 cursor-not-allowed" : ""}
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        Recibo
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => generateWarrantyTermPDF(w)}
+                        isLoading={generating === w.id + '_term'}
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        Termo
+                      </Button>
+                    </div>
                   </div>
                 </div>
-
-                {/* Progress bar */}
-                <div className="mt-3 w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                  <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${progress}%` }} />
-                </div>
-
-                <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
-                  <span className="text-xs text-gray-400">{formatBRL(salePrice)}</span>
-                  <div className="flex items-center gap-2 ml-auto">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => generateWarrantyReceiptPDF(w)}
-                      isLoading={generating === w.id + '_receipt'}
-                      disabled={!w.sales?.id}
-                      title={!w.sales?.id ? "Recibo não disponível" : undefined}
-                      className={!w.sales?.id ? "opacity-50 cursor-not-allowed" : ""}
-                    >
-                      <Download className="w-3.5 h-3.5 mr-1" /> Baixar Recibo
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => generateWarrantyTermPDF(w)}
-                      isLoading={generating === w.id + '_term'}
-                    >
-                      <FileText className="w-3.5 h-3.5 mr-1" /> Baixar Termo
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            )
-          })}
+              )
+            })}
+          </div>
         </div>
       )}
     </div>

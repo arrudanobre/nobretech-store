@@ -44,7 +44,7 @@ export function KPICard({ title, value, change, icon: Icon, prefix, gradient }: 
           <p className={`text-xs font-medium uppercase tracking-wider ${gradient ? "text-white/60" : "text-gray-500"}`}>
             {title}
           </p>
-          <p className="text-2xl sm:text-3xl font-bold font-display mt-1 truncate font-syne">
+          <p className="mt-1 truncate text-2xl sm:text-[1.7rem] font-semibold leading-tight tracking-normal text-inherit">
             {displayValue}
           </p>
           {change && (

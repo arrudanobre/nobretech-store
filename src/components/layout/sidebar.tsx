@@ -58,7 +58,8 @@ const staticNavItems: (Omit<NavItem, "badge"> & { badge?: { count?: number; defa
       { label: "Contas a Pagar", href: "/financeiro/pagar" },
       { label: "Gastos Mensais", href: "/financeiro/gastos" },
       { label: "Taxas da Maquininha", href: "/financeiro/taxas" },
-      { label: "DRE", href: "#", disabled: true },
+      { label: "DRE", href: "/financeiro/dre" },
+      { label: "Plano de DRE", href: "/financeiro/plano-dre" },
     ]
   },
   { label: "Laudos", href: "/historico", icon: FileText },
@@ -181,9 +182,7 @@ export function Sidebar() {
                   <ul className="mt-1 ml-9 space-y-1 pr-2">
 	                    {item.items!.map((subItem) => {
 	                      const isSubActive = pathname === subItem.href
-	                      const isSubItemDisabled =
-	                        subItem.disabled === true &&
-	                        !["/financeiro/receber", "/financeiro/pagar"].includes(subItem.href)
+                      const isSubItemDisabled = subItem.disabled === true
 	                      if (isSubItemDisabled) {
 	                        return (
 	                          <li key={subItem.label}>
@@ -332,7 +331,7 @@ export function MobileNav({ isOpen, onOpenChange }: { isOpen: boolean; onOpenCha
 	                      {item.items && (
 	                        <div className="ml-8 mt-1 space-y-1">
 	                          {item.items
-	                            .filter((subItem) => !subItem.disabled || ["/financeiro/receber", "/financeiro/pagar"].includes(subItem.href))
+                            .filter((subItem) => !subItem.disabled)
 	                            .map((subItem) => (
 	                            <Link
 	                              key={subItem.href}

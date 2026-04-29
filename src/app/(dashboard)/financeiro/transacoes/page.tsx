@@ -36,6 +36,8 @@ type ChartAccount = {
   financial_type: string
   statement_section: string
   sort_order: number
+  parent_code?: string | null
+  level?: number | null
 }
 
 type FinanceAccount = {
@@ -48,6 +50,7 @@ type FinanceAccount = {
 type UnifiedTransaction = {
   id: string
   account_id?: string | null
+  account_name?: string | null
   chart_account_id?: string | null
   type: "income" | "expense"
   category: string
@@ -60,6 +63,8 @@ type UnifiedTransaction = {
   source: "sale" | "manual"
   notes?: string | null
 }
+
+type FilterScope = "all" | "sales" | "manual" | "stock" | "owners"
 
 function monthRange(month: string) {
   const [year, monthNumber] = month.split("-").map(Number)
@@ -90,6 +95,23 @@ function parseCurrencyInput(value: string) {
   return Number(value.replace(/\D/g, "") || "0") / 100
 }
 
+function formatDreType(type: string) {
+  const labels: Record<string, string> = {
+    revenue: "Receita bruta",
+    deduction: "Dedução da receita",
+    cogs: "CMV",
+    operating_expense: "Despesa operacional",
+    financial_expense: "Despesa financeira",
+    financial_revenue: "Receita financeira",
+    tax: "Impostos",
+    inventory_asset: "Estoque / caixa",
+    owner_equity: "Sócios",
+    transfer: "Transferência",
+    adjustment: "Ajuste",
+  }
+  return labels[type] || type
+}
+
 export default function TransacoesPage() {
   const [data, setData] = useState<UnifiedTransaction[]>([])
   const [financeAccounts, setFinanceAccounts] = useState<FinanceAccount[]>([])
@@ -98,6 +120,7 @@ export default function TransacoesPage() {
   const [filterMonth, setFilterMonth] = useState(new Date().toISOString().substring(0, 7))
   const [filterType, setFilterType] = useState<"all" | "income" | "expense">("all")
   const [filterStatus, setFilterStatus] = useState<"all" | MovementStatus>("all")
+  const [filterScope, setFilterScope] = useState<FilterScope>("all")
   const [search, setSearch] = useState("")
 
   const [modalOpen, setModalOpen] = useState(false)
@@ -115,6 +138,7 @@ export default function TransacoesPage() {
   const [formDueDate, setFormDueDate] = useState("")
   const [formPayment, setFormPayment] = useState("Pix")
   const [formNotes, setFormNotes] = useState("")
+  const [categoryQuery, setCategoryQuery] = useState("")
   const monthOptions = useMemo(() => buildMonthOptions(), [])
   const { toast } = useToast()
 
@@ -154,13 +178,17 @@ export default function TransacoesPage() {
       if (transRes.error) throw new Error(transRes.error.message)
 
       setFinanceAccounts(accountsRes.data || [])
+      const accountNameById = new Map((accountsRes.data || []).map((account: FinanceAccount) => [
+        account.id,
+        account.institution ? `${account.name} · ${account.institution}` : account.name,
+      ]))
       const chartAccountsData = chartAccountsRes.data || []
       setChartAccounts(chartAccountsData)
       const transactions = transRes.data || []
-      const reconciledSaleIds = new Set(
+      const saleTransactionById = new Map<string, any>(
         transactions
           .filter((t: any) => t.source_type === "sale" && t.source_id)
-          .map((t: any) => String(t.source_id))
+          .map((t: any) => [String(t.source_id), t])
       )
 
       const manual: UnifiedTransaction[] = transactions
@@ -168,6 +196,7 @@ export default function TransacoesPage() {
         .map((t: any) => ({
           id: t.id,
           account_id: t.account_id,
+          account_name: t.account_id ? accountNameById.get(t.account_id) || "Conta não encontrada" : null,
           chart_account_id: t.chart_account_id,
           type: t.type,
           category: t.category,
@@ -183,15 +212,18 @@ export default function TransacoesPage() {
 
       const sales: UnifiedTransaction[] = (salesRes.data || []).map((s: any) => {
         const modelName = s.inventory?.catalog?.model || "Produto"
+        const saleTransaction = saleTransactionById.get(String(s.id))
         return {
           id: s.id,
+          account_id: saleTransaction?.account_id || null,
+          account_name: saleTransaction?.account_id ? accountNameById.get(saleTransaction.account_id) || "Conta não encontrada" : null,
           type: "income",
           category: "Venda",
           description: `Venda · ${modelName}`,
           amount: Number(s.net_amount ?? s.sale_price ?? 0),
           date: s.sale_date,
           payment_method: s.payment_method || "Não informado",
-          status: reconciledSaleIds.has(String(s.id)) ? "reconciled" : "pending",
+          status: saleTransaction?.status === "reconciled" ? "reconciled" : "pending",
           source: "sale",
         }
       })
@@ -209,20 +241,20 @@ export default function TransacoesPage() {
   }, [chartAccounts])
 
   const selectableChartAccounts = useMemo(() => {
-    return chartAccounts.filter((account) => account.cash_flow_type === formType)
+    return chartAccounts.filter((account) => account.cash_flow_type === formType && account.level !== 1)
   }, [chartAccounts, formType])
 
   const findFallbackChartAccount = (type: "income" | "expense", category: string) => {
     return chartAccounts.find((account) => account.cash_flow_type === type && account.name === category)
-      || chartAccounts.find((account) => account.cash_flow_type === type && account.name === (type === "income" ? "Venda de produtos" : "Outras despesas operacionais"))
-      || chartAccounts.find((account) => account.cash_flow_type === type)
+      || chartAccounts.find((account) => account.cash_flow_type === type && account.name === (type === "income" ? "Receitas diversas" : "Outras despesas operacionais"))
+      || chartAccounts.find((account) => account.cash_flow_type === type && account.level !== 1)
       || null
   }
 
   const openNewTransaction = () => {
     setEditingItem(null)
     setFormType("expense")
-    const account = findFallbackChartAccount("expense", "Aluguel")
+    const account = findFallbackChartAccount("expense", "Outras despesas operacionais")
     setFormChartAccountId(account?.id || "")
     setFormAccountId("")
     setFormCategory(account?.name || SAIDAS_CATEGORIES[0])
@@ -232,6 +264,7 @@ export default function TransacoesPage() {
     setFormDueDate("")
     setFormPayment("Pix")
     setFormNotes("")
+    setCategoryQuery("")
     setModalOpen(true)
   }
 
@@ -252,6 +285,7 @@ export default function TransacoesPage() {
     setFormDueDate(item.due_date?.slice(0, 10) || "")
     setFormPayment(item.payment_method === "-" ? "Pix" : item.payment_method)
     setFormNotes(item.notes || "")
+    setCategoryQuery("")
     setModalOpen(true)
   }
 
@@ -293,7 +327,7 @@ export default function TransacoesPage() {
       if (error) throw error
 
       closeModal()
-      const nextAccount = findFallbackChartAccount(formType, formType === "income" ? "Venda de produtos" : "Aluguel")
+      const nextAccount = findFallbackChartAccount(formType, formType === "income" ? "Receitas diversas" : "Outras despesas operacionais")
       setFormChartAccountId(nextAccount?.id || "")
       setFormCategory(nextAccount?.name || (formType === "income" ? ENTRADAS_CATEGORIES[0] : SAIDAS_CATEGORIES[0]))
       setFormDesc("")
@@ -337,15 +371,21 @@ export default function TransacoesPage() {
     return data.filter((item) => {
       if (filterType !== "all" && item.type !== filterType) return false
       if (filterStatus !== "all" && item.status !== filterStatus) return false
+      if (filterScope === "sales" && item.source !== "sale") return false
+      if (filterScope === "manual" && item.source !== "manual") return false
+      if (filterScope === "stock" && item.category !== "Estoque (Peças/Acessórios)") return false
+      if (filterScope === "owners" && !["Retirada de Lucro", "Aporte do proprietário"].includes(item.category)) return false
       if (!query) return true
       return [
         item.description,
         item.category,
         item.payment_method,
+        item.account_name || "",
+        formatBRL(item.amount),
         item.notes || "",
       ].some((value) => value.toLowerCase().includes(query))
     })
-  }, [data, filterStatus, filterType, search])
+  }, [data, filterScope, filterStatus, filterType, search])
 
   const totals = useMemo(() => {
     const income = filteredData.filter((item) => item.type === "income").reduce((sum, item) => sum + item.amount, 0)
@@ -366,6 +406,14 @@ export default function TransacoesPage() {
     pending: data.filter((item) => item.status === "pending").length,
     reconciled: data.filter((item) => item.status === "reconciled").length,
     cancelled: data.filter((item) => item.status === "cancelled").length,
+  }), [data])
+
+  const scopeCounts = useMemo(() => ({
+    all: data.length,
+    sales: data.filter((item) => item.source === "sale").length,
+    manual: data.filter((item) => item.source === "manual").length,
+    stock: data.filter((item) => item.category === "Estoque (Peças/Acessórios)").length,
+    owners: data.filter((item) => ["Retirada de Lucro", "Aporte do proprietário"].includes(item.category)).length,
   }), [data])
 
   return (
@@ -401,7 +449,7 @@ export default function TransacoesPage() {
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
             <Input
-              placeholder="Buscar por descrição, categoria, pagamento ou observação..."
+              placeholder="Buscar por descrição, categoria, conta, valor ou observação..."
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               className="pl-10"
@@ -425,6 +473,26 @@ export default function TransacoesPage() {
               </button>
             ))}
           </div>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2 border-t border-gray-100 pt-3">
+          {[
+            { key: "all", label: "Tudo", count: scopeCounts.all },
+            { key: "sales", label: "Vendas", count: scopeCounts.sales },
+            { key: "manual", label: "Manuais", count: scopeCounts.manual },
+            { key: "stock", label: "Estoque", count: scopeCounts.stock },
+            { key: "owners", label: "Sócios", count: scopeCounts.owners },
+          ].map((item) => (
+            <button
+              key={item.key}
+              onClick={() => setFilterScope(item.key as FilterScope)}
+              className={cn(
+                "rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
+                filterScope === item.key ? "bg-navy-900 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+              )}
+            >
+              {item.label} <span className="opacity-70">({item.count})</span>
+            </button>
+          ))}
         </div>
         <div className="mt-3 flex flex-wrap gap-2 border-t border-gray-100 pt-3">
           {[
@@ -470,6 +538,7 @@ export default function TransacoesPage() {
                     <th className="px-5 py-3 text-xs font-bold uppercase tracking-wider text-gray-400">Movimento</th>
                     <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-gray-400">Categoria</th>
                     <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-gray-400">Data</th>
+                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-gray-400">Conta</th>
                     <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-gray-400">Pagamento</th>
                     <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider text-gray-400">Status</th>
                     <th className="px-5 py-3 text-right text-xs font-bold uppercase tracking-wider text-gray-400">Valor</th>
@@ -509,7 +578,7 @@ export default function TransacoesPage() {
 
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy-950/40 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+          <div className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-gray-100 bg-gray-50/80 p-5">
               <div>
                 <h3 className="font-display text-lg font-bold text-navy-900 font-syne">{editingItem ? "Editar lançamento" : "Novo lançamento"}</h3>
@@ -520,15 +589,16 @@ export default function TransacoesPage() {
               </button>
             </div>
 
-            <form onSubmit={handleSaveTransaction} className="space-y-4 p-5">
+            <form onSubmit={handleSaveTransaction} className="space-y-4 overflow-y-auto p-5">
               <div className="grid grid-cols-2 gap-2 rounded-xl bg-gray-100 p-1">
                 <button
                   type="button"
                   onClick={() => {
-                    const account = findFallbackChartAccount("income", "Venda de produtos")
+                    const account = findFallbackChartAccount("income", "Receitas diversas")
                     setFormType("income")
                     setFormChartAccountId(account?.id || "")
                     setFormCategory(account?.name || ENTRADAS_CATEGORIES[0])
+                    setCategoryQuery("")
                   }}
                   className={cn("flex items-center justify-center gap-2 rounded-lg py-2 text-sm font-bold", formType === "income" ? "bg-white text-emerald-600 shadow-sm" : "text-gray-500")}
                 >
@@ -537,10 +607,11 @@ export default function TransacoesPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    const account = findFallbackChartAccount("expense", "Aluguel")
+                    const account = findFallbackChartAccount("expense", "Outras despesas operacionais")
                     setFormType("expense")
                     setFormChartAccountId(account?.id || "")
                     setFormCategory(account?.name || SAIDAS_CATEGORIES[0])
+                    setCategoryQuery("")
                   }}
                   className={cn("flex items-center justify-center gap-2 rounded-lg py-2 text-sm font-bold", formType === "expense" ? "bg-white text-red-600 shadow-sm" : "text-gray-500")}
                 >
@@ -549,26 +620,18 @@ export default function TransacoesPage() {
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">
-                <label className="space-y-1.5 sm:col-span-2">
-                  <span className="text-xs font-semibold text-navy-900">Categoria</span>
-                  <select
-                    value={formChartAccountId || formCategory}
-                    onChange={(event) => {
-                      const account = chartAccountById.get(event.target.value)
-                      setFormChartAccountId(account?.id || "")
-                      setFormCategory(account?.name || event.target.value)
+                <div className="sm:col-span-2">
+                  <CategoryPicker
+                    accounts={selectableChartAccounts}
+                    selectedId={formChartAccountId}
+                    query={categoryQuery}
+                    onQueryChange={setCategoryQuery}
+                    onSelect={(account) => {
+                      setFormChartAccountId(account.id)
+                      setFormCategory(account.name)
                     }}
-                    className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
-                  >
-                    {selectableChartAccounts.length > 0
-                      ? selectableChartAccounts.map((account) => (
-                        <option key={account.id} value={account.id}>{account.code} · {account.name}</option>
-                      ))
-                      : (formType === "income" ? ENTRADAS_CATEGORIES : SAIDAS_CATEGORIES).map((category) => (
-                        <option key={category} value={category}>{category}</option>
-                      ))}
-                  </select>
-                </label>
+                  />
+                </div>
                 <Input label="Descrição" placeholder="Ex: Aluguel da loja" value={formDesc} onChange={(event) => setFormDesc(event.target.value)} />
                 <Input label="Valor" inputMode="numeric" value={formAmount} onChange={(event) => setFormAmount(formatCurrencyInput(event.target.value))} />
                 <Input label="Data" type="date" value={formDate} onChange={(event) => setFormDate(event.target.value)} />
@@ -637,6 +700,110 @@ function Metric({ title, value, hint, icon: Icon, tone }: { title: string; value
   )
 }
 
+function CategoryPicker({
+  accounts,
+  selectedId,
+  query,
+  onQueryChange,
+  onSelect,
+}: {
+  accounts: ChartAccount[]
+  selectedId: string
+  query: string
+  onQueryChange: (value: string) => void
+  onSelect: (account: ChartAccount) => void
+}) {
+  const selected = accounts.find((account) => account.id === selectedId)
+  const normalizedQuery = query.toLowerCase().trim()
+  const filteredAccounts = accounts.filter((account) => {
+    if (!normalizedQuery) return true
+    return [account.code, account.name, formatDreType(account.financial_type)]
+      .some((value) => value.toLowerCase().includes(normalizedQuery))
+  })
+
+  const priority: Record<string, number> = {
+    operating_expense: 1,
+    inventory_asset: 2,
+    cogs: 3,
+    tax: 4,
+    financial_expense: 5,
+    deduction: 6,
+    revenue: 1,
+    financial_revenue: 2,
+    owner_equity: 7,
+  }
+
+  const groups = filteredAccounts
+    .slice()
+    .sort((a, b) => (priority[a.financial_type] || 99) - (priority[b.financial_type] || 99) || Number(a.sort_order || 0) - Number(b.sort_order || 0))
+    .reduce<Record<string, ChartAccount[]>>((acc, account) => {
+      const label = formatDreType(account.financial_type)
+      acc[label] = acc[label] || []
+      acc[label].push(account)
+      return acc
+    }, {})
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xs font-semibold text-navy-900">Categoria</span>
+        {selected && (
+          <span className="truncate text-xs text-gray-400">
+            Selecionado: <strong className="font-semibold text-navy-900">{selected.name}</strong>
+          </span>
+        )}
+      </div>
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+        <Input
+          placeholder="Buscar categoria: internet, estoque, imposto, cartão..."
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          className="pl-10"
+        />
+      </div>
+      <div className="max-h-64 overflow-y-auto rounded-xl border border-gray-200 bg-gray-50/70 p-2">
+        {Object.keys(groups).length === 0 ? (
+          <div className="py-8 text-center text-sm text-gray-400">Nenhuma categoria encontrada.</div>
+        ) : (
+          <div className="space-y-3">
+            {Object.entries(groups).map(([group, groupAccounts]) => (
+              <div key={group}>
+                <div className="px-2 pb-1 text-[11px] font-bold uppercase tracking-wider text-gray-400">{group}</div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {groupAccounts.map((account) => {
+                    const isSelected = account.id === selectedId
+                    return (
+                      <button
+                        key={account.id}
+                        type="button"
+                        onClick={() => onSelect(account)}
+                        className={cn(
+                          "rounded-xl border bg-white px-3 py-2 text-left transition-all hover:border-royal-300 hover:shadow-sm",
+                          isSelected ? "border-royal-500 ring-2 ring-royal-500/10" : "border-gray-100"
+                        )}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="text-sm font-semibold leading-snug text-navy-900">{account.name}</span>
+                          <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-bold text-gray-500">{account.code}</span>
+                        </div>
+                        <p className="mt-1 text-xs text-gray-500">{formatDreType(account.financial_type)}</p>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <p className="text-xs text-gray-400">
+        Use o campo acima para achar a categoria. O plano completo pode ser editado em Financeiro &gt; Plano de DRE.
+      </p>
+    </div>
+  )
+}
+
 function MovementRow({
   item,
   onEdit,
@@ -664,6 +831,9 @@ function MovementRow({
       </td>
       <td className="px-4 py-4 text-sm text-gray-600">{item.category}</td>
       <td className="px-4 py-4 text-sm text-gray-600">{formatDate(item.date)}</td>
+      <td className="px-4 py-4 text-sm text-gray-600">
+        <AccountLabel item={item} />
+      </td>
       <td className="px-4 py-4 text-sm text-gray-600">{item.payment_method}</td>
       <td className="px-4 py-4 text-center"><StatusBadge status={item.status} /></td>
       <td className={cn("px-5 py-4 text-right font-bold", item.type === "income" ? "text-emerald-600" : "text-red-600")}>
@@ -705,6 +875,7 @@ function MovementCard({
           <div className="min-w-0">
             <p className="truncate font-semibold text-navy-900">{item.description}</p>
             <p className="text-xs text-gray-500">{item.category} · {formatDate(item.date)}</p>
+            <p className="mt-1 text-xs text-gray-400"><AccountLabel item={item} /></p>
             <div className="mt-2"><StatusBadge status={item.status} /></div>
           </div>
         </div>
@@ -774,6 +945,12 @@ function MovementActions({
       </button>
     </div>
   )
+}
+
+function AccountLabel({ item }: { item: UnifiedTransaction }) {
+  if (item.account_name) return <span>{item.account_name}</span>
+  if (item.status === "reconciled") return <span className="text-red-500">Conta não vinculada</span>
+  return <span className="text-gray-400">{item.type === "income" ? "A receber" : "A pagar"}</span>
 }
 
 function MovementIcon({ item }: { item: UnifiedTransaction }) {

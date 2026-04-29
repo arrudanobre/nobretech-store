@@ -206,6 +206,9 @@ export default function FinanceiroPage() {
   }, [chartAccounts])
 
   const getTransactionAccount = (transaction: Transaction) => {
+    if (transaction.type === "expense" && transaction.category === "Estoque (Peças/Acessórios)") {
+      return chartAccounts.find((account) => account.code === "7.01") || null
+    }
     return (
       (transaction.chart_account_id ? chartAccountById.get(transaction.chart_account_id) : undefined) ||
       chartAccountByName.get(transaction.category) ||
@@ -233,6 +236,7 @@ export default function FinanceiroPage() {
 
   const metrics = useMemo(() => {
     const completedSales = sales.filter((sale) => (sale.sale_status || "completed") === "completed")
+    const activeTransactions = transactions.filter((t) => t.status !== "cancelled")
     const reconciledTransactions = transactions.filter((t) => t.status === "reconciled")
     const manualIncome = reconciledTransactions.filter((t) => t.source_type !== "sale" && isRevenueIncome(t)).reduce((sum, t) => sum + Number(t.amount), 0)
     const cashInflows = reconciledTransactions.filter((t) => t.type === "income").reduce((sum, t) => sum + Number(t.amount), 0)
@@ -243,18 +247,24 @@ export default function FinanceiroPage() {
     const inventoryPurchases = reconciledTransactions.filter(isInventoryCashOut).reduce((sum, t) => sum + Number(t.amount), 0)
     const ownerWithdrawals = reconciledTransactions.filter(isOwnerWithdrawal).reduce((sum, t) => sum + Number(t.amount), 0)
     const ownerContributions = reconciledTransactions.filter(isOwnerContribution).reduce((sum, t) => sum + Number(t.amount), 0)
-    const operatingExpenses = reconciledTransactions.filter(isResultExpense).reduce((sum, t) => sum + Number(t.amount), 0)
+    const paidOperatingExpenses = reconciledTransactions.filter(isResultExpense).reduce((sum, t) => sum + Number(t.amount), 0)
+    const plannedOperatingExpenses = activeTransactions.filter(isResultExpense).reduce((sum, t) => sum + Number(t.amount), 0)
+    const pendingOperatingExpenses = activeTransactions.filter((t) => t.status !== "reconciled" && isResultExpense(t)).reduce((sum, t) => sum + Number(t.amount), 0)
     const salesRevenue = completedSales.reduce((sum, sale) => sum + saleNetRevenue(sale), 0)
     const cmv = completedSales.reduce((sum, sale) => sum + saleCost(sale), 0)
     const netRevenue = salesRevenue + manualIncome
     const grossProfit = salesRevenue - cmv
-    const netProfit = netRevenue - cmv - operatingExpenses
+    const netProfit = netRevenue - cmv - paidOperatingExpenses
     const grossMargin = salesRevenue > 0 ? (grossProfit / salesRevenue) * 100 : 0
-    const fixedExpenses = reconciledTransactions
+    const fixedExpenses = activeTransactions
       .filter((t) => isResultExpense(t) && t.category !== "Impostos / Taxas")
       .reduce((sum, t) => sum + Number(t.amount), 0)
     const grossMarginRate = salesRevenue > 0 ? grossProfit / salesRevenue : 0
     const breakEvenRevenue = grossMarginRate > 0 ? fixedExpenses / grossMarginRate : fixedExpenses
+    const breakEvenGap = Math.max(0, breakEvenRevenue - salesRevenue)
+    const breakEvenProgress = breakEvenRevenue > 0 ? Math.min(100, Math.round((salesRevenue / breakEvenRevenue) * 100)) : 0
+    const averageTicket = completedSales.length > 0 ? salesRevenue / completedSales.length : 0
+    const salesNeeded = averageTicket > 0 ? Math.ceil(breakEvenGap / averageTicket) : 0
     const accountTotal = accountBalances.reduce((sum, account) => sum + account.balance, 0)
     const pendingSales = sales.filter((sale) => (sale.sale_status || "completed") !== "cancelled" && !reconciledSaleIds.has(sale.id))
     const pendingTransactions = transactions.filter((t) => t.source_type !== "sale" && t.status !== "reconciled" && t.status !== "cancelled")
@@ -272,7 +282,10 @@ export default function FinanceiroPage() {
       inventoryPurchases,
       ownerWithdrawals,
       ownerContributions,
-      operatingExpenses,
+      operatingExpenses: paidOperatingExpenses,
+      paidOperatingExpenses,
+      plannedOperatingExpenses,
+      pendingOperatingExpenses,
       salesRevenue,
       cmv,
       netRevenue,
@@ -281,6 +294,10 @@ export default function FinanceiroPage() {
       grossMargin,
       fixedExpenses,
       breakEvenRevenue,
+      breakEvenGap,
+      breakEvenProgress,
+      averageTicket,
+      salesNeeded,
       accountTotal,
       pendingSales,
       pendingTransactions,
@@ -573,11 +590,11 @@ export default function FinanceiroPage() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
-        <Card className="p-5">
+        <Card id="dre" className="scroll-mt-24 p-5">
           <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
               <h3 className="font-display font-bold text-navy-900 font-syne">Saúde financeira</h3>
-              <p className="text-sm text-gray-500">Ponto de equilíbrio usa despesas fixas e margem bruta. Resultado líquido não trata compra de estoque como despesa.</p>
+              <p className="text-sm text-gray-500">Ponto de equilíbrio usa despesas operacionais previstas e margem bruta real. Estoque e sócios ficam fora do resultado.</p>
             </div>
             <div className="shrink-0 self-start">
               <Badge variant={metrics.netProfit >= 0 ? "green" : "red"}>{metrics.netProfit >= 0 ? "No azul" : "Atenção"}</Badge>
@@ -592,19 +609,31 @@ export default function FinanceiroPage() {
               </p>
             </div>
             <div className="min-w-0 rounded-xl border border-gray-100 bg-surface p-4">
-              <p className="text-xs font-semibold uppercase text-gray-400">Lucro bruto</p>
-              <p className="mt-2 whitespace-nowrap text-xl font-bold leading-tight text-navy-900 tabular-nums 2xl:text-2xl">{formatBRL(metrics.grossProfit)}</p>
-              <p className="mt-1 text-xs text-gray-500">Antes das despesas lançadas</p>
+              <p className="text-xs font-semibold uppercase text-gray-400">Faturamento atual</p>
+              <p className="mt-2 whitespace-nowrap text-xl font-bold leading-tight text-navy-900 tabular-nums 2xl:text-2xl">{formatBRL(metrics.salesRevenue)}</p>
+              <p className="mt-1 text-xs text-gray-500">{metrics.breakEvenProgress}% do ponto de equilíbrio</p>
             </div>
             <div className="min-w-0 rounded-xl border border-gray-100 bg-surface p-4">
-              <p className="text-xs font-semibold uppercase text-gray-400">A conciliar</p>
-              <p className="mt-2 whitespace-nowrap text-xl font-bold leading-tight text-navy-900 tabular-nums 2xl:text-2xl">{formatBRL(metrics.pendingAmount)}</p>
-              <p className="mt-1 text-xs text-gray-500">{metrics.pendingSales.length + metrics.pendingTransactions.length} movimento(s)</p>
+              <p className="text-xs font-semibold uppercase text-gray-400">Falta vender</p>
+              <p className="mt-2 whitespace-nowrap text-xl font-bold leading-tight text-navy-900 tabular-nums 2xl:text-2xl">{formatBRL(metrics.breakEvenGap)}</p>
+              <p className="mt-1 text-xs text-gray-500">{metrics.salesNeeded > 0 ? `Aprox. ${metrics.salesNeeded} venda(s) no ticket atual` : "Meta coberta no mês"}</p>
             </div>
             <div className="min-w-0 rounded-xl border border-gray-100 bg-surface p-4">
-              <p className="text-xs font-semibold uppercase text-gray-400">Sócios</p>
-              <p className="mt-2 whitespace-nowrap text-xl font-bold leading-tight text-navy-900 tabular-nums 2xl:text-2xl">{formatBRL(metrics.ownerContributions - metrics.ownerWithdrawals)}</p>
-              <p className="mt-1 text-xs text-gray-500">Aportes menos retiradas</p>
+              <p className="text-xs font-semibold uppercase text-gray-400">Despesas fixas</p>
+              <p className="mt-2 whitespace-nowrap text-xl font-bold leading-tight text-navy-900 tabular-nums 2xl:text-2xl">{formatBRL(metrics.fixedExpenses)}</p>
+              <p className="mt-1 text-xs text-gray-500">{metrics.pendingOperatingExpenses > 0 ? `${formatBRL(metrics.pendingOperatingExpenses)} ainda em aberto` : "Sem pendências operacionais"}</p>
+            </div>
+          </div>
+          <div className="mt-4">
+            <div className="mb-2 flex items-center justify-between text-xs font-semibold text-gray-500">
+              <span>Progresso até o ponto de equilíbrio</span>
+              <span>{metrics.breakEvenProgress}%</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-gray-100">
+              <div
+                className={cn("h-full rounded-full transition-all", metrics.breakEvenGap > 0 ? "bg-royal-500" : "bg-emerald-500")}
+                style={{ width: `${metrics.breakEvenProgress}%` }}
+              />
             </div>
           </div>
           <div className="mt-5 h-56">
@@ -707,7 +736,10 @@ export default function FinanceiroPage() {
           <DreLine label="Receita líquida" value={metrics.netRevenue} strong />
           <DreLine label="(-) CMV / custo dos produtos" value={-metrics.cmv} />
           <DreLine label="= Lucro bruto" value={metrics.grossProfit} strong />
-          <DreLine label="(-) Despesas operacionais" value={-metrics.operatingExpenses} />
+          <DreLine label="(-) Despesas operacionais pagas" value={-metrics.paidOperatingExpenses} />
+          {metrics.pendingOperatingExpenses > 0 && (
+            <DreLine label="Despesas operacionais em aberto (não DRE)" value={-metrics.pendingOperatingExpenses} muted />
+          )}
           {metrics.inventoryPurchases > 0 && (
             <DreLine label="Compras de estoque (caixa, não DRE)" value={-metrics.inventoryPurchases} muted />
           )}
@@ -720,8 +752,8 @@ export default function FinanceiroPage() {
         <Card className="p-5">
           <div className="mb-5 flex items-center justify-between">
             <div>
-              <h3 className="font-display font-bold text-navy-900 font-syne">Despesas por categoria</h3>
-              <p className="text-sm text-gray-500">Onde o dinheiro está saindo.</p>
+              <h3 className="font-display font-bold text-navy-900 font-syne">Saídas por categoria</h3>
+              <p className="text-sm text-gray-500">Caixa conciliado: estoque, operação e demais saídas.</p>
             </div>
             <Link href="/financeiro/gastos" className="text-sm font-semibold text-royal-500">Ver gastos</Link>
           </div>

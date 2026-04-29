@@ -74,15 +74,71 @@ export function formatBRL(value: number): string {
   }).format(value)
 }
 
-/** Format date pt-BR */
-export function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString('pt-BR')
+function parseDateOnly(value?: string | null): Date | null {
+  if (!value) return null
+
+  const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (match) {
+    const [, year, month, day] = match
+    return new Date(Number(year), Number(month) - 1, Number(day))
+  }
+
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return null
+  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate())
 }
 
-/** Calculate days between dates */
-export function daysBetween(from: string, to: string = new Date().toISOString()): number {
-  const diff = new Date(to).getTime() - new Date(from).getTime()
-  return Math.floor(diff / (1000 * 60 * 60 * 24))
+export function todayISO(): string {
+  const today = new Date()
+  const year = today.getFullYear()
+  const month = String(today.getMonth() + 1).padStart(2, '0')
+  const day = String(today.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+export function addMonthsISO(dateStr?: string | null, months = 0): string | null {
+  const date = parseDateOnly(dateStr)
+  if (!date) return null
+
+  const day = date.getDate()
+  date.setMonth(date.getMonth() + months)
+
+  if (date.getDate() !== day) {
+    date.setDate(0)
+  }
+
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const dateDay = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${dateDay}`
+}
+
+export function addDaysISO(dateStr?: string | null, days = 0): string | null {
+  const date = parseDateOnly(dateStr)
+  if (!date) return null
+
+  date.setDate(date.getDate() + days)
+
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const dateDay = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${dateDay}`
+}
+
+/** Format date pt-BR without shifting date-only values by timezone */
+export function formatDate(dateStr?: string | null): string {
+  const date = parseDateOnly(dateStr)
+  return date ? date.toLocaleDateString('pt-BR') : '—'
+}
+
+/** Calculate calendar days between date-only values */
+export function daysBetween(from?: string | null, to: string | null | undefined = todayISO()): number {
+  const start = parseDateOnly(from)
+  const end = parseDateOnly(to)
+  if (!start || !end) return 0
+
+  const diff = end.getTime() - start.getTime()
+  return Math.round(diff / (1000 * 60 * 60 * 24))
 }
 
 /** Mask CPF */

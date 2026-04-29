@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
-import { formatBRL, formatDate, daysBetween, getProductName, getAdditionalItemDisplayName } from "@/lib/helpers"
+import { formatBRL, formatDate, daysBetween, todayISO, addDaysISO, getProductName, getAdditionalItemDisplayName } from "@/lib/helpers"
 import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
 import { supabase } from "@/lib/supabase"
 import { Plus, Search, TrendingUp, ShoppingCart, Calendar, CreditCard, ChevronRight } from "lucide-react"
@@ -20,10 +20,18 @@ function formatPayment(method?: string) {
     .replace("cash", "Dinheiro")
 }
 
-function getWarrantyDays(warrantyEnd?: string | null) {
-  if (!warrantyEnd) return null
-  const today = new Date().toISOString().split("T")[0]
-  return Math.max(0, daysBetween(today, warrantyEnd))
+function getWarrantyPeriod(sale: any) {
+  const start = sale.sale_date || sale.warranty_start
+  const months = Number(sale.warranty_months || 0)
+  const totalDays = Math.max(0, months * 30)
+  const end = totalDays > 0 ? addDaysISO(start, totalDays) : sale.warranty_end
+
+  return {
+    start,
+    end,
+    totalDays,
+    remainingDays: Math.max(0, daysBetween(todayISO(), end)),
+  }
 }
 
 function getSaleStatusMeta(status?: string | null) {
@@ -42,14 +50,14 @@ function getWarrantyBadge(sale: any) {
     return { label: "Após pagamento", variant: "gray" as const }
   }
 
-  if (!Number(sale.warranty_months || 0) || !sale.warranty_end) {
+  if (!Number(sale.warranty_months || 0)) {
     return { label: "Sem garantia", variant: "gray" as const }
   }
 
-  const warrantyDays = getWarrantyDays(sale.warranty_end) ?? 0
+  const warranty = getWarrantyPeriod(sale)
   return {
-    label: `${warrantyDays}d`,
-    variant: warrantyDays > 15 ? "green" as const : warrantyDays > 0 ? "yellow" as const : "red" as const,
+    label: `${warranty.remainingDays}d restantes`,
+    variant: warranty.remainingDays > 15 ? "green" as const : warranty.remainingDays > 0 ? "yellow" as const : "red" as const,
   }
 }
 

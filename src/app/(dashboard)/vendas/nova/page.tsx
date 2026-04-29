@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
-import { buildPriceTable, calcPrice, calcProfit, formatBRL, maskCPF, formatPhone, validateCPF, getFeeKey, getProductName, getAdditionalItemDisplayName, calculateDeviceValue, formatTradeInSuggestedRange, getTradeInSummaryStatus, getComputedInventoryStatus } from "@/lib/helpers"
+import { buildPriceTable, calcPrice, calcProfit, formatBRL, maskCPF, formatPhone, validateCPF, getFeeKey, getProductName, getAdditionalItemDisplayName, calculateDeviceValue, formatTradeInSuggestedRange, getTradeInSummaryStatus, getComputedInventoryStatus, todayISO, addDaysISO } from "@/lib/helpers"
 import { atualizarStatusEstoque } from "@/services/vendaService"
 import { PAYMENT_METHODS, CATEGORIES, PRODUCT_CATALOG, GRADES } from "@/lib/constants"
 import { useToast } from "@/components/ui/toaster"
@@ -974,9 +974,8 @@ function NewSaleContent() {
   const handleConfirm = async () => {
     setIsSubmitting(true)
     try {
-      const today = new Date().toISOString().split("T")[0]
-      const warrantyEnd = new Date()
-      warrantyEnd.setMonth(warrantyEnd.getMonth() + parseInt(warrantyMonths))
+      const today = todayISO()
+      const warrantyEnd = addDaysISO(today, parseInt(warrantyMonths) * 30)
 
       // 0. Get user's company_id (required for RLS on all inserts)
       const { data: { user } } = await supabase.auth.getUser()
@@ -1052,7 +1051,7 @@ function NewSaleContent() {
           payment_method: paymentMethod,
           warranty_months: parseInt(warrantyMonths),
           warranty_start: today,
-          warranty_end: warrantyEnd.toISOString().split("T")[0],
+          warranty_end: warrantyEnd,
           source_type: selectedProduct?.type || "own",
           supplier_name: selectedProduct?.type === "supplier" ? (selectedProduct.supplier_name || null) : null,
           supplier_cost: selectedProduct?.type === "supplier" ? (parseFloat(supplierCostInput) || 0) : null,
