@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, type ComponentType, type ReactNode } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -9,8 +9,26 @@ import { Select } from "@/components/ui/select"
 import { useToast } from "@/components/ui/toaster"
 import { supabase } from "@/lib/supabase"
 import { GRADES } from "@/lib/constants"
-import { ArrowLeft, Loader2, Save } from "lucide-react"
-import { getComputedInventoryStatus, mapLifecycleToLegacyCompatibleStatus } from "@/lib/helpers"
+import {
+  ArrowLeft,
+  BadgeDollarSign,
+  Boxes,
+  CalendarDays,
+  CheckCircle2,
+  FileText,
+  Hash,
+  Loader2,
+  PackageCheck,
+  Percent,
+  Save,
+  ShieldCheck,
+  Smartphone,
+  Store,
+  TrendingUp,
+  UserRound,
+  WalletCards,
+} from "lucide-react"
+import { formatBRL, getComputedInventoryStatus, getProductName, mapLifecycleToLegacyCompatibleStatus } from "@/lib/helpers"
 
 const STATUS_OPTIONS = [
   { value: "active", label: "Ativo" },
@@ -21,6 +39,47 @@ const STATUS_OPTIONS = [
   { value: "returned", label: "Devolvido" },
 ]
 
+type SectionCardProps = {
+  title: string
+  description: string
+  icon: ComponentType<{ className?: string }>
+  children: ReactNode
+}
+
+function SectionCard({ title, description, icon: Icon, children }: SectionCardProps) {
+  return (
+    <section className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5">
+      <div className="mb-5 flex items-start gap-3">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-royal-500/10 text-royal-600">
+          <Icon className="h-5 w-5" />
+        </div>
+        <div className="min-w-0">
+          <h3 className="text-base font-bold text-navy-900">{title}</h3>
+          <p className="text-sm text-gray-500">{description}</p>
+        </div>
+      </div>
+      {children}
+    </section>
+  )
+}
+
+function statusLabel(value: string) {
+  return STATUS_OPTIONS.find((item) => item.value === value)?.label || value
+}
+
+function toDateInputValue(value?: string | null) {
+  if (!value) return ""
+  const match = String(value).match(/^(\d{4}-\d{2}-\d{2})/)
+  return match?.[1] || ""
+}
+
+function formatDateBR(value?: string | null) {
+  const dateOnly = toDateInputValue(value)
+  if (!dateOnly) return "—"
+  const [year, month, day] = dateOnly.split("-")
+  return `${day}/${month}/${year}`
+}
+
 export default function EditProductPage() {
   const router = useRouter()
   const params = useParams()
@@ -30,6 +89,7 @@ export default function EditProductPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [catalogName, setCatalogName] = useState("")
+  const [productName, setProductName] = useState("")
   const [isAccessory, setIsAccessory] = useState(false)
   const [catalogId, setCatalogId] = useState<string | null>(null)
   const [notes, setNotes] = useState("")
@@ -49,6 +109,14 @@ export default function EditProductPage() {
     supplier_name: "",
   })
   const isSealed = formData.grade === "Lacrado"
+  const cost = parseFloat(formData.purchase_price) || 0
+  const suggested = parseFloat(formData.suggested_price) || 0
+  const profit = Math.max(0, suggested - cost)
+  const marginPct = cost > 0 && suggested > 0 ? Math.round(((suggested / cost) - 1) * 100) : 0
+  const markupPct = suggested > 0 ? Math.round((profit / suggested) * 100) : 0
+  const hasCoreId = isAccessory ? true : Boolean(formData.imei || formData.serial_number)
+  const isSupplierItem = formData.type === "supplier"
+
   const fetchProduct = useCallback(async () => {
     if (!productId) return
     try {
@@ -73,6 +141,7 @@ export default function EditProductPage() {
       if (isAcc) {
         const accName = item.notes || item.condition_notes?.replace(/^Acessório:\s*/, "") || "Produto manual"
         setCatalogName(accName)
+        setProductName(accName)
       }
 
       setFormData({
@@ -82,7 +151,7 @@ export default function EditProductPage() {
         status: item.status || "in_stock",
         purchase_price: item.purchase_price?.toString() || "",
         suggested_price: item.suggested_price?.toString() || "",
-        purchase_date: item.purchase_date || "",
+        purchase_date: toDateInputValue(item.purchase_date),
         battery_health: item.battery_health?.toString() || "",
         ios_version: item.ios_version || "",
         condition_notes: item.condition_notes || "",
@@ -98,7 +167,9 @@ export default function EditProductPage() {
           .single()
 
         if (catData) {
-          setCatalogName(`${catData.model}${catData.variant ? " " + catData.variant : ""} ${catData.storage || ""} ${catData.color || ""}`)
+          const resolvedName = getProductName({ ...item, catalog: catData })
+          setCatalogName(resolvedName)
+          setProductName(resolvedName)
         }
       }
     } catch (err) {
@@ -127,10 +198,11 @@ export default function EditProductPage() {
         imei: formData.imei || null,
         serial_number: formData.serial_number || null,
         catalog_id: catalogId,
-        notes: notes || formData.condition_notes || null,
+        notes: productName.trim() || notes || formData.condition_notes || null,
         condition_notes: formData.condition_notes || null,
       })
 
+      const trimmedProductName = productName.trim()
       const updateData: Record<string, any> = {
         imei: formData.imei || null,
         serial_number: formData.serial_number || null,
@@ -145,6 +217,7 @@ export default function EditProductPage() {
         quantity: formData.type === "own" ? Math.max(1, parseInt(formData.quantity) || 1) : 1,
         type: formData.type,
         supplier_name: formData.type === "supplier" ? (formData.supplier_name || null) : null,
+        notes: catalogId ? (trimmedProductName ? `Nome: ${trimmedProductName}` : null) : (trimmedProductName || null),
       }
 
       const { error } = await (supabase.from("inventory") as any)
@@ -175,190 +248,324 @@ export default function EditProductPage() {
   }
 
   return (
-    <div className="space-y-4 animate-fade-in">
+    <div className="space-y-5 animate-fade-in">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => router.back()}>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <Button variant="ghost" size="icon" onClick={() => router.back()} className="shrink-0">
             <ArrowLeft className="w-5 h-5" />
           </Button>
-          <div>
-            <h2 className="text-lg font-display font-bold text-navy-900 font-syne">{catalogName}</h2>
-            <p className="text-sm text-gray-500">Editar informações do produto</p>
+          <div className="min-w-0">
+            <h2 className="font-display text-xl font-bold text-navy-900 sm:text-2xl">{catalogName || "Editar produto"}</h2>
+            <p className="text-sm text-gray-500">Atualize os dados comerciais, técnicos e de rastreabilidade.</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                {statusLabel(formData.status)}
+              </span>
+              {formData.grade ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-royal-50 px-3 py-1 text-xs font-semibold text-royal-700">
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  {formData.grade}
+                </span>
+              ) : null}
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold text-gray-600">
+                <Store className="h-3.5 w-3.5" />
+                {isSupplierItem ? "Fornecedor" : "Estoque próprio"}
+              </span>
+            </div>
           </div>
         </div>
-        <Button variant="primary" onClick={handleSave} isLoading={saving}>
+        <Button variant="primary" onClick={handleSave} isLoading={saving} className="h-12 px-6 shadow-lg shadow-royal-500/20">
           <Save className="w-4 h-4" /> Salvar
         </Button>
       </div>
 
-      {/* Form */}
-      <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm space-y-4">
-        {/* Status */}
-        <Select
-          label="Status"
-          value={formData.status}
-          onChange={(e) => updateField("status", e.target.value)}
-          options={STATUS_OPTIONS}
-        />
-
-        {/* IMEI / Serial — only for devices */}
-        {!isAccessory && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Input
-            label="IMEI"
-            value={formData.imei}
-            onChange={(e) => updateField("imei", e.target.value.replace(/\D/g, "").slice(0, 15))}
-          />
-          <Input
-            label="Nº de Série"
-            value={formData.serial_number}
-            onChange={(e) => updateField("serial_number", e.target.value)}
-          />
-        </div>
-        )}
-
-        {/* Grade / Status — only for devices */}
-        {!isAccessory && !isSealed && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label className="block text-sm font-medium text-navy-900 mb-2">Grade (ABEC)</label>
-            <div className="flex gap-2">
-              {GRADES.map((g) => (
-                <button
-                  key={g.value}
-                  onClick={() => updateField("grade", g.value)}
-                  className={`flex-1 py-2.5 rounded-xl border text-sm font-bold transition-all ${
-                    formData.grade === g.value
-                      ? g.color + " border-current"
-                      : "bg-white text-gray-400 border-gray-200"
-                  }`}
-                >
-                  {g.value}
-                </button>
-              ))}
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="space-y-5">
+          <SectionCard
+            title="Identificação"
+            description={isAccessory ? "Nome e status do item manual." : "IMEI, número de série e status operacional do aparelho."}
+            icon={Hash}
+          >
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+              <div className="lg:col-span-3">
+                <Input
+                  label="Nome do produto"
+                  value={productName}
+                  onChange={(e) => setProductName(e.target.value)}
+                  placeholder="Ex: iPhone 17 Pro Max 256GB Cosmic Orange"
+                />
+                {catalogId ? (
+                  <p className="mt-1.5 text-xs text-gray-500">
+                    Este nome vale apenas para este item do estoque e não altera o catálogo padrão.
+                  </p>
+                ) : null}
+              </div>
+              <Select
+                label="Status"
+                value={formData.status}
+                onChange={(e) => updateField("status", e.target.value)}
+                options={STATUS_OPTIONS}
+              />
+              {!isAccessory ? (
+                <>
+                  <Input
+                    label="IMEI"
+                    value={formData.imei}
+                    onChange={(e) => updateField("imei", e.target.value.replace(/\D/g, "").slice(0, 15))}
+                  />
+                  <Input
+                    label="Nº de Série"
+                    value={formData.serial_number}
+                    onChange={(e) => updateField("serial_number", e.target.value)}
+                  />
+                </>
+              ) : (
+                <div className="lg:col-span-2 rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                  <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Produto manual</p>
+                  <p className="mt-1 text-lg font-bold text-navy-900">{productName || catalogName}</p>
+                  <p className="text-sm text-gray-500">Use o campo acima para ajustar o nome exibido no estoque e na venda.</p>
+                </div>
+              )}
             </div>
-          </div>
-        </div>
-        )}
 
-        {/* Accessory name display */}
-        {isAccessory && catalogName && (
-          <div className="bg-surface rounded-xl p-3">
-            <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Nome do Acessório</p>
-            <p className="text-sm font-medium text-navy-900">{catalogName}</p>
-          </div>
-        )}
+            {!isAccessory ? (
+              <div className="mt-5">
+                <label className="mb-2 block text-sm font-semibold text-navy-900">Grade comercial</label>
+                <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+                  {GRADES.map((g) => (
+                    <button
+                      key={g.value}
+                      type="button"
+                      onClick={() => updateField("grade", g.value)}
+                      className={`min-h-[48px] rounded-2xl border text-sm font-bold transition-all ${
+                        formData.grade === g.value
+                          ? `${g.color} border-current shadow-sm`
+                          : "border-gray-200 bg-white text-gray-400 hover:border-royal-300 hover:text-navy-900"
+                      }`}
+                    >
+                      {g.value}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </SectionCard>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Select
-            label="Origem do produto"
-            value={formData.type}
-            onChange={(e) => updateField("type", e.target.value)}
-            options={[
-              { label: "Estoque próprio", value: "own" },
-              { label: "Fornecedor", value: "supplier" },
-            ]}
-          />
-          {formData.type === "supplier" ? (
-            <Input
-              label="Nome do fornecedor"
-              placeholder="Opcional"
-              value={formData.supplier_name}
-              onChange={(e) => updateField("supplier_name", e.target.value)}
-            />
-          ) : null}
-        </div>
+          <SectionCard
+            title="Origem e estoque"
+            description="Defina se o item é próprio ou de fornecedor e como ele aparece no estoque."
+            icon={Boxes}
+          >
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+              <Select
+                label="Origem do produto"
+                value={formData.type}
+                onChange={(e) => updateField("type", e.target.value)}
+                options={[
+                  { label: "Estoque próprio", value: "own" },
+                  { label: "Fornecedor", value: "supplier" },
+                ]}
+              />
+              {formData.type === "supplier" ? (
+                <Input
+                  label="Nome do fornecedor"
+                  placeholder="Opcional"
+                  value={formData.supplier_name}
+                  onChange={(e) => updateField("supplier_name", e.target.value)}
+                />
+              ) : (
+                <Input
+                  label="Quantidade em estoque"
+                  type="number"
+                  min="1"
+                  value={formData.quantity}
+                  onChange={(e) => updateField("quantity", Math.max(1, parseInt(e.target.value) || 1).toString())}
+                />
+              )}
+              <Input
+                label="Data da compra"
+                type="date"
+                value={formData.purchase_date}
+                onChange={(e) => updateField("purchase_date", e.target.value)}
+              />
+            </div>
+          </SectionCard>
 
-        {/* Price / Date */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <Input
-            label="Preço de Custo (R$)"
-            type="number"
-            value={formData.purchase_price}
-            onChange={(e) => updateField("purchase_price", e.target.value)}
-          />
-          <div className="sm:col-span-2">
-            <div className="flex items-center gap-3 mb-1.5">
-              <label className="text-sm font-medium text-navy-900">Preço Sugerido (R$)</label>
-              <input
+          <SectionCard
+            title="Valores"
+            description="Ajuste custo, preço sugerido e margem sem perder referência do lucro esperado."
+            icon={BadgeDollarSign}
+          >
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_220px]">
+              <Input
+                label="Preço de custo (R$)"
+                type="number"
+                value={formData.purchase_price}
+                onChange={(e) => updateField("purchase_price", e.target.value)}
+              />
+              <Input
+                label="Preço sugerido (R$)"
                 type="number"
                 min="0"
                 step="1"
                 value={formData.suggested_price}
                 onChange={(e) => updateField("suggested_price", e.target.value)}
-                className="w-32 h-8 text-center rounded-lg border border-gray-200 text-sm font-semibold px-2"
               />
+              <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+                <p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Lucro previsto</p>
+                <p className="mt-1 text-2xl font-bold text-emerald-700">{formatBRL(profit)}</p>
+                <p className="text-xs text-emerald-700/80">{marginPct}% sobre custo</p>
+              </div>
             </div>
-            {formData.purchase_price && (
-              <div className="space-y-1">
+
+            {cost > 0 ? (
+              <div className="mt-5 rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-navy-900">Margem rápida</p>
+                    <p className="text-xs text-gray-500">Arraste para recalcular o preço sugerido a partir do custo.</p>
+                  </div>
+                  <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-navy-900 shadow-sm">
+                    {marginPct}%
+                  </span>
+                </div>
                 <input
                   type="range"
-                  min="5"
+                  min="0"
                   max="100"
-                  value={Math.round(Math.max(5, Math.min(100, (((parseFloat(formData.suggested_price) || 0) / (parseFloat(formData.purchase_price) || 1)) - 1) * 100)))}
+                  value={Math.max(0, Math.min(100, marginPct))}
                   onChange={(e) => {
-                    const marginPct = parseInt(e.target.value)
-                    const cost = parseFloat(formData.purchase_price) || 0
-                    const newPrice = Math.ceil(cost * (1 + marginPct / 100))
-                    updateField("suggested_price", newPrice.toString())
+                    const nextMargin = parseInt(e.target.value)
+                    updateField("suggested_price", Math.ceil(cost * (1 + nextMargin / 100)).toString())
                   }}
                   className="w-full accent-royal-500"
                 />
-                <div className="flex justify-between text-[10px] text-gray-400">
-                  <span>5%</span>
+                <div className="mt-2 flex justify-between text-[11px] font-semibold text-gray-400">
+                  <span>0%</span>
                   <span>100%</span>
                 </div>
               </div>
-            )}
-          </div>
-          <Input
-            label="Data da Compra"
-            type="date"
-            value={formData.purchase_date}
-            onChange={(e) => updateField("purchase_date", e.target.value)}
-          />
-          {formData.type === "own" ? (
-            <Input
-              label="Quantidade em Estoque"
-              type="number"
-              min="1"
-              value={formData.quantity}
-              onChange={(e) => updateField("quantity", Math.max(1, parseInt(e.target.value) || 1).toString())}
+            ) : null}
+          </SectionCard>
+
+          {!isAccessory ? (
+            <SectionCard
+              title="Dados técnicos"
+              description={isSealed ? "Produto lacrado assume bateria 100%; preencha software apenas se fizer sentido." : "Dados úteis para venda, garantia e assistência."}
+              icon={Smartphone}
+            >
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <Input
+                  label="Saúde da bateria (%)"
+                  type="number"
+                  min="0"
+                  max="100"
+                  disabled={isSealed}
+                  value={isSealed ? "100" : formData.battery_health}
+                  onChange={(e) => updateField("battery_health", e.target.value)}
+                />
+                <Input
+                  label="Versão do software"
+                  placeholder="Ex: 18.3"
+                  value={formData.ios_version}
+                  onChange={(e) => updateField("ios_version", e.target.value)}
+                />
+              </div>
+            </SectionCard>
+          ) : null}
+
+          <SectionCard
+            title="Observações"
+            description="Registre estado físico, caixa, acessórios inclusos e qualquer informação que ajude na venda."
+            icon={FileText}
+          >
+            <Textarea
+              label="Observações internas"
+              placeholder="Descreva o estado físico, riscos, marcas de uso..."
+              value={formData.condition_notes}
+              onChange={(e) => updateField("condition_notes", e.target.value)}
             />
-          ) : (
-            <p className="text-xs text-gray-500 self-center">Produto virtual de fornecedor (não compõe estoque próprio).</p>
-          )}
+          </SectionCard>
         </div>
 
-        {/* Battery / iOS — only for devices */}
-        {!isAccessory && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Input
-            label="Saúde da Bateria (%)"
-            type="number"
-            min="0"
-            max="100"
-            value={formData.battery_health}
-            onChange={(e) => updateField("battery_health", e.target.value)}
-          />
-          <Input
-            label="Versão do Software"
-            placeholder="Ex: 18.3"
-            value={formData.ios_version}
-            onChange={(e) => updateField("ios_version", e.target.value)}
-          />
-        </div>
-        )}
+        <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
+          <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
+            <div className="bg-navy-900 p-5 text-white">
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-navy-200">Resumo do item</p>
+                  <h3 className="mt-1 line-clamp-2 text-lg font-bold">{catalogName || "Produto"}</h3>
+                </div>
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/10">
+                  <PackageCheck className="h-5 w-5" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-2xl bg-white/10 p-3">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-navy-200">Custo</p>
+                  <p className="mt-1 text-lg font-bold">{formatBRL(cost)}</p>
+                </div>
+                <div className="rounded-2xl bg-white/10 p-3">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-navy-200">Venda</p>
+                  <p className="mt-1 text-lg font-bold">{formatBRL(suggested)}</p>
+                </div>
+              </div>
+            </div>
 
-        {/* Notes */}
-        <Textarea
-          label="Observações"
-          placeholder="Descreva o estado físico, riscos, marcas de uso..."
-          value={formData.condition_notes}
-          onChange={(e) => updateField("condition_notes", e.target.value)}
-        />
+            <div className="space-y-3 p-5">
+              <div className="flex items-center justify-between rounded-2xl border border-emerald-100 bg-emerald-50 p-3">
+                <div className="flex items-center gap-3">
+                  <TrendingUp className="h-5 w-5 text-emerald-600" />
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Lucro previsto</p>
+                    <p className="text-lg font-bold text-emerald-700">{formatBRL(profit)}</p>
+                  </div>
+                </div>
+                <span className="rounded-full bg-white px-2.5 py-1 text-xs font-bold text-emerald-700">
+                  {markupPct}%
+                </span>
+              </div>
 
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="rounded-2xl bg-gray-50 p-3">
+                  <Percent className="mb-2 h-4 w-4 text-royal-600" />
+                  <p className="text-xs text-gray-500">Margem</p>
+                  <p className="font-bold text-navy-900">{marginPct}%</p>
+                </div>
+                <div className="rounded-2xl bg-gray-50 p-3">
+                  <CalendarDays className="mb-2 h-4 w-4 text-royal-600" />
+                  <p className="text-xs text-gray-500">Compra</p>
+                  <p className="font-bold text-navy-900">{formatDateBR(formData.purchase_date)}</p>
+                </div>
+                <div className="rounded-2xl bg-gray-50 p-3">
+                  <WalletCards className="mb-2 h-4 w-4 text-royal-600" />
+                  <p className="text-xs text-gray-500">Origem</p>
+                  <p className="font-bold text-navy-900">{isSupplierItem ? "Fornecedor" : "Próprio"}</p>
+                </div>
+                <div className="rounded-2xl bg-gray-50 p-3">
+                  <UserRound className="mb-2 h-4 w-4 text-royal-600" />
+                  <p className="text-xs text-gray-500">Identificação</p>
+                  <p className={`font-bold ${hasCoreId ? "text-navy-900" : "text-amber-600"}`}>
+                    {hasCoreId ? "OK" : "Pendente"}
+                  </p>
+                </div>
+              </div>
+
+              {!hasCoreId ? (
+                <div className="rounded-2xl border border-amber-100 bg-amber-50 p-3 text-sm text-amber-800">
+                  Preencha IMEI ou número de série para facilitar busca, garantia e rastreabilidade.
+                </div>
+              ) : null}
+
+              <Button variant="primary" onClick={handleSave} isLoading={saving} className="h-12 w-full">
+                <Save className="h-4 w-4" />
+                Salvar alterações
+              </Button>
+            </div>
+          </div>
+        </aside>
       </div>
     </div>
   )

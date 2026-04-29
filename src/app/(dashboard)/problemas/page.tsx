@@ -131,7 +131,33 @@ export default function ProblemsPage() {
       if (error) console.error("[Problemas] Full query error:", error)
 
       if (error) throw error
-      setProblems(data || [])
+
+      const rows = data || []
+      const problemIds = rows.map((item: any) => item.id).filter(Boolean)
+      let updatesByProblemId: Record<string, any[]> = {}
+
+      if (problemIds.length > 0) {
+        const { data: updatesData, error: updatesError } = await (supabase
+          .from("problem_updates") as any)
+          .select("id, problem_id, note, created_by, created_at")
+          .in("problem_id", problemIds)
+          .order("created_at", { ascending: true })
+
+        if (updatesError) {
+          console.warn("[Problemas] Erro ao carregar atualizações:", updatesError)
+        } else {
+          updatesByProblemId = (updatesData || []).reduce((acc: Record<string, any[]>, update: any) => {
+            acc[update.problem_id] = acc[update.problem_id] || []
+            acc[update.problem_id].push(update)
+            return acc
+          }, {})
+        }
+      }
+
+      setProblems(rows.map((item: any) => ({
+        ...item,
+        problem_updates: updatesByProblemId[item.id] || [],
+      })))
     } catch (err: any) {
       console.error("Erro ao carregar problemas:", err)
       toast({ title: "Erro ao carregar problemas", description: err.message, type: "error" })
@@ -341,7 +367,7 @@ export default function ProblemsPage() {
   }
 
   /** Parse description into timeline entries */
-  const parseDescriptionIntoTimeline = (description: string, reportedDate: string) => {
+  const parseDescriptionIntoTimeline = (description: string, reportedDate: string, updates: any[] = []) => {
     const updateRegex = /\[ATUALIZAÇÃO\s+([^\]]+)\]:\s*(.+?)(?=\s*\[ATUALIZAÇÃO\s+[^\]]+\]:|$)/g
     const entries: { text: string; author: string; date: string; time: string; isUpdate: boolean }[] = []
 
@@ -384,6 +410,17 @@ export default function ProblemsPage() {
       }
       entries.push({ text: match[2].trim(), author, date, time, isUpdate: true })
     }
+    for (const update of updates) {
+      const createdAt = update.created_at || reportedDate
+      entries.push({
+        text: update.note,
+        author: "Técnico",
+        date: formatDate(createdAt),
+        time: new Date(createdAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
+        isUpdate: true,
+      })
+    }
+
     return entries
   }
 
@@ -733,7 +770,7 @@ export default function ProblemsPage() {
                       <div className="mt-3 pt-3 border-t border-gray-100 space-y-4" onClick={(e) => e.stopPropagation()}>
                         {/* Timeline */}
                         {(() => {
-                          const timelineEntries = parseDescriptionIntoTimeline(p.description, p.reported_date)
+                          const timelineEntries = parseDescriptionIntoTimeline(p.description, p.reported_date, p.problem_updates)
                           return (
                             <div className="relative pl-5">
                               <div className="absolute left-[6px] top-2 bottom-2 w-px bg-gray-200" />

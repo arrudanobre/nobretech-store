@@ -6,8 +6,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { supabase } from "@/lib/supabase"
-import { formatBRL, buildPriceTable, calcProfit, getFeeKey, getProductName, calculateDeviceValue, getTradeInGradeLabel } from "@/lib/helpers"
-import { PRODUCT_CATALOG, CATEGORIES, GRADES, PAYMENT_METHODS } from "@/lib/constants"
+import { formatBRL, buildPriceTable, calcProfit, getFeeKey, getProductName, calculateDeviceValue, getTradeInGradeLabel, normalizePaymentFeePct } from "@/lib/helpers"
+import { PRODUCT_CATALOG, CATEGORIES, GRADES, PAYMENT_METHODS, SIDEPAY_FEE_PCTS } from "@/lib/constants"
 import {
   Smartphone,
   TabletSmartphone,
@@ -108,28 +108,34 @@ export default function TradeInEvalPage() {
       try {
         const { data } = await (supabase.from("financial_settings").select("*").limit(1).single() as any)
         if (data) {
+          const readFee = (method: string, key: string) => {
+            const value = data[key]
+            if (value === null || value === undefined || value === "") return SIDEPAY_FEE_PCTS[method] ?? 0
+            return normalizePaymentFeePct(method, Number(value))
+          }
+
           setFinancialSettings({
-            pix: Number(data.pix_fee_pct) || 0,
-            cash: Number(data.cash_discount_pct) || 0,
-            debit: Number(data.debit_fee_pct) || 0,
-            credit_1x: Number(data.credit_1x_fee_pct) || 0,
-            credit_2x: Number(data.credit_2x_fee_pct) || 0,
-            credit_3x: Number(data.credit_3x_fee_pct) || 0,
-            credit_4x: Number(data.credit_4x_fee_pct) || 0,
-            credit_5x: Number(data.credit_5x_fee_pct) || 0,
-            credit_6x: Number(data.credit_6x_fee_pct) || 0,
-            credit_7x: Number(data.credit_7x_fee_pct) || 0,
-            credit_8x: Number(data.credit_8x_fee_pct) || 0,
-            credit_9x: Number(data.credit_9x_fee_pct) || 0,
-            credit_10x: Number(data.credit_10x_fee_pct) || 0,
-            credit_11x: Number(data.credit_11x_fee_pct) || 0,
-            credit_12x: Number(data.credit_12x_fee_pct) || 0,
-            credit_13x: Number(data.credit_13x_fee_pct ?? data.credit_12x_fee_pct) || 0,
-            credit_14x: Number(data.credit_14x_fee_pct ?? data.credit_12x_fee_pct) || 0,
-            credit_15x: Number(data.credit_15x_fee_pct ?? data.credit_12x_fee_pct) || 0,
-            credit_16x: Number(data.credit_16x_fee_pct ?? data.credit_12x_fee_pct) || 0,
-            credit_17x: Number(data.credit_17x_fee_pct ?? data.credit_12x_fee_pct) || 0,
-            credit_18x: Number(data.credit_18x_fee_pct ?? data.credit_12x_fee_pct) || 0,
+            cash: readFee("cash", "cash_discount_pct"),
+            pix: readFee("pix", "pix_fee_pct"),
+            debit: readFee("debit", "debit_fee_pct"),
+            credit_1x: readFee("credit_1x", "credit_1x_fee_pct"),
+            credit_2x: readFee("credit_2x", "credit_2x_fee_pct"),
+            credit_3x: readFee("credit_3x", "credit_3x_fee_pct"),
+            credit_4x: readFee("credit_4x", "credit_4x_fee_pct"),
+            credit_5x: readFee("credit_5x", "credit_5x_fee_pct"),
+            credit_6x: readFee("credit_6x", "credit_6x_fee_pct"),
+            credit_7x: readFee("credit_7x", "credit_7x_fee_pct"),
+            credit_8x: readFee("credit_8x", "credit_8x_fee_pct"),
+            credit_9x: readFee("credit_9x", "credit_9x_fee_pct"),
+            credit_10x: readFee("credit_10x", "credit_10x_fee_pct"),
+            credit_11x: readFee("credit_11x", "credit_11x_fee_pct"),
+            credit_12x: readFee("credit_12x", "credit_12x_fee_pct"),
+            credit_13x: readFee("credit_13x", "credit_13x_fee_pct"),
+            credit_14x: readFee("credit_14x", "credit_14x_fee_pct"),
+            credit_15x: readFee("credit_15x", "credit_15x_fee_pct"),
+            credit_16x: readFee("credit_16x", "credit_16x_fee_pct"),
+            credit_17x: readFee("credit_17x", "credit_17x_fee_pct"),
+            credit_18x: readFee("credit_18x", "credit_18x_fee_pct"),
           })
         }
       } catch { /* use empty settings */ }

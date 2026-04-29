@@ -108,6 +108,56 @@ CREATE TABLE IF NOT EXISTS inventory (
   updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS inventory_purchases (
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id         UUID REFERENCES companies(id) ON DELETE CASCADE NOT NULL,
+  supplier_id        UUID REFERENCES suppliers(id) ON DELETE SET NULL,
+  supplier_name      TEXT,
+  purchase_date      DATE NOT NULL,
+  payment_method     TEXT,
+  account_id         UUID,
+  chart_account_id   UUID,
+  transaction_id     UUID,
+  status             TEXT NOT NULL DEFAULT 'received' CHECK (status IN ('draft', 'received', 'cancelled')),
+  payment_status     TEXT NOT NULL DEFAULT 'pending' CHECK (payment_status IN ('pending', 'paid')),
+  due_date           DATE,
+  freight_amount     NUMERIC(10,2) NOT NULL DEFAULT 0,
+  other_costs_amount NUMERIC(10,2) NOT NULL DEFAULT 0,
+  products_amount    NUMERIC(10,2) NOT NULL DEFAULT 0,
+  total_amount       NUMERIC(10,2) NOT NULL DEFAULT 0,
+  notes              TEXT,
+  created_at         TIMESTAMPTZ DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS inventory_purchase_items (
+  id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id           UUID REFERENCES companies(id) ON DELETE CASCADE NOT NULL,
+  purchase_id          UUID REFERENCES inventory_purchases(id) ON DELETE CASCADE NOT NULL,
+  inventory_id         UUID REFERENCES inventory(id) ON DELETE SET NULL,
+  catalog_id           UUID REFERENCES product_catalog(id) ON DELETE SET NULL,
+  product_name         TEXT,
+  category             TEXT,
+  grade                TEXT,
+  quantity             INT NOT NULL DEFAULT 1,
+  unit_index           INT NOT NULL DEFAULT 1,
+  imei                 TEXT,
+  imei2                TEXT,
+  serial_number        TEXT,
+  battery_health       INT,
+  unit_cost            NUMERIC(10,2) NOT NULL DEFAULT 0,
+  freight_allocated    NUMERIC(10,2) NOT NULL DEFAULT 0,
+  other_cost_allocated NUMERIC(10,2) NOT NULL DEFAULT 0,
+  landed_unit_cost     NUMERIC(10,2) NOT NULL DEFAULT 0,
+  suggested_price      NUMERIC(10,2),
+  margin_pct           NUMERIC(10,2),
+  checklist_required   BOOLEAN NOT NULL DEFAULT FALSE,
+  checklist_status     TEXT NOT NULL DEFAULT 'not_required' CHECK (checklist_status IN ('not_required', 'pending', 'completed')),
+  notes                TEXT,
+  created_at           TIMESTAMPTZ DEFAULT NOW(),
+  updated_at           TIMESTAMPTZ DEFAULT NOW()
+);
+
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -284,27 +334,27 @@ CREATE TABLE IF NOT EXISTS financial_settings (
   id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id              UUID REFERENCES companies(id) ON DELETE CASCADE UNIQUE,
   default_margin_pct      NUMERIC(5,2) DEFAULT 15.00,
-  debit_fee_pct           NUMERIC(5,2) DEFAULT 1.10,
-  credit_1x_fee_pct       NUMERIC(5,2) DEFAULT 3.08,
-  credit_2x_fee_pct       NUMERIC(5,2) DEFAULT 4.67,
-  credit_3x_fee_pct       NUMERIC(5,2) DEFAULT 5.50,
-  credit_4x_fee_pct       NUMERIC(5,2) DEFAULT 6.34,
-  credit_5x_fee_pct       NUMERIC(5,2) DEFAULT 7.17,
-  credit_6x_fee_pct       NUMERIC(5,2) DEFAULT 8.03,
-  credit_7x_fee_pct       NUMERIC(5,2) DEFAULT 8.93,
-  credit_8x_fee_pct       NUMERIC(5,2) DEFAULT 9.78,
-  credit_9x_fee_pct       NUMERIC(5,2) DEFAULT 10.64,
-  credit_10x_fee_pct      NUMERIC(5,2) DEFAULT 11.51,
-  credit_11x_fee_pct      NUMERIC(5,2) DEFAULT 12.37,
-  credit_12x_fee_pct      NUMERIC(5,2) DEFAULT 13.25,
-  credit_13x_fee_pct      NUMERIC(5,2) DEFAULT 14.13,
-  credit_14x_fee_pct      NUMERIC(5,2) DEFAULT 15.01,
-  credit_15x_fee_pct      NUMERIC(5,2) DEFAULT 15.90,
-  credit_16x_fee_pct      NUMERIC(5,2) DEFAULT 16.78,
-  credit_17x_fee_pct      NUMERIC(5,2) DEFAULT 17.69,
-  credit_18x_fee_pct      NUMERIC(5,2) DEFAULT 18.58,
-  pix_fee_pct             NUMERIC(5,2) DEFAULT 0,
-  cash_discount_pct       NUMERIC(5,2) DEFAULT 0,
+  debit_fee_pct           NUMERIC(8,4) DEFAULT 1.1020,
+  credit_1x_fee_pct       NUMERIC(8,4) DEFAULT 3.0821,
+  credit_2x_fee_pct       NUMERIC(8,4) DEFAULT 4.6682,
+  credit_3x_fee_pct       NUMERIC(8,4) DEFAULT 5.4964,
+  credit_4x_fee_pct       NUMERIC(8,4) DEFAULT 6.3377,
+  credit_5x_fee_pct       NUMERIC(8,4) DEFAULT 7.1697,
+  credit_6x_fee_pct       NUMERIC(8,4) DEFAULT 8.0264,
+  credit_7x_fee_pct       NUMERIC(8,4) DEFAULT 8.9325,
+  credit_8x_fee_pct       NUMERIC(8,4) DEFAULT 9.7815,
+  credit_9x_fee_pct       NUMERIC(8,4) DEFAULT 10.6439,
+  credit_10x_fee_pct      NUMERIC(8,4) DEFAULT 11.5075,
+  credit_11x_fee_pct      NUMERIC(8,4) DEFAULT 12.3722,
+  credit_12x_fee_pct      NUMERIC(8,4) DEFAULT 13.2503,
+  credit_13x_fee_pct      NUMERIC(8,4) DEFAULT 14.1292,
+  credit_14x_fee_pct      NUMERIC(8,4) DEFAULT 15.0087,
+  credit_15x_fee_pct      NUMERIC(8,4) DEFAULT 15.9018,
+  credit_16x_fee_pct      NUMERIC(8,4) DEFAULT 16.7815,
+  credit_17x_fee_pct      NUMERIC(8,4) DEFAULT 17.6886,
+  credit_18x_fee_pct      NUMERIC(8,4) DEFAULT 18.5818,
+  pix_fee_pct             NUMERIC(8,4) DEFAULT 0.5025,
+  cash_discount_pct       NUMERIC(8,4) DEFAULT 0,
   default_warranty_months INT DEFAULT 3,
   updated_at              TIMESTAMPTZ DEFAULT NOW()
 );
@@ -349,7 +399,7 @@ CREATE TABLE IF NOT EXISTS finance_chart_accounts (
   code                  TEXT NOT NULL,
   name                  TEXT NOT NULL,
   cash_flow_type        TEXT NOT NULL CHECK (cash_flow_type IN ('income', 'expense', 'none')),
-  financial_type        TEXT NOT NULL CHECK (financial_type IN ('revenue', 'operating_expense', 'inventory_asset', 'cogs', 'tax', 'owner_equity', 'transfer', 'adjustment')),
+  financial_type        TEXT NOT NULL CHECK (financial_type IN ('revenue', 'deduction', 'cogs', 'operating_expense', 'financial_expense', 'financial_revenue', 'inventory_asset', 'tax', 'owner_equity', 'transfer', 'adjustment')),
   statement_section     TEXT NOT NULL CHECK (statement_section IN ('cash', 'dre', 'inventory', 'equity', 'transfer', 'adjustment')),
   affects_cash          BOOLEAN NOT NULL DEFAULT TRUE,
   affects_dre           BOOLEAN NOT NULL DEFAULT FALSE,
@@ -362,10 +412,27 @@ CREATE TABLE IF NOT EXISTS finance_chart_accounts (
   UNIQUE (company_id, code)
 );
 
+CREATE TABLE IF NOT EXISTS finance_credit_cards (
+  id                         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id                 UUID REFERENCES companies(id) ON DELETE CASCADE,
+  name                       TEXT NOT NULL,
+  issuer                     TEXT,
+  last_four                  TEXT,
+  due_day                    INT NOT NULL CHECK (due_day BETWEEN 1 AND 31),
+  closing_day                INT CHECK (closing_day BETWEEN 1 AND 31),
+  closing_days_before_due    INT NOT NULL DEFAULT 7 CHECK (closing_days_before_due BETWEEN 0 AND 28),
+  current_invoice_closed     BOOLEAN NOT NULL DEFAULT FALSE,
+  current_invoice_closing_date DATE,
+  is_active                  BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at                 TIMESTAMPTZ DEFAULT NOW(),
+  updated_at                 TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS transactions (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id     UUID REFERENCES companies(id) ON DELETE CASCADE,
   account_id     UUID REFERENCES finance_accounts(id) ON DELETE SET NULL,
+  credit_card_id UUID REFERENCES finance_credit_cards(id) ON DELETE SET NULL,
   chart_account_id UUID REFERENCES finance_chart_accounts(id) ON DELETE SET NULL,
   type           TEXT NOT NULL CHECK (type IN ('income', 'expense')),
   category       TEXT NOT NULL,
@@ -429,6 +496,9 @@ CREATE INDEX IF NOT EXISTS idx_inventory_company_status_origin ON inventory (com
 CREATE INDEX IF NOT EXISTS idx_inventory_purchase_date ON inventory (purchase_date);
 CREATE INDEX IF NOT EXISTS idx_inventory_supplier ON inventory (supplier_id);
 CREATE INDEX IF NOT EXISTS idx_inventory_source_sale ON inventory (source_sale_id);
+CREATE INDEX IF NOT EXISTS idx_inventory_purchases_company_date ON inventory_purchases (company_id, purchase_date DESC);
+CREATE INDEX IF NOT EXISTS idx_inventory_purchase_items_purchase ON inventory_purchase_items (purchase_id, unit_index);
+CREATE INDEX IF NOT EXISTS idx_inventory_purchase_items_inventory ON inventory_purchase_items (inventory_id);
 CREATE INDEX IF NOT EXISTS idx_sales_company_date ON sales (company_id, sale_date);
 CREATE INDEX IF NOT EXISTS idx_sales_status_due ON sales (company_id, sale_status, payment_due_date);
 CREATE INDEX IF NOT EXISTS idx_warranties_company_end ON warranties (company_id, end_date, status);
@@ -440,6 +510,7 @@ CREATE INDEX IF NOT EXISTS idx_supplier_prices_company ON supplier_prices (compa
 CREATE INDEX IF NOT EXISTS idx_transactions_company ON transactions (company_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions (date);
 CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions (account_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_credit_card ON transactions (company_id, credit_card_id, due_date);
 CREATE INDEX IF NOT EXISTS idx_transactions_chart_account ON transactions (chart_account_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions (status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_unique_source

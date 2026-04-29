@@ -3,13 +3,13 @@
 import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar, Cell } from "recharts"
-import { Banknote, Building2, CheckCircle2, Landmark, LineChart, Plus, ReceiptText, Wallet, ArrowUpRight, ArrowDownRight } from "lucide-react"
+import { Banknote, Building2, CheckCircle2, Landmark, LineChart, Plus, ReceiptText, Wallet, ArrowUpRight, ArrowDownRight, Sparkles } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { supabase } from "@/lib/supabase"
-import { formatBRL, formatDate } from "@/lib/helpers"
+import { formatBRL, formatDate, getProductName } from "@/lib/helpers"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/toaster"
 
@@ -66,6 +66,18 @@ type Sale = {
   sales_additional_items?: { type: "upsell" | "free"; cost_price: number; sale_price?: number | null; profit?: number | null }[]
 }
 
+type InventoryItem = {
+  id: string
+  purchase_price: number
+  suggested_price?: number | null
+  status?: string | null
+  quantity?: number | null
+  type?: string | null
+  notes?: string | null
+  condition_notes?: string | null
+  catalog?: { model?: string | null; storage?: string | null; color?: string | null; category?: string | null } | null
+}
+
 const expenseColors = ["#ef4444", "#f97316", "#eab308", "#2563eb", "#14b8a6", "#8b5cf6"]
 
 function monthRange(month: string) {
@@ -118,6 +130,7 @@ export default function FinanceiroPage() {
   const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [sales, setSales] = useState<Sale[]>([])
+  const [inventory, setInventory] = useState<InventoryItem[]>([])
   const [loading, setLoading] = useState(true)
   const [showAccountForm, setShowAccountForm] = useState(false)
   const [savingAccount, setSavingAccount] = useState(false)
@@ -146,7 +159,7 @@ export default function FinanceiroPage() {
     setLoading(true)
     try {
       const { start, end, endOfDay } = monthRange(month)
-      const [accountsRes, chartAccountsRes, transactionsRes, salesRes] = await Promise.all([
+      const [accountsRes, chartAccountsRes, transactionsRes, salesRes, inventoryRes] = await Promise.all([
         (supabase.from("finance_accounts") as any).select("*").eq("is_active", true).order("created_at", { ascending: true }),
         (supabase.from("finance_chart_accounts") as any).select("*").eq("is_active", true).order("sort_order", { ascending: true }),
         (supabase.from("transactions") as any).select("*").gte("date", start).lte("date", end).order("date", { ascending: false }),
@@ -155,16 +168,27 @@ export default function FinanceiroPage() {
           .gte("sale_date", start)
           .lte("sale_date", endOfDay)
           .order("sale_date", { ascending: false }),
+        (supabase.from("inventory") as any)
+          .select("id, purchase_price, suggested_price, status, quantity, type, notes, condition_notes, catalog:catalog_id(model, storage, color, category)")
+          .in("status", ["active", "in_stock"])
+          .order("created_at", { ascending: false }),
       ])
       if (accountsRes.error) throw new Error(accountsRes.error.message)
       if (chartAccountsRes.error) throw new Error(chartAccountsRes.error.message)
       if (transactionsRes.error) throw new Error(transactionsRes.error.message)
       if (salesRes.error) throw new Error(salesRes.error.message)
+      if (inventoryRes.error) throw new Error(inventoryRes.error.message)
 
       setAccounts(accountsRes.data || [])
       setChartAccounts(chartAccountsRes.data || [])
       setTransactions(transactionsRes.data || [])
       setSales(salesRes.data || [])
+      setInventory((inventoryRes.data || []).map((item: any) => ({
+        ...item,
+        purchase_price: Number(item.purchase_price || 0),
+        suggested_price: item.suggested_price === null ? null : Number(item.suggested_price || 0),
+        quantity: item.quantity === null ? null : Number(item.quantity || 1),
+      })))
     } catch (error: any) {
       toast({ title: "Erro ao carregar financeiro", description: error.message, type: "error" })
     } finally {
@@ -262,6 +286,8 @@ export default function FinanceiroPage() {
     const grossMarginRate = salesRevenue > 0 ? grossProfit / salesRevenue : 0
     const breakEvenRevenue = grossMarginRate > 0 ? fixedExpenses / grossMarginRate : fixedExpenses
     const breakEvenGap = Math.max(0, breakEvenRevenue - salesRevenue)
+    const profitCoverage = grossProfit - fixedExpenses
+    const profitGap = Math.max(0, fixedExpenses - grossProfit)
     const breakEvenProgress = breakEvenRevenue > 0 ? Math.min(100, Math.round((salesRevenue / breakEvenRevenue) * 100)) : 0
     const averageTicket = completedSales.length > 0 ? salesRevenue / completedSales.length : 0
     const salesNeeded = averageTicket > 0 ? Math.ceil(breakEvenGap / averageTicket) : 0
@@ -295,6 +321,8 @@ export default function FinanceiroPage() {
       fixedExpenses,
       breakEvenRevenue,
       breakEvenGap,
+      profitCoverage,
+      profitGap,
       breakEvenProgress,
       averageTicket,
       salesNeeded,
@@ -304,6 +332,39 @@ export default function FinanceiroPage() {
       pendingAmount,
     }
   }, [accountBalances, chartAccountById, chartAccountByName, reconciledSaleIds, sales, transactions])
+
+  const productRecommendations = useMemo(() => {
+    return inventory
+      .map((item) => {
+        const suggestedPrice = Number(item.suggested_price || 0)
+        const cost = Number(item.purchase_price || 0)
+        const unitProfit = suggestedPrice - cost
+        const marginPct = suggestedPrice > 0 ? (unitProfit / suggestedPrice) * 100 : 0
+        const quantity = Math.max(1, Number(item.quantity || 1))
+        return {
+          id: item.id,
+          name: getProductName({
+            catalog: item.catalog ? {
+              model: item.catalog.model || undefined,
+              storage: item.catalog.storage || undefined,
+              color: item.catalog.color || undefined,
+            } : null,
+            notes: item.notes,
+            condition_notes: item.condition_notes,
+          }),
+          suggestedPrice,
+          cost,
+          unitProfit,
+          marginPct,
+          quantity,
+          unitsToGoal: metrics.profitGap > 0 && unitProfit > 0 ? Math.ceil(metrics.profitGap / unitProfit) : 0,
+          score: unitProfit * Math.min(quantity, 3) + marginPct * 10,
+        }
+      })
+      .filter((item) => item.suggestedPrice > 0 && item.unitProfit > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3)
+  }, [inventory, metrics.profitGap])
 
   const flowChart = useMemo(() => {
     const days = new Map<string, { date: string; entradas: number; saidas: number; saldo: number }>()
@@ -582,7 +643,7 @@ export default function FinanceiroPage() {
         </Card>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
         <MetricCard title="Saldo em contas" value={formatBRL(metrics.accountTotal)} icon={Wallet} tone="navy" hint={`${accountBalances.length} conta(s) cadastrada(s)`} />
         <MetricCard title="Entradas conciliadas" value={formatBRL(metrics.cashInflows)} icon={ArrowUpRight} tone="green" hint={`Receita do mês: ${formatBRL(metrics.netRevenue)}`} />
         <MetricCard title="Saídas de caixa" value={formatBRL(metrics.cashOutflows)} icon={ArrowDownRight} tone="red" hint={`Estoque ${formatBRL(metrics.reconciledInventoryPurchases)} · retiradas ${formatBRL(metrics.reconciledOwnerWithdrawals)}`} />
@@ -600,27 +661,31 @@ export default function FinanceiroPage() {
               <Badge variant={metrics.netProfit >= 0 ? "green" : "red"}>{metrics.netProfit >= 0 ? "No azul" : "Atenção"}</Badge>
             </div>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
             <div className="min-w-0 rounded-xl border border-gray-100 bg-surface p-4">
               <p className="text-xs font-semibold uppercase text-gray-400">Ponto de equilíbrio</p>
-              <p className="mt-2 whitespace-nowrap text-xl font-bold leading-tight text-navy-900 tabular-nums 2xl:text-2xl">{formatBRL(metrics.breakEvenRevenue)}</p>
+              <p className="mt-2 min-w-0 text-[1.35rem] font-bold leading-tight text-navy-900 tabular-nums 2xl:text-xl">{formatBRL(metrics.breakEvenRevenue)}</p>
               <p className="mt-1 text-xs text-gray-500">
                 {metrics.fixedExpenses > 0 ? "Meta mínima de vendas no mês" : "Lance despesas fixas para calcular"}
               </p>
             </div>
             <div className="min-w-0 rounded-xl border border-gray-100 bg-surface p-4">
               <p className="text-xs font-semibold uppercase text-gray-400">Faturamento atual</p>
-              <p className="mt-2 whitespace-nowrap text-xl font-bold leading-tight text-navy-900 tabular-nums 2xl:text-2xl">{formatBRL(metrics.salesRevenue)}</p>
+              <p className="mt-2 min-w-0 text-[1.35rem] font-bold leading-tight text-navy-900 tabular-nums 2xl:text-xl">{formatBRL(metrics.salesRevenue)}</p>
               <p className="mt-1 text-xs text-gray-500">{metrics.breakEvenProgress}% do ponto de equilíbrio</p>
             </div>
             <div className="min-w-0 rounded-xl border border-gray-100 bg-surface p-4">
-              <p className="text-xs font-semibold uppercase text-gray-400">Falta vender</p>
-              <p className="mt-2 whitespace-nowrap text-xl font-bold leading-tight text-navy-900 tabular-nums 2xl:text-2xl">{formatBRL(metrics.breakEvenGap)}</p>
-              <p className="mt-1 text-xs text-gray-500">{metrics.salesNeeded > 0 ? `Aprox. ${metrics.salesNeeded} venda(s) no ticket atual` : "Meta coberta no mês"}</p>
+              <p className="text-xs font-semibold uppercase text-gray-400">{metrics.breakEvenGap > 0 ? "Falta vender" : "Meta coberta"}</p>
+              <p className={cn("mt-2 min-w-0 text-[1.35rem] font-bold leading-tight tabular-nums 2xl:text-xl", metrics.breakEvenGap > 0 ? "text-navy-900" : "text-emerald-600")}>
+                {metrics.breakEvenGap > 0 ? formatBRL(metrics.breakEvenGap) : formatBRL(Math.max(0, metrics.profitCoverage))}
+              </p>
+              <p className="mt-1 text-xs text-gray-500">
+                {metrics.salesNeeded > 0 ? `Aprox. ${metrics.salesNeeded} venda(s) no ticket atual` : "Lucro bruto acima das despesas"}
+              </p>
             </div>
             <div className="min-w-0 rounded-xl border border-gray-100 bg-surface p-4">
               <p className="text-xs font-semibold uppercase text-gray-400">Despesas fixas</p>
-              <p className="mt-2 whitespace-nowrap text-xl font-bold leading-tight text-navy-900 tabular-nums 2xl:text-2xl">{formatBRL(metrics.fixedExpenses)}</p>
+              <p className="mt-2 min-w-0 text-[1.35rem] font-bold leading-tight text-navy-900 tabular-nums 2xl:text-xl">{formatBRL(metrics.fixedExpenses)}</p>
               <p className="mt-1 text-xs text-gray-500">{metrics.pendingOperatingExpenses > 0 ? `${formatBRL(metrics.pendingOperatingExpenses)} ainda em aberto` : "Sem pendências operacionais"}</p>
             </div>
           </div>
@@ -635,6 +700,46 @@ export default function FinanceiroPage() {
                 style={{ width: `${metrics.breakEvenProgress}%` }}
               />
             </div>
+          </div>
+          <div className="mt-5 rounded-2xl border border-royal-100 bg-royal-50/40 p-4">
+            <div className="mb-3 flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-royal-600 shadow-sm">
+                <Sparkles className="h-4 w-4" />
+              </div>
+              <div>
+                <p className="font-semibold text-navy-900">Inteligência de venda</p>
+                <p className="text-xs text-gray-500">
+                  {metrics.profitGap > 0
+                    ? `Ainda faltam ${formatBRL(metrics.profitGap)} de lucro para cobrir as despesas.`
+                    : `O ponto de equilíbrio já foi coberto em ${formatBRL(Math.max(0, metrics.profitCoverage))}. Priorize itens com melhor lucro por unidade.`}
+                </p>
+              </div>
+            </div>
+            {productRecommendations.length > 0 ? (
+              <div className="grid gap-2">
+                {productRecommendations.map((item, index) => (
+                  <div key={item.id} className="grid gap-3 rounded-xl border border-white bg-white p-3 shadow-sm sm:grid-cols-[1fr_auto] sm:items-center">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-full bg-navy-900 px-2 py-0.5 text-[11px] font-bold text-white">#{index + 1}</span>
+                        <p className="truncate font-semibold text-navy-900">{item.name}</p>
+                      </div>
+                      <p className="mt-1 text-xs text-gray-500">
+                        {formatBRL(item.suggestedPrice)} venda · {formatBRL(item.unitProfit)} lucro estimado · {item.marginPct.toFixed(1)}% margem · {item.quantity} em estoque
+                      </p>
+                    </div>
+                    <div className="text-left sm:text-right">
+                      <p className="text-xs font-semibold uppercase text-gray-400">{metrics.profitGap > 0 ? "Para cobrir" : "Prioridade"}</p>
+                      <p className="font-bold text-emerald-600">
+                        {metrics.profitGap > 0 ? `${Math.max(1, item.unitsToGoal)} un.` : "Vender primeiro"}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="rounded-xl bg-white p-3 text-sm text-gray-500">Cadastre preço sugerido e custo nos produtos em estoque para o sistema recomendar o que vender primeiro.</p>
+            )}
           </div>
           <div className="mt-5 h-56">
             {flowChart.length > 0 ? (
@@ -858,14 +963,14 @@ function MetricCard({ title, value, hint, icon: Icon, tone }: { title: string; v
     red: "bg-red-50 text-red-600",
   }[tone]
   return (
-    <Card className="p-5">
+    <Card className="min-w-0 p-5">
       <div className="mb-4 flex items-center justify-between">
-        <p className="text-xs font-semibold uppercase text-gray-400">{title}</p>
+        <p className="min-w-0 pr-3 text-xs font-semibold uppercase text-gray-400">{title}</p>
         <div className={cn("flex h-10 w-10 items-center justify-center rounded-xl", toneClass)}>
           <Icon className="h-5 w-5" />
         </div>
       </div>
-      <p className="whitespace-nowrap text-[1.55rem] font-bold leading-tight text-navy-900 tabular-nums 2xl:text-2xl">{value}</p>
+      <p className="min-w-0 text-[1.45rem] font-bold leading-tight text-navy-900 tabular-nums 2xl:text-2xl">{value}</p>
       <p className="mt-2 text-xs text-gray-500">{hint}</p>
     </Card>
   )

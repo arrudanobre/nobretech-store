@@ -1,18 +1,19 @@
 "use client"
 
-import Link from "next/link"
-import { useEffect, useMemo, useState } from "react"
-import { AlertTriangle, CalendarClock, CheckCircle2, Clock3, Pencil, ReceiptText, Save, Search, Wallet, X } from "lucide-react"
+import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react"
+import { AlertTriangle, CalendarClock, CheckCircle2, Clock3, Pencil, Plus, ReceiptText, Save, Search, Trash2, Wallet, X } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
+import { FinanceTransactionModal } from "@/components/finance/transaction-modal"
 import { supabase } from "@/lib/supabase"
-import { formatBRL, formatDate, todayISO } from "@/lib/helpers"
+import { formatBRL, formatDate, formatPaymentMethod, todayISO } from "@/lib/helpers"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/toaster"
 
 type FinanceAccount = { id: string; name: string; institution?: string | null }
+type ChartAccount = { id: string; name: string; cash_flow_type: string; financial_type: string; statement_section: string; level?: number | null; affects_dre?: boolean | null; sort_order?: number | null }
 type PayableStatus = "pending" | "reconciled" | "cancelled"
 type Transaction = {
   id: string
@@ -28,6 +29,8 @@ type Transaction = {
   source_type?: string | null
   notes?: string | null
 }
+
+const METHODS = ["Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência"]
 
 function toDateOnly(date?: string | null) {
   if (!date) return todayISO()
@@ -51,15 +54,43 @@ function formatDueDate(date?: string | null) {
   return formatDate(toDateOnly(date))
 }
 
+function formatCurrencyInput(value: string) {
+  const digits = value.replace(/\D/g, "")
+  const cents = Number(digits || "0")
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(cents / 100)
+}
+
+function parseCurrencyInput(value: string) {
+  return Number(value.replace(/\D/g, "") || "0") / 100
+}
+
+function monthGroupLabel(monthKey: string) {
+  const [year, month] = monthKey.split("-").map(Number)
+  const label = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" })
+    .format(new Date(year, month - 1, 1))
+  return label.replace(/^\w/, (letter) => letter.toUpperCase())
+}
+
 export default function ContasPagarPage() {
   const [accounts, setAccounts] = useState<FinanceAccount[]>([])
+  const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([])
   const [selectedAccountId, setSelectedAccountId] = useState("")
   const [items, setItems] = useState<Transaction[]>([])
   const [loading, setLoading] = useState(true)
   const [payingId, setPayingId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [deletingSeriesKey, setDeletingSeriesKey] = useState<string | null>(null)
   const [editingDueId, setEditingDueId] = useState<string | null>(null)
   const [dueDateInput, setDueDateInput] = useState("")
   const [savingDueId, setSavingDueId] = useState<string | null>(null)
+  const [quickModalOpen, setQuickModalOpen] = useState(false)
+  const [sharedModalOpen, setSharedModalOpen] = useState(false)
+  const [quickSaving, setQuickSaving] = useState(false)
+  const [quickChartAccountId, setQuickChartAccountId] = useState("")
+  const [quickDesc, setQuickDesc] = useState("")
+  const [quickAmount, setQuickAmount] = useState("R$ 0,00")
+  const [quickDueDate, setQuickDueDate] = useState(todayISO())
+  const [quickPayment, setQuickPayment] = useState("Pix")
   const [search, setSearch] = useState("")
   const [filter, setFilter] = useState<"open" | "overdue" | "week" | "paid">("open")
   const { toast } = useToast()
@@ -75,11 +106,16 @@ export default function ContasPagarPage() {
   const fetchData = async () => {
     setLoading(true)
     try {
-      const [accountsRes, transactionsRes] = await Promise.all([
+      const [accountsRes, chartAccountsRes, transactionsRes] = await Promise.all([
         (supabase.from("finance_accounts") as any)
           .select("id, name, institution")
           .eq("is_active", true)
           .order("created_at", { ascending: true }),
+        (supabase.from("finance_chart_accounts") as any)
+          .select("id, name, cash_flow_type, financial_type, statement_section, level, affects_dre, sort_order")
+          .eq("is_active", true)
+          .eq("cash_flow_type", "expense")
+          .order("sort_order", { ascending: true }),
         (supabase.from("transactions") as any)
           .select("*")
           .eq("type", "expense")
@@ -87,6 +123,7 @@ export default function ContasPagarPage() {
           .order("due_date", { ascending: true }),
       ])
       if (accountsRes.error) throw new Error(accountsRes.error.message)
+      if (chartAccountsRes.error) throw new Error(chartAccountsRes.error.message)
       if (transactionsRes.error) throw new Error(transactionsRes.error.message)
 
       const accountNameById = new Map((accountsRes.data || []).map((account: FinanceAccount) => [
@@ -101,6 +138,9 @@ export default function ContasPagarPage() {
       }))
 
       setAccounts(accountsRes.data || [])
+      const validChartAccounts = (chartAccountsRes.data || []).filter((account: ChartAccount) => account.level !== 1 && account.statement_section === "dre")
+      setChartAccounts(validChartAccounts)
+      if (!quickChartAccountId && validChartAccounts[0]?.id) setQuickChartAccountId(validChartAccounts[0].id)
       setItems(transactions)
     } catch (error: any) {
       toast({ title: "Erro ao carregar contas a pagar", description: error.message, type: "error" })
@@ -154,6 +194,84 @@ export default function ContasPagarPage() {
     const paid = items.filter((item) => item.status === "reconciled").reduce((sum, item) => sum + Number(item.amount), 0)
     return { open, overdue, week, paid }
   }, [items])
+
+  const grouped = useMemo(() => {
+    const groups = new Map<string, { key: string; label: string; total: number; count: number; items: Transaction[] }>()
+
+    for (const item of filtered) {
+      const due = toDateOnly(item.due_date || item.date)
+      const key = due.slice(0, 7)
+      const current = groups.get(key) || { key, label: monthGroupLabel(key), total: 0, count: 0, items: [] }
+      current.total += Number(item.amount || 0)
+      current.count += 1
+      current.items.push(item)
+      groups.set(key, current)
+    }
+
+    return Array.from(groups.values()).sort((a, b) => a.key.localeCompare(b.key))
+  }, [filtered])
+
+  const seriesMeta = (item: Transaction) => {
+    const description = item.description || ""
+    const match = description.match(/^(.*)\s\((\d+)\/(\d+)\)$/)
+    if (!match) return null
+    return { base: match[1], index: Number(match[2]), total: Number(match[3]), key: `${match[1]}|${match[3]}|${item.category}|${item.payment_method || ""}` }
+  }
+
+  const seriesItemsFor = (item: Transaction) => {
+    const meta = seriesMeta(item)
+    if (!meta) return []
+    return items.filter((candidate) => {
+      const candidateMeta = seriesMeta(candidate)
+      return candidate.status !== "reconciled"
+        && candidateMeta?.base === meta.base
+        && candidateMeta?.total === meta.total
+        && candidate.category === item.category
+        && candidate.payment_method === item.payment_method
+    })
+  }
+
+  const openQuickModal = () => {
+    const account = chartAccounts[0]
+    setQuickChartAccountId(account?.id || "")
+    setQuickDesc("")
+    setQuickAmount("R$ 0,00")
+    setQuickDueDate(todayISO())
+    setQuickPayment("Pix")
+    setQuickModalOpen(true)
+  }
+
+  const saveQuickExpense = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const chartAccount = chartAccounts.find((account) => account.id === quickChartAccountId)
+    const amount = parseCurrencyInput(quickAmount)
+    if (!chartAccount || !quickDesc.trim() || amount <= 0 || !quickDueDate) {
+      toast({ title: "Preencha categoria, descrição, valor e vencimento", type: "error" })
+      return
+    }
+    setQuickSaving(true)
+    try {
+      const { error } = await (supabase.from("transactions") as any).insert({
+        type: "expense",
+        chart_account_id: chartAccount.id,
+        category: chartAccount.name,
+        description: quickDesc.trim(),
+        amount,
+        date: quickDueDate,
+        due_date: quickDueDate,
+        payment_method: quickPayment,
+        status: "pending",
+      })
+      if (error) throw error
+      toast({ title: "Conta criada", type: "success" })
+      setQuickModalOpen(false)
+      fetchData()
+    } catch (error: any) {
+      toast({ title: "Erro ao criar conta", description: error.message, type: "error" })
+    } finally {
+      setQuickSaving(false)
+    }
+  }
 
   const startEditDueDate = (item: Transaction) => {
     setEditingDueId(item.id)
@@ -215,6 +333,46 @@ export default function ContasPagarPage() {
     }
   }
 
+  const deleteOne = async (item: Transaction) => {
+    if (item.status === "reconciled") {
+      toast({ title: "Conta já paga", description: "Desfaça a conciliação em Entradas e Saídas antes de excluir.", type: "error" })
+      return
+    }
+    if (!window.confirm(`Excluir "${item.description || item.category}"?`)) return
+    setDeletingId(item.id)
+    try {
+      const { error } = await (supabase.from("transactions") as any).delete().eq("id", item.id)
+      if (error) throw error
+      toast({ title: "Conta excluída", type: "success" })
+      fetchData()
+    } catch (error: any) {
+      toast({ title: "Erro ao excluir conta", description: error.message, type: "error" })
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
+  const deleteSeries = async (item: Transaction) => {
+    const related = seriesItemsFor(item)
+    const meta = seriesMeta(item)
+    if (!meta || related.length <= 1) {
+      deleteOne(item)
+      return
+    }
+    if (!window.confirm(`Excluir o lançamento inteiro "${meta.base}" com ${related.length} parcela(s) em aberto?`)) return
+    setDeletingSeriesKey(meta.key)
+    try {
+      const { error } = await (supabase.from("transactions") as any).delete().in("id", related.map((entry) => entry.id))
+      if (error) throw error
+      toast({ title: "Lançamento excluído", description: `${related.length} parcela(s) removida(s).`, type: "success" })
+      fetchData()
+    } catch (error: any) {
+      toast({ title: "Erro ao excluir lançamento", description: error.message, type: "error" })
+    } finally {
+      setDeletingSeriesKey(null)
+    }
+  }
+
   return (
     <div className="space-y-5 animate-fade-in">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -233,9 +391,9 @@ export default function ContasPagarPage() {
               <option key={account.id} value={account.id}>{account.name}{account.institution ? ` · ${account.institution}` : ""}</option>
             ))}
           </select>
-          <Link href="/financeiro/transacoes">
-            <Button variant="primary" className="w-full sm:w-auto">Novo lançamento</Button>
-          </Link>
+          <Button variant="primary" className="w-full sm:w-auto" onClick={() => setSharedModalOpen(true)}>
+            <Plus className="mr-2 h-4 w-4" /> Novo lançamento
+          </Button>
         </div>
       </div>
 
@@ -302,9 +460,41 @@ export default function ContasPagarPage() {
                     <th className="px-5 py-3 text-right text-xs font-bold uppercase tracking-wider text-gray-400">Ações</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filtered.map((item) => (
-                    <PayableRow
+                <tbody>
+                  {grouped.map((group) => (
+                    <FragmentGroup key={group.key} group={group}>
+                      {group.items.map((item) => (
+                        <PayableRow
+                          key={item.id}
+                          item={item}
+                          editingDueId={editingDueId}
+                          dueDateInput={dueDateInput}
+                          savingDueId={savingDueId}
+                          payingId={payingId}
+                          onDueDateChange={setDueDateInput}
+                          onStartEditDueDate={startEditDueDate}
+                          onCancelEditDueDate={cancelEditDueDate}
+                          onSaveDueDate={saveDueDate}
+                          onPay={markPaid}
+                          onDeleteOne={deleteOne}
+                          onDeleteSeries={deleteSeries}
+                          deletingId={deletingId}
+                          deletingSeriesKey={deletingSeriesKey}
+                          getSeriesMeta={seriesMeta}
+                        />
+                      ))}
+                    </FragmentGroup>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="divide-y divide-gray-100 lg:hidden">
+              {grouped.map((group) => (
+                <div key={group.key}>
+                  <MonthGroupHeader group={group} mobile />
+                  {group.items.map((item) => (
+                    <PayableMobileCard
                       key={item.id}
                       item={item}
                       editingDueId={editingDueId}
@@ -316,32 +506,71 @@ export default function ContasPagarPage() {
                       onCancelEditDueDate={cancelEditDueDate}
                       onSaveDueDate={saveDueDate}
                       onPay={markPaid}
+                      onDeleteOne={deleteOne}
+                      onDeleteSeries={deleteSeries}
+                      deletingId={deletingId}
+                      deletingSeriesKey={deletingSeriesKey}
+                      getSeriesMeta={seriesMeta}
                     />
                   ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="divide-y divide-gray-100 lg:hidden">
-              {filtered.map((item) => (
-                <PayableMobileCard
-                  key={item.id}
-                  item={item}
-                  editingDueId={editingDueId}
-                  dueDateInput={dueDateInput}
-                  savingDueId={savingDueId}
-                  payingId={payingId}
-                  onDueDateChange={setDueDateInput}
-                  onStartEditDueDate={startEditDueDate}
-                  onCancelEditDueDate={cancelEditDueDate}
-                  onSaveDueDate={saveDueDate}
-                  onPay={markPaid}
-                />
+                </div>
               ))}
             </div>
           </>
         )}
       </Card>
+      {quickModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-gray-100 bg-gray-50/80 p-5">
+              <div>
+                <h3 className="font-display text-lg font-bold text-navy-900 font-syne">Novo lançamento a pagar</h3>
+                <p className="text-sm text-gray-500">Crie uma conta pendente sem sair desta tela.</p>
+              </div>
+              <button onClick={() => setQuickModalOpen(false)} className="rounded-xl border border-gray-200 p-2 text-gray-500 hover:bg-white">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <form onSubmit={saveQuickExpense} className="space-y-4 p-5">
+              <label className="space-y-1.5">
+                <span className="text-xs font-semibold text-navy-900">Categoria DRE</span>
+                <select
+                  value={quickChartAccountId}
+                  onChange={(event) => setQuickChartAccountId(event.target.value)}
+                  className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                >
+                  {chartAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+                </select>
+              </label>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Input label="Descrição" placeholder="Ex: Fatura Nubank" value={quickDesc} onChange={(event) => setQuickDesc(event.target.value)} />
+                <Input label="Valor" inputMode="numeric" value={quickAmount} onChange={(event) => setQuickAmount(formatCurrencyInput(event.target.value))} />
+                <Input label="Vencimento" type="date" value={quickDueDate} onChange={(event) => setQuickDueDate(event.target.value)} />
+                <label className="space-y-1.5">
+                  <span className="text-xs font-semibold text-navy-900">Forma de pagamento</span>
+                  <select
+                    value={quickPayment}
+                    onChange={(event) => setQuickPayment(event.target.value)}
+                    className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                  >
+                    {METHODS.map((method) => <option key={method} value={method}>{method}</option>)}
+                  </select>
+                </label>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <Button type="button" variant="ghost" fullWidth onClick={() => setQuickModalOpen(false)}>Cancelar</Button>
+                <Button type="submit" fullWidth isLoading={quickSaving}>Salvar lançamento</Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      <FinanceTransactionModal
+        open={sharedModalOpen}
+        defaultType="expense"
+        onClose={() => setSharedModalOpen(false)}
+        onSaved={fetchData}
+      />
     </div>
   )
 }
@@ -364,6 +593,45 @@ function Metric({ title, value, icon: Icon, tone }: { title: string; value: stri
   )
 }
 
+type PayableGroup = { key: string; label: string; total: number; count: number; items: Transaction[] }
+
+function FragmentGroup({ group, children }: { group: PayableGroup; children: ReactNode }) {
+  return (
+    <Fragment>
+      <MonthGroupHeader group={group} />
+      {children}
+    </Fragment>
+  )
+}
+
+function MonthGroupHeader({ group, mobile = false }: { group: PayableGroup; mobile?: boolean }) {
+  if (mobile) {
+    return (
+      <div className="flex items-center justify-between bg-navy-900 px-4 py-4 text-white">
+        <div>
+          <p className="text-sm font-bold uppercase tracking-wider">{group.label}</p>
+          <p className="text-xs text-white/60">{group.count} conta(s)</p>
+        </div>
+        <p className="text-sm font-bold text-red-200">-{formatBRL(group.total)}</p>
+      </div>
+    )
+  }
+
+  return (
+    <tr className="bg-navy-900 text-white">
+      <td colSpan={6} className="px-5 py-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-base font-bold uppercase tracking-wider">{group.label}</p>
+            <p className="text-xs text-white/60">{group.count} conta(s) agrupada(s)</p>
+          </div>
+          <p className="text-lg font-bold text-red-200">-{formatBRL(group.total)}</p>
+        </div>
+      </td>
+    </tr>
+  )
+}
+
 function PayableRow({
   item,
   editingDueId,
@@ -375,6 +643,11 @@ function PayableRow({
   onCancelEditDueDate,
   onSaveDueDate,
   onPay,
+  onDeleteOne,
+  onDeleteSeries,
+  deletingId,
+  deletingSeriesKey,
+  getSeriesMeta,
 }: PayableItemProps) {
   const due = toDateOnly(item.due_date || item.date)
   const delta = daysUntil(due)
@@ -388,7 +661,7 @@ function PayableRow({
       </td>
       <td className="px-4 py-4 text-sm text-gray-600">
         {item.account_name || <span className="text-gray-400">Conta definida ao pagar</span>}
-        {item.payment_method && <p className="text-xs text-gray-400">{item.payment_method}</p>}
+        {item.payment_method && <p className="text-xs text-gray-400">{formatPaymentMethod(item.payment_method)}</p>}
       </td>
       <td className="px-4 py-4">
         <DueDateEditor
@@ -409,18 +682,42 @@ function PayableRow({
       </td>
       <td className="px-5 py-4 text-right font-bold text-red-600">-{formatBRL(Number(item.amount))}</td>
       <td className="px-5 py-4 text-right">
-        {paid ? (
-          <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600"><CheckCircle2 className="h-4 w-4" /> OK</span>
-        ) : (
-          <Button size="sm" variant="outline" onClick={() => onPay(item)} isLoading={payingId === item.id}>Pagar</Button>
-        )}
+        <div className="flex items-center justify-end gap-2">
+          {paid ? (
+            <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600"><CheckCircle2 className="h-4 w-4" /> OK</span>
+          ) : (
+            <>
+              <Button size="sm" variant="outline" onClick={() => onPay(item)} isLoading={payingId === item.id}>Pagar</Button>
+              <button
+                type="button"
+                onClick={() => onDeleteOne(item)}
+                disabled={deletingId === item.id}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 text-gray-500 hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                title="Excluir esta parcela"
+                aria-label="Excluir esta parcela"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+              {getSeriesMeta(item) && (
+                <button
+                  type="button"
+                  onClick={() => onDeleteSeries(item)}
+                  disabled={deletingSeriesKey === getSeriesMeta(item)?.key}
+                  className="rounded-lg border border-gray-200 px-2.5 py-2 text-xs font-semibold text-gray-500 hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                >
+                  Série
+                </button>
+              )}
+            </>
+          )}
+        </div>
       </td>
     </tr>
   )
 }
 
 function PayableMobileCard(props: PayableItemProps) {
-  const { item, payingId, onPay } = props
+  const { item, payingId, onPay, onDeleteOne, onDeleteSeries, deletingId, deletingSeriesKey, getSeriesMeta } = props
   const due = toDateOnly(item.due_date || item.date)
   const delta = daysUntil(due)
   const paid = item.status === "reconciled"
@@ -441,7 +738,13 @@ function PayableMobileCard(props: PayableItemProps) {
         {paid ? (
           <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600"><CheckCircle2 className="h-4 w-4" /> OK</span>
         ) : (
-          <Button size="sm" variant="outline" onClick={() => onPay(item)} isLoading={payingId === item.id}>Pagar</Button>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => onPay(item)} isLoading={payingId === item.id}>Pagar</Button>
+            <Button size="sm" variant="outline" onClick={() => onDeleteOne(item)} isLoading={deletingId === item.id}>Excluir</Button>
+            {getSeriesMeta(item) && (
+              <Button size="sm" variant="outline" onClick={() => onDeleteSeries(item)} isLoading={deletingSeriesKey === getSeriesMeta(item)?.key}>Série</Button>
+            )}
+          </div>
         )}
       </div>
     </div>
@@ -459,6 +762,11 @@ type PayableItemProps = {
   onCancelEditDueDate: () => void
   onSaveDueDate: (item: Transaction) => void
   onPay: (item: Transaction) => void
+  onDeleteOne: (item: Transaction) => void
+  onDeleteSeries: (item: Transaction) => void
+  deletingId: string | null
+  deletingSeriesKey: string | null
+  getSeriesMeta: (item: Transaction) => { base: string; index: number; total: number; key: string } | null
 }
 
 function DueDateEditor({
@@ -472,7 +780,7 @@ function DueDateEditor({
   onStartEditDueDate,
   onCancelEditDueDate,
   onSaveDueDate,
-}: Omit<PayableItemProps, "payingId" | "onPay"> & { due: string; paid: boolean }) {
+}: Omit<PayableItemProps, "payingId" | "onPay" | "onDeleteOne" | "onDeleteSeries" | "deletingId" | "deletingSeriesKey" | "getSeriesMeta"> & { due: string; paid: boolean }) {
   if (editingDueId === item.id) {
     return (
       <div className="flex items-center gap-2">

@@ -1,5 +1,5 @@
 const DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
-const DEFAULT_USER_EMAIL = "local@nobretech.store"
+const DEFAULT_USER_EMAIL = "arrudanobre@gmail.com"
 
 type Filter = { op: string; column?: string; value: unknown }
 type Order = { column: string; ascending?: boolean }

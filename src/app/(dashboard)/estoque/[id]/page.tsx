@@ -5,10 +5,32 @@ import { useRouter, useParams } from "next/navigation"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { formatBRL, daysBetween, buildPriceTable, getInventoryStatusMeta, getComputedInventoryStatus, getTradeInOriginLabel, isPendingInventoryStatus } from "@/lib/helpers"
-import { CATEGORIES, GRADES, CHECKLIST_TEMPLATES } from "@/lib/constants"
+import { formatBRL, daysBetween, buildPriceTable, getInventoryStatusMeta, getComputedInventoryStatus, getProductName, getTradeInOriginLabel, isPendingInventoryStatus } from "@/lib/helpers"
+import { CATEGORIES, GRADES, CHECKLIST_TEMPLATES, SIDEPAY_FEE_PCTS } from "@/lib/constants"
 import { supabase } from "@/lib/supabase"
-import { ArrowLeft, Edit3, ShoppingCart, Loader2, Download, CheckCircle2, XCircle, MinusCircle } from "lucide-react"
+import {
+  Activity,
+  ArrowLeft,
+  BadgeDollarSign,
+  CalendarDays,
+  CheckCircle2,
+  Clock3,
+  Download,
+  Edit3,
+  FileText,
+  Hash,
+  Loader2,
+  MinusCircle,
+  PackageCheck,
+  ShieldCheck,
+  ShoppingCart,
+  Smartphone,
+  Target,
+  TrendingUp,
+  WalletCards,
+  XCircle,
+  type LucideIcon,
+} from "lucide-react"
 
 interface ChecklistItem {
   id: string
@@ -31,6 +53,7 @@ export default function ProductDetailPage() {
   const [generatingPdf, setGeneratingPdf] = useState(false)
   const [settings, setSettings] = useState<any>(null)
   const [saleData, setSaleData] = useState<any>(null)
+  const [showAllPayments, setShowAllPayments] = useState(false)
 
   const fetchProduct = useCallback(async () => {
     if (!productId) return
@@ -78,14 +101,8 @@ export default function ProductDetailPage() {
         // 1. Fetch settings from DB with robust mapping
         const { data: setts } = await (supabase.from("financial_settings") as any).select("*").limit(1)
         
-        // Use EXACT SAME defaults as FinancePage for consistency
-        const defaults = {
-          pix: 0, cash: 0, debit: 1.10,
-          credit_1x: 3.08, credit_2x: 4.67, credit_3x: 5.50, credit_4x: 6.34,
-          credit_5x: 7.17, credit_6x: 8.03, credit_7x: 8.93, credit_8x: 9.78,
-          credit_9x: 10.64, credit_10x: 11.51, credit_11x: 12.37, credit_12x: 13.25,
-          credit_13x: 14.13, credit_14x: 15.01, credit_15x: 15.90, credit_16x: 16.78,
-          credit_17x: 17.69, credit_18x: 18.58,
+        const defaults: Record<string, number> = {
+          ...SIDEPAY_FEE_PCTS,
           default_margin_pct: 15
         }
 
@@ -130,7 +147,10 @@ export default function ProductDetailPage() {
           if (sd && sd[0]) setSaleData(sd[0])
         }
 
-        setPriceTable(buildPriceTable(p.purchase_price, activeSettings.default_margin_pct, activeSettings))
+        const suggestedNet = Number(p.suggested_price || 0)
+        const priceBase = suggestedNet > 0 ? suggestedNet : Number(p.purchase_price || 0)
+        const priceMargin = suggestedNet > 0 ? 0 : activeSettings.default_margin_pct
+        setPriceTable(buildPriceTable(priceBase, priceMargin, activeSettings))
       }
     } catch (err: any) {
       console.error("Unexpected error:", err?.message || err)
@@ -214,9 +234,8 @@ export default function ProductDetailPage() {
     )
   }
 
-  const catalogName = product.catalog?.model
-    ? `${product.catalog.model}${product.catalog.variant ? " " + product.catalog.variant : ""}`
-    : product.notes || product.condition_notes ? (product.notes || product.condition_notes || "").replace(/^Acessório:\s*/, "")
+  const catalogName = getProductName(product) !== "Produto"
+    ? getProductName(product)
     : product.imei
       ? `Dispositivo IMEI ...${product.imei.slice(-4)}`
       : "Sem catálogo"
@@ -238,33 +257,40 @@ export default function ProductDetailPage() {
   const manualCategoryLabel = /capa|pel[ií]cula|pencil|caneta|cabo|fonte|carregador|acess[oó]rio/.test(manualCategoryText) ? "Acessório" : "Outros"
   const categoryLabel = CATEGORIES.find((c) => c.value === catalogCategory)?.label || product.catalog?.category || manualCategoryLabel
 
-  // Calc Promo Limits for Cash/PIX (minimalista)
-  const promoLimit10 = buildPriceTable(product.purchase_price, 10, settings || {}).find(p => p.method === 'pix')?.price || 0
-  const promoLimit5 = buildPriceTable(product.purchase_price, 5, settings || {}).find(p => p.method === 'pix')?.price || 0
-
-  let salePerformanceColor = "text-navy-900"
-  if (saleData?.sale_price && product.suggested_price) {
-    if (saleData.sale_price >= product.suggested_price) {
-      salePerformanceColor = "text-emerald-600"
-    } else if (saleData.sale_price < product.suggested_price * 0.85) {
-      salePerformanceColor = "text-red-600"
-    }
-  }
+  const cost = Number(product.purchase_price || 0)
+  const suggested = Number(product.suggested_price || 0)
+  const targetPrice = suggested > 0 ? suggested : buildPriceTable(cost, settings?.default_margin_pct || 15, settings || {}).find(p => p.method === "pix")?.price || 0
+  const targetProfit = Math.max(0, targetPrice - cost)
+  const targetMarginPct = cost > 0 ? (targetProfit / cost) * 100 : 0
+  const targetMarkupPct = targetPrice > 0 ? (targetProfit / targetPrice) * 100 : 0
+  const soldPrice = Number(saleData?.sale_price || 0)
+  const displayPrice = product.status === "sold" && soldPrice > 0 ? soldPrice : targetPrice
+  const displayProfit = Math.max(0, displayPrice - cost)
+  const safeNegotiationPrice = targetProfit > 0 ? cost + targetProfit * 0.75 : targetPrice
+  const quickSalePrice = targetProfit > 0 ? cost + targetProfit * (days > 45 ? 0.45 : 0.6) : targetPrice
+  const safeDiscount = Math.max(0, targetPrice - safeNegotiationPrice)
+  const quickSaleDiscount = Math.max(0, targetPrice - quickSalePrice)
+  const stockTone = days > 45 ? "text-red-600" : days > 20 ? "text-amber-600" : "text-emerald-600"
+  const stockMessage = days > 45 ? "girar estoque" : days > 20 ? "monitorar" : "saudável"
+  const keyPayments = priceTable.filter((row: any) => ["cash", "pix", "debit", "credit_12x", "credit_18x"].includes(row.method))
+  const visiblePayments = showAllPayments ? priceTable : keyPayments
 
   return (
     <div className="space-y-4 animate-fade-in">
       {/* Header */}
-      <div className="flex items-center gap-3">
-        <Button variant="ghost" size="icon" onClick={() => router.back()}>
-          <ArrowLeft className="w-5 h-5" />
-        </Button>
-        <div>
-          <h2 className="text-lg font-display font-bold text-navy-900 font-syne">{catalogName}</h2>
-          <p className="text-sm text-gray-500">
-            {[product.catalog?.storage, product.catalog?.color].filter(Boolean).join(" · ")}
-          </p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="flex min-w-0 items-start gap-3">
+          <Button variant="ghost" size="icon" onClick={() => router.back()} className="shrink-0">
+            <ArrowLeft className="w-5 h-5" />
+          </Button>
+          <div className="min-w-0">
+            <h2 className="text-lg font-display font-bold text-navy-900 font-syne sm:text-xl">{catalogName}</h2>
+            <p className="text-sm text-gray-500">
+              {[product.catalog?.storage, product.catalog?.color].filter(Boolean).join(" · ")}
+            </p>
+          </div>
         </div>
-        <div className="ml-auto flex gap-2">
+        <div className="flex gap-2 sm:ml-auto">
           <Link href={`/estoque/${productId}/editar`}>
             <Button variant="outline" size="sm">
               <Edit3 className="w-4 h-4" /> Editar
@@ -306,101 +332,135 @@ export default function ProductDetailPage() {
         </div>
       )}
 
-      {/* Specs & Price */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Specs */}
-        <div className="bg-card rounded-2xl border border-gray-100 shadow-sm">
-          <h3 className="font-display font-bold text-navy-900 p-4 pb-2 font-syne">Especificações</h3>
-          <div className="px-4 pb-4 space-y-2">
+      {/* Strategic overview */}
+      <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
+        <div className="bg-card rounded-2xl border border-gray-100 p-4 shadow-sm sm:p-5">
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Resumo comercial</p>
+              <h3 className="mt-1 font-display text-xl font-bold text-navy-900 font-syne">{catalogName}</h3>
+              <p className="mt-1 text-sm text-gray-500">{categoryLabel} · {product.catalog?.storage || "Sem armazenamento"} · {product.catalog?.color || "Sem cor"}</p>
+            </div>
+            <div className="rounded-2xl bg-navy-900 px-4 py-3 text-white">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-white/60">
+                {product.status === "sold" && soldPrice > 0 ? "Vendido por" : "Preço alvo"}
+              </p>
+              <p className="mt-1 text-2xl font-bold tabular-nums">{formatBRL(displayPrice)}</p>
+              <p className="text-xs text-emerald-200">+ {formatBRL(displayProfit)} lucro estimado</p>
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <StrategyStat icon={BadgeDollarSign} label="Custo real" value={formatBRL(cost)} helper="Base de compra" />
+            <StrategyStat icon={TrendingUp} label="Margem" value={`${targetMarginPct.toFixed(1)}%`} helper={`${targetMarkupPct.toFixed(1)}% sobre venda`} tone="green" />
+            <StrategyStat icon={Clock3} label="Giro" value={`${days}d`} helper={stockMessage} tone={days > 45 ? "red" : days > 20 ? "amber" : "green"} />
+            <StrategyStat icon={PackageCheck} label="Status" value={statusMeta.label} helper={originLabel} />
+          </div>
+
+          {product.status !== "sold" && targetPrice > 0 && (
+            <div className="mt-4 rounded-2xl border border-royal-100 bg-royal-50/50 p-4">
+              <div className="mb-3 flex items-center gap-2">
+                <Target className="h-4 w-4 text-royal-600" />
+                <p className="text-sm font-bold text-navy-900">Estratégia de negociação</p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <PriceDecision
+                  label="Anunciar"
+                  value={targetPrice}
+                  helper="Valor cheio da vitrine"
+                  tone="navy"
+                />
+                <PriceDecision
+                  label="Negociável"
+                  value={safeNegotiationPrice}
+                  helper={`Desconto seguro até ${formatBRL(safeDiscount)}`}
+                  tone="green"
+                />
+                <PriceDecision
+                  label={days > 45 ? "Giro rápido" : "Piso gerencial"}
+                  value={quickSalePrice}
+                  helper={`${formatBRL(quickSaleDiscount)} abaixo do alvo`}
+                  tone={days > 45 ? "amber" : "blue"}
+                />
+              </div>
+              <p className="mt-3 text-xs text-gray-500">
+                A faixa é calculada sobre o lucro disponível deste produto, não por percentual fixo. Quanto mais tempo em estoque, mais agressiva pode ser a negociação.
+              </p>
+            </div>
+          )}
+        </div>
+
+        <div className="bg-card rounded-2xl border border-gray-100 p-4 shadow-sm sm:p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Rastreabilidade</p>
+              <h3 className="mt-1 font-display font-bold text-navy-900 font-syne">Identificação do produto</h3>
+            </div>
+            <ShieldCheck className="h-5 w-5 text-royal-500" />
+          </div>
+
+          <div className="grid gap-2">
+            <TraceRow icon={Hash} label="IMEI" value={product.imei || "Não informado"} mono />
+            <TraceRow icon={FileText} label="Serial" value={product.serial_number || "Não informado"} mono />
+            <TraceRow icon={CalendarDays} label="Compra" value={product.purchase_date ? `${new Date(product.purchase_date).toLocaleDateString("pt-BR")} · ${days} dias` : "Não informado"} valueClassName={stockTone} />
+            <TraceRow icon={Smartphone} label="Condição" value={[product.grade, product.battery_health ? `${product.battery_health}% bateria` : null, product.ios_version].filter(Boolean).join(" · ") || "Não informado"} />
+            <TraceRow icon={Activity} label="Origem" value={originLabel} />
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+        <div className="bg-card rounded-2xl border border-gray-100 p-4 shadow-sm sm:p-5">
+          <div className="mb-4 flex items-center gap-2">
+            <Smartphone className="h-4 w-4 text-royal-500" />
+            <h3 className="font-display font-bold text-navy-900 font-syne">Especificações</h3>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
             {[
               ["Categoria", categoryLabel],
-              ["Marca", product.catalog?.brand || "—"],
+              ["Marca", product.catalog?.brand || "Apple"],
               ["Modelo", catalogName],
               ["Armazenamento", product.catalog?.storage || "—"],
               ["Cor", product.catalog?.color || "—"],
-              ["IMEI", product.imei || "—"],
-              ["Nº Série", product.serial_number || "—"],
-              ["Bateria", product.battery_health ? `${product.battery_health}%` : "—"],
-              ["Software", product.ios_version || "—"],
               ["Ano", product.catalog?.year?.toString() || "—"],
             ].map(([label, value]) => (
-              <div key={label} className="flex justify-between text-sm py-1.5 border-b border-gray-50 last:border-0">
-                <span className="text-gray-500">{label}</span>
-                <span className="font-medium text-navy-900">{value}</span>
+              <div key={label} className="rounded-xl border border-gray-100 bg-surface px-3 py-2">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{label}</p>
+                <p className="mt-1 truncate text-sm font-semibold text-navy-900">{value}</p>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Price Table */}
-        <div className="bg-card rounded-2xl border border-gray-100 shadow-sm flex flex-col">
-          <h3 className="font-display font-bold text-navy-900 p-4 pb-2 font-syne">Preços Sugeridos</h3>
-          <div className="px-4 pb-4 flex-1">
-            <div className="grid grid-cols-2 gap-4 mb-4 pb-4 border-b border-gray-50">
-              <div>
-                <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Custo</p>
-                <p className="text-base font-bold text-navy-900">{formatBRL(product.purchase_price)}</p>
-              </div>
-              <div>
-                {product.status === "sold" && saleData ? (
-                  <>
-                    <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Vendido por</p>
-                    <p className={`text-base font-bold ${salePerformanceColor}`}>{formatBRL(saleData.sale_price)}</p>
-                    <p className={`text-[9px] font-bold mt-0.5 ${saleData.sale_price >= product.purchase_price ? "text-emerald-600" : "text-red-600"}`}>
-                      {saleData.sale_price >= product.purchase_price ? "+" : ""} {formatBRL(saleData.sale_price - product.purchase_price)} lucro
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Sugerido</p>
-                    <p className="text-lg font-bold text-royal-500 leading-none">{formatBRL(product.suggested_price || 0)}</p>
-                    {product.suggested_price && (
-                      <p className="text-[9px] text-emerald-600 font-bold mt-1.5">
-                        + {formatBRL(product.suggested_price - product.purchase_price)} lucro
-                      </p>
-                    )}
-                  </>
-                )}
-              </div>
+        <div className="bg-card rounded-2xl border border-gray-100 p-4 shadow-sm sm:p-5">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <WalletCards className="h-4 w-4 text-royal-500" />
+              <h3 className="font-display font-bold text-navy-900 font-syne">Condições de venda</h3>
             </div>
-
-            {product.status !== "sold" && promoLimit5 > 0 && (
-              <div className="mb-6 relative">
-                <div className="absolute -left-1 top-1/2 -translate-y-1/2 w-1 h-8 bg-royal-500 rounded-full" />
-                <div className="bg-royal-50/80 border border-royal-100 rounded-xl p-3 shadow-sm">
-                  <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-2">Simulador de Promoção</p>
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Mínimo (10%)</p>
-                      <p className="text-base font-bold text-navy-900">{formatBRL(promoLimit10)}</p>
-                      <p className="text-[9px] text-emerald-600 font-bold mt-0.5">+ {formatBRL(promoLimit10 - product.purchase_price)} lucro</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Crítico (5%)</p>
-                      <p className="text-base font-bold text-danger-600">{formatBRL(promoLimit5)}</p>
-                      <p className="text-[9px] text-emerald-600 font-bold mt-0.5">+ {formatBRL(promoLimit5 - product.purchase_price)} lucro</p>
-                    </div>
-                  </div>
+            <button
+              type="button"
+              onClick={() => setShowAllPayments((value) => !value)}
+              className="text-xs font-semibold text-royal-500 hover:text-royal-700"
+            >
+              {showAllPayments ? "Ver resumo" : "Ver tabela completa"}
+            </button>
+          </div>
+          <div className="grid gap-2">
+            {visiblePayments.map((row: any) => (
+              <div key={row.method} className="grid grid-cols-[1fr_auto] gap-3 rounded-xl border border-gray-100 bg-surface px-3 py-2.5">
+                <div>
+                  <p className="text-sm font-semibold text-navy-900">{row.label}</p>
+                  <p className="text-xs text-gray-500">
+                    {row.installments > 1 ? `${row.installments}x de ${formatBRL(row.installmentValue)}` : "Recebimento direto"}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="font-bold text-navy-900">{formatBRL(row.price)}</p>
+                  <p className="text-[10px] text-gray-400">{row.fee > 0 ? `${row.fee.toFixed(2)}% taxa` : "sem taxa"}</p>
                 </div>
               </div>
-            )}
-
-            <div className="space-y-1">
-              <p className="text-[10px] text-gray-400 uppercase font-bold mb-2">Tabela de Parcelamento</p>
-              {priceTable.map((row: any) => (
-                <div key={row.method} className="flex justify-between text-sm py-1.5 border-b border-gray-50/50 last:border-0">
-                  <span className="text-gray-600">{row.label}</span>
-                  <span className="font-semibold text-navy-900">
-                    {formatBRL(row.price)}
-                    {row.installments > 1 && (
-                      <span className="text-[10px] text-gray-400 ml-1 font-normal">
-                        ({row.installments}x {formatBRL(row.installmentValue)})
-                      </span>
-                    )}
-                  </span>
-                </div>
-              ))}
-            </div>
+            ))}
           </div>
         </div>
       </div>
@@ -565,6 +625,102 @@ export default function ProductDetailPage() {
             </p>
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+function StrategyStat({
+  icon: Icon,
+  label,
+  value,
+  helper,
+  tone = "navy",
+}: {
+  icon: LucideIcon
+  label: string
+  value: string
+  helper: string
+  tone?: "navy" | "green" | "amber" | "red"
+}) {
+  const toneClass = {
+    navy: "bg-navy-50 text-navy-900",
+    green: "bg-emerald-50 text-emerald-700",
+    amber: "bg-amber-50 text-amber-700",
+    red: "bg-red-50 text-red-700",
+  }[tone]
+
+  const iconClass = {
+    navy: "bg-navy-900 text-white",
+    green: "bg-emerald-100 text-emerald-700",
+    amber: "bg-amber-100 text-amber-700",
+    red: "bg-red-100 text-red-700",
+  }[tone]
+
+  return (
+    <div className={`rounded-2xl border border-gray-100 p-3 ${toneClass}`}>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <p className="text-[10px] font-bold uppercase tracking-wider opacity-60">{label}</p>
+        <span className={`flex h-8 w-8 items-center justify-center rounded-xl ${iconClass}`}>
+          <Icon className="h-4 w-4" />
+        </span>
+      </div>
+      <p className="truncate text-xl font-bold tabular-nums">{value}</p>
+      <p className="mt-1 truncate text-xs opacity-70">{helper}</p>
+    </div>
+  )
+}
+
+function PriceDecision({
+  label,
+  value,
+  helper,
+  tone,
+}: {
+  label: string
+  value: number
+  helper: string
+  tone: "navy" | "green" | "amber" | "blue"
+}) {
+  const toneClass = {
+    navy: "border-navy-100 bg-white text-navy-900",
+    green: "border-emerald-100 bg-emerald-50 text-emerald-800",
+    amber: "border-amber-100 bg-amber-50 text-amber-800",
+    blue: "border-royal-100 bg-white text-royal-700",
+  }[tone]
+
+  return (
+    <div className={`rounded-2xl border px-3 py-3 ${toneClass}`}>
+      <p className="text-[10px] font-bold uppercase tracking-wider opacity-60">{label}</p>
+      <p className="mt-1 text-lg font-bold tabular-nums">{formatBRL(value)}</p>
+      <p className="mt-1 text-xs opacity-70">{helper}</p>
+    </div>
+  )
+}
+
+function TraceRow({
+  icon: Icon,
+  label,
+  value,
+  mono,
+  valueClassName = "text-navy-900",
+}: {
+  icon: LucideIcon
+  label: string
+  value: string
+  mono?: boolean
+  valueClassName?: string
+}) {
+  return (
+    <div className="grid grid-cols-[36px_1fr] items-center gap-3 rounded-2xl border border-gray-100 bg-surface px-3 py-3">
+      <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-royal-500 shadow-sm">
+        <Icon className="h-4 w-4" />
+      </span>
+      <div className="min-w-0">
+        <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{label}</p>
+        <p className={`mt-0.5 truncate text-sm font-semibold ${mono ? "font-mono" : ""} ${valueClassName}`}>
+          {value}
+        </p>
       </div>
     </div>
   )

@@ -56,6 +56,7 @@ const staticNavItems: (Omit<NavItem, "badge"> & { badge?: { count?: number; defa
       { label: "Entradas e Saídas", href: "/financeiro/transacoes" },
       { label: "Contas a Receber", href: "/financeiro/receber" },
       { label: "Contas a Pagar", href: "/financeiro/pagar" },
+      { label: "Cartões", href: "/financeiro/cartoes" },
       { label: "Gastos Mensais", href: "/financeiro/gastos" },
       { label: "Taxas da Maquininha", href: "/financeiro/taxas" },
       { label: "DRE", href: "/financeiro/dre" },

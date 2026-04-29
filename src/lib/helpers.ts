@@ -1,4 +1,4 @@
-import { PAYMENT_METHODS } from '@/lib/constants'
+import { LEGACY_SIDEPAY_FEE_PCTS, PAYMENT_METHODS, SIDEPAY_FEE_PCTS } from '@/lib/constants'
 import type { FinancialSettings } from '@/types/database'
 
 /** Get fee key from payment method value */
@@ -29,6 +29,41 @@ export function getFeeKey(method: string): string {
   return map[method] ?? 'pix'
 }
 
+export function formatPaymentMethod(method?: string | null): string {
+  const value = String(method || "").trim()
+  if (!value || value === "-") return "—"
+
+  const fromCatalog = PAYMENT_METHODS.find((item) => item.value === value)
+  if (fromCatalog) return fromCatalog.label
+
+  const normalized = value.toLowerCase()
+  const labels: Record<string, string> = {
+    pix: "Pix",
+    cash: "Dinheiro",
+    dinheiro: "Dinheiro",
+    debit: "Débito",
+    debito: "Débito",
+    "débito": "Débito",
+    credit: "Crédito",
+    credit_card: "Cartão de Crédito",
+    trade_in_return: "Troco no trade-in",
+    "cartão de crédito": "Cartão de Crédito",
+    "cartao de credito": "Cartão de Crédito",
+    "cartão de débito": "Cartão de Débito",
+    "cartao de debito": "Cartão de Débito",
+    boleto: "Boleto",
+    transfer: "Transferência",
+    transferencia: "Transferência",
+    "transferência": "Transferência",
+  }
+  if (labels[normalized]) return labels[normalized]
+
+  const creditInstallment = normalized.match(/^credit_(\d+)x$/)
+  if (creditInstallment) return `Crédito ${creditInstallment[1]}x`
+
+  return value
+}
+
 function roundCurrency(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100
 }
@@ -38,25 +73,68 @@ export function calcPrice(target: number, feePct: number): number {
   return roundCurrency(target * (1 + feePct / 100))
 }
 
+export function normalizePaymentFeePct(method: string, feePct?: number | null): number {
+  const value = Number(feePct ?? 0)
+  const sidepayFee = SIDEPAY_FEE_PCTS[method]
+  const legacyFee = LEGACY_SIDEPAY_FEE_PCTS[method]
+
+  if (sidepayFee === undefined || legacyFee === undefined) return value
+
+  // Older database rows used two decimal places. Treat those as the Sidepay default
+  // so existing installs get exact calculations without manual edits.
+  if (Math.abs(value - legacyFee) < 0.005) return sidepayFee
+
+  return value
+}
+
+export function getPaymentFeePct(method: string, settings: Partial<FinancialSettings> | Record<string, unknown>): number {
+  const feeKey = getFeeKey(method)
+  const dbFeeKey = method === "cash"
+    ? "cash_discount_pct"
+    : method === "pix"
+      ? "pix_fee_pct"
+      : `${method}_fee_pct`
+  return normalizePaymentFeePct(
+    method,
+    Number((settings as any)[feeKey] ?? (settings as any)[dbFeeKey] ?? SIDEPAY_FEE_PCTS[method] ?? 0)
+  )
+}
+
+export function calculatePaymentPrice(
+  targetNet: number,
+  method: string,
+  settings: Partial<FinancialSettings> | Record<string, unknown>
+) {
+  const paymentMethod = PAYMENT_METHODS.find((item) => item.value === method)
+  const installments = paymentMethod?.maxInstallments && paymentMethod.maxInstallments > 1
+    ? paymentMethod.maxInstallments
+    : 1
+  const fee = getPaymentFeePct(method, settings)
+  const price = fee > 0 ? calcPrice(targetNet, fee) : roundCurrency(targetNet)
+
+  return {
+    price,
+    fee,
+    installments,
+    installmentValue: price / installments,
+  }
+}
+
 /** Build full price table for all payment methods */
 export function buildPriceTable(cost: number, marginPct: number, settings: Partial<FinancialSettings>) {
   const targetNet = calcPrice(cost, marginPct)
 
   return PAYMENT_METHODS.map((m) => {
-    const feeKey = getFeeKey(m.value)
-    const fee = Number((settings as any)[feeKey] ?? 0)
-    const price = fee > 0 ? calcPrice(targetNet, fee) : targetNet
-    const installments = m.maxInstallments > 1 ? m.maxInstallments : 1
-    const installmentValue = price / installments
+    const payment = calculatePaymentPrice(targetNet, m.value, settings)
 
     return {
       method: m.value,
       label: m.label,
-      price,
-      fee,
+      price: payment.price,
+      fee: payment.fee,
       netAmount: targetNet,
-      installments,
-      installmentValue,
+      installments: payment.installments,
+      installmentValue: payment.installmentValue,
     }
   })
 }
@@ -380,6 +458,9 @@ export function getProductName(item: {
   condition_notes?: string | null
   notes?: string | null
 }): string {
+  const customName = item.notes?.match(/^Nome:\s*(.+)$/i)?.[1]?.trim()
+  if (customName) return customName
+
   // iPhone/iPad/etc — uses catalog data
   if (item.catalog?.model) {
     return `${item.catalog.model}${item.catalog.storage ? " " + item.catalog.storage : ""}${item.catalog.color ? " " + item.catalog.color : ""}`.trim()

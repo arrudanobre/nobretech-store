@@ -9,6 +9,8 @@ const TABLES_WITH_COMPANY = new Set([
   "suppliers",
   "checklists",
   "inventory",
+  "inventory_purchases",
+  "inventory_purchase_items",
   "customers",
   "trade_ins",
   "sales",
@@ -17,6 +19,7 @@ const TABLES_WITH_COMPANY = new Set([
   "quotes",
   "financial_settings",
   "finance_accounts",
+  "finance_credit_cards",
   "finance_chart_accounts",
   "supplier_prices",
   "sales_additional_items",
@@ -70,6 +73,15 @@ const NUMERIC_COLUMNS = new Set([
   "profit",
   "opening_balance",
   "current_balance",
+  "freight_amount",
+  "other_costs_amount",
+  "products_amount",
+  "total_amount",
+  "unit_cost",
+  "freight_allocated",
+  "other_cost_allocated",
+  "landed_unit_cost",
+  "margin_pct",
 ])
 
 function ident(value: string) {

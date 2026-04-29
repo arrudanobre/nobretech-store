@@ -6,33 +6,33 @@ import { Calculator, CreditCard, HelpCircle, Percent } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { PAYMENT_METHODS } from "@/lib/constants"
-import { calcPrice, formatBRL } from "@/lib/helpers"
+import { PAYMENT_METHODS, SIDEPAY_FEE_PCTS } from "@/lib/constants"
+import { buildPriceTable, calcPrice, formatBRL, normalizePaymentFeePct } from "@/lib/helpers"
 import { supabase } from "@/lib/supabase"
 
 const DEFAULT_SETTINGS: Record<string, number> = {
   default_margin_pct: 15,
-  pix_fee_pct: 0,
+  pix_fee_pct: SIDEPAY_FEE_PCTS.pix,
   cash_discount_pct: 0,
-  debit_fee_pct: 1.10,
-  credit_1x_fee_pct: 3.08,
-  credit_2x_fee_pct: 4.67,
-  credit_3x_fee_pct: 5.50,
-  credit_4x_fee_pct: 6.34,
-  credit_5x_fee_pct: 7.17,
-  credit_6x_fee_pct: 8.03,
-  credit_7x_fee_pct: 8.93,
-  credit_8x_fee_pct: 9.78,
-  credit_9x_fee_pct: 10.64,
-  credit_10x_fee_pct: 11.51,
-  credit_11x_fee_pct: 12.37,
-  credit_12x_fee_pct: 13.25,
-  credit_13x_fee_pct: 14.13,
-  credit_14x_fee_pct: 15.01,
-  credit_15x_fee_pct: 15.90,
-  credit_16x_fee_pct: 16.78,
-  credit_17x_fee_pct: 17.69,
-  credit_18x_fee_pct: 18.58,
+  debit_fee_pct: SIDEPAY_FEE_PCTS.debit,
+  credit_1x_fee_pct: SIDEPAY_FEE_PCTS.credit_1x,
+  credit_2x_fee_pct: SIDEPAY_FEE_PCTS.credit_2x,
+  credit_3x_fee_pct: SIDEPAY_FEE_PCTS.credit_3x,
+  credit_4x_fee_pct: SIDEPAY_FEE_PCTS.credit_4x,
+  credit_5x_fee_pct: SIDEPAY_FEE_PCTS.credit_5x,
+  credit_6x_fee_pct: SIDEPAY_FEE_PCTS.credit_6x,
+  credit_7x_fee_pct: SIDEPAY_FEE_PCTS.credit_7x,
+  credit_8x_fee_pct: SIDEPAY_FEE_PCTS.credit_8x,
+  credit_9x_fee_pct: SIDEPAY_FEE_PCTS.credit_9x,
+  credit_10x_fee_pct: SIDEPAY_FEE_PCTS.credit_10x,
+  credit_11x_fee_pct: SIDEPAY_FEE_PCTS.credit_11x,
+  credit_12x_fee_pct: SIDEPAY_FEE_PCTS.credit_12x,
+  credit_13x_fee_pct: SIDEPAY_FEE_PCTS.credit_13x,
+  credit_14x_fee_pct: SIDEPAY_FEE_PCTS.credit_14x,
+  credit_15x_fee_pct: SIDEPAY_FEE_PCTS.credit_15x,
+  credit_16x_fee_pct: SIDEPAY_FEE_PCTS.credit_16x,
+  credit_17x_fee_pct: SIDEPAY_FEE_PCTS.credit_17x,
+  credit_18x_fee_pct: SIDEPAY_FEE_PCTS.credit_18x,
 }
 
 function dbKey(method: string) {
@@ -44,6 +44,21 @@ function dbKey(method: string) {
 function displayMethodLabel(method: string) {
   if (method === "cash") return "Dinheiro"
   return PAYMENT_METHODS.find((item) => item.value === method)?.label || method
+}
+
+function methodFromDbKey(key: string) {
+  if (key === "cash_discount_pct") return "cash"
+  if (key === "pix_fee_pct") return "pix"
+  if (key === "debit_fee_pct") return "debit"
+
+  const match = key.match(/^(credit_\d+x)_fee_pct$/)
+  return match?.[1] || null
+}
+
+function normalizeSettingValue(key: string, value: unknown, fallback: number) {
+  const numeric = Number(value ?? fallback ?? 0)
+  const method = methodFromDbKey(key)
+  return method ? normalizePaymentFeePct(method, numeric) : numeric
 }
 
 export default function TaxasPage() {
@@ -64,7 +79,10 @@ export default function TaxasPage() {
           setSettings((current) => ({
             ...current,
             ...Object.fromEntries(
-              Object.keys(DEFAULT_SETTINGS).map((key) => [key, Number(data[key] ?? current[key] ?? 0)])
+              Object.keys(DEFAULT_SETTINGS).map((key) => [
+                key,
+                normalizeSettingValue(key, data[key], current[key]),
+              ])
             ),
           }))
         }
@@ -86,16 +104,19 @@ export default function TaxasPage() {
     return PAYMENT_METHODS
       .filter((method) => method.value !== "cash")
       .map((method) => {
-        const fee = Number(settings[dbKey(method.value)] || 0)
-        const total = calcPrice(desiredNet, fee)
-        const installments = method.maxInstallments || 1
+        const fee = normalizePaymentFeePct(method.value, Number(settings[dbKey(method.value)] || 0))
+        const row = buildPriceTable(desiredNet, 0, {
+          [method.value]: fee,
+        } as any).find((item) => item.method === method.value)
+        const total = row?.price || calcPrice(desiredNet, fee)
+        const installments = row?.installments || method.maxInstallments || 1
         return {
           method: method.value,
           label: method.label,
           fee,
           total,
           installments,
-          installmentValue: total / installments,
+          installmentValue: row?.installmentValue || total / installments,
         }
       })
   }, [desiredNet, settings])
@@ -167,7 +188,7 @@ export default function TaxasPage() {
               <Input
                 label="Pix (%)"
                 type="number"
-                step="0.01"
+                step="0.0001"
                 value={settings.pix_fee_pct}
                 onChange={(event) => handleSettingChange("pix_fee_pct", event.target.value)}
                 className="bg-gray-50/50"
@@ -175,7 +196,7 @@ export default function TaxasPage() {
               <Input
                 label="Dinheiro (%)"
                 type="number"
-                step="0.01"
+                step="0.0001"
                 value={settings.cash_discount_pct}
                 onChange={(event) => handleSettingChange("cash_discount_pct", event.target.value)}
                 className="bg-gray-50/50"
@@ -201,7 +222,7 @@ export default function TaxasPage() {
                     <Input
                       label={`${displayMethodLabel(method.value)} (%)`}
                       type="number"
-                      step="0.01"
+                      step="0.0001"
                       value={fee}
                       onChange={(event) => handleSettingChange(key, event.target.value)}
                     />
@@ -216,7 +237,7 @@ export default function TaxasPage() {
             <div className="mt-6 p-4 bg-gray-50 rounded-2xl border border-gray-100 flex items-start gap-3">
               <HelpCircle className="w-5 h-5 text-gray-400 shrink-0 mt-0.5" />
               <p className="text-xs text-gray-500 leading-relaxed">
-                Estes valores são acréscimos/multiplicadores de repasse. Exemplo: 12x = 13,25 significa que, para receber R$ 100, o cliente paga R$ 113,25.
+                Estes valores são acréscimos/multiplicadores de repasse com até 4 casas decimais. Exemplo: 18x = 18,5818 significa que, para receber R$ 100, o cliente paga R$ 118,58.
               </p>
             </div>
           </Card>

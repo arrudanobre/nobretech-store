@@ -1,13 +1,13 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { ArrowDownIcon, ArrowUpIcon, Clock3, FileText, Pencil, Plus, ReceiptText, Search, Trash2, Wallet, X } from "lucide-react"
+import { ArrowDownIcon, ArrowUpIcon, Clock3, CreditCard, FileText, Pencil, Plus, ReceiptText, Search, Trash2, Wallet, X } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { supabase } from "@/lib/supabase"
-import { formatBRL, formatDate } from "@/lib/helpers"
+import { addMonthsISO, formatBRL, formatDate, formatPaymentMethod } from "@/lib/helpers"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/toaster"
 
@@ -36,6 +36,7 @@ type ChartAccount = {
   financial_type: string
   statement_section: string
   sort_order: number
+  affects_cash?: boolean
   affects_dre?: boolean
   parent_code?: string | null
   level?: number | null
@@ -48,11 +49,25 @@ type FinanceAccount = {
   is_active?: boolean
 }
 
+type CreditCardAccount = {
+  id: string
+  name: string
+  issuer?: string | null
+  last_four?: string | null
+  due_day: number
+  closing_day?: number | null
+  closing_days_before_due?: number | null
+  current_invoice_closed?: boolean | null
+  current_invoice_closing_date?: string | null
+  is_active?: boolean | null
+}
+
 type UnifiedTransaction = {
   id: string
   account_id?: string | null
   account_name?: string | null
   chart_account_id?: string | null
+  credit_card_id?: string | null
   type: "income" | "expense"
   category: string
   description: string
@@ -66,6 +81,7 @@ type UnifiedTransaction = {
 }
 
 type FilterScope = "all" | "sales" | "manual" | "stock" | "owners"
+type RepeatMode = "single" | "installments" | "recurring"
 
 function monthRange(month: string) {
   const [year, monthNumber] = month.split("-").map(Number)
@@ -96,6 +112,44 @@ function parseCurrencyInput(value: string) {
   return Number(value.replace(/\D/g, "") || "0") / 100
 }
 
+function clampDay(year: number, monthIndex: number, day: number) {
+  return Math.min(Math.max(1, day), new Date(year, monthIndex + 1, 0).getDate())
+}
+
+function dateWithDay(year: number, monthIndex: number, day: number) {
+  return `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(clampDay(year, monthIndex, day)).padStart(2, "0")}`
+}
+
+function addDaysISO(dateISO: string, days: number) {
+  const date = new Date(`${dateISO}T00:00:00`)
+  date.setDate(date.getDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
+function resolveCardInvoice(card: CreditCardAccount, purchaseDate: string, forceNextInvoice = false) {
+  const base = new Date(`${purchaseDate}T00:00:00`)
+  let dueMonth = base.getMonth()
+  let dueYear = base.getFullYear()
+  let dueDate = dateWithDay(dueYear, dueMonth, Number(card.due_day || 1))
+  let closingDate = card.current_invoice_closing_date?.slice(0, 10) || (card.closing_day
+    ? dateWithDay(dueYear, dueMonth, Number(card.closing_day))
+    : addDaysISO(dueDate, -Number(card.closing_days_before_due ?? 7)))
+
+  if (purchaseDate > closingDate || card.current_invoice_closed || forceNextInvoice) {
+    dueMonth += 1
+    if (dueMonth > 11) {
+      dueMonth = 0
+      dueYear += 1
+    }
+    dueDate = dateWithDay(dueYear, dueMonth, Number(card.due_day || 1))
+    closingDate = card.closing_day
+      ? dateWithDay(dueYear, dueMonth, Number(card.closing_day))
+      : addDaysISO(dueDate, -Number(card.closing_days_before_due ?? 7))
+  }
+
+  return { dueDate, closingDate }
+}
+
 function formatDreType(type: string) {
   const labels: Record<string, string> = {
     revenue: "Receita bruta",
@@ -108,7 +162,7 @@ function formatDreType(type: string) {
     inventory_asset: "Estoque / caixa",
     owner_equity: "Sócios",
     transfer: "Transferência",
-    adjustment: "Ajuste",
+    adjustment: "Fora do DRE",
   }
   return labels[type] || type
 }
@@ -121,9 +175,24 @@ function isDreAccountForMovement(account: ChartAccount, type: "income" | "expens
   return type === "income" ? incomeTypes.includes(account.financial_type) : expenseTypes.includes(account.financial_type)
 }
 
+function isSelectableAccountForMovement(account: ChartAccount, type: "income" | "expense") {
+  if (isDreAccountForMovement(account, type)) return true
+  if (account.level === 1 || account.cash_flow_type !== type) return false
+  if (
+    account.financial_type === "owner_equity"
+    && account.affects_cash !== false
+    && account.affects_dre === false
+  ) return true
+  return type === "income"
+    && account.financial_type === "adjustment"
+    && account.affects_dre === false
+    && account.affects_cash !== false
+}
+
 export default function TransacoesPage() {
   const [data, setData] = useState<UnifiedTransaction[]>([])
   const [financeAccounts, setFinanceAccounts] = useState<FinanceAccount[]>([])
+  const [creditCards, setCreditCards] = useState<CreditCardAccount[]>([])
   const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([])
   const [loading, setLoading] = useState(true)
   const [filterMonth, setFilterMonth] = useState(new Date().toISOString().substring(0, 7))
@@ -146,8 +215,13 @@ export default function TransacoesPage() {
   const [formDate, setFormDate] = useState(new Date().toISOString().split("T")[0])
   const [formDueDate, setFormDueDate] = useState("")
   const [formPayment, setFormPayment] = useState("Pix")
+  const [formCreditCardId, setFormCreditCardId] = useState("")
+  const [forceNextInvoice, setForceNextInvoice] = useState(false)
   const [formNotes, setFormNotes] = useState("")
   const [categoryQuery, setCategoryQuery] = useState("")
+  const [repeatMode, setRepeatMode] = useState<RepeatMode>("single")
+  const [installmentCount, setInstallmentCount] = useState("2")
+  const [recurringCount, setRecurringCount] = useState("3")
   const monthOptions = useMemo(() => buildMonthOptions(), [])
   const { toast } = useToast()
 
@@ -160,9 +234,13 @@ export default function TransacoesPage() {
     try {
       const { start, end, endOfDay } = monthRange(filterMonth)
 
-      const [accountsRes, chartAccountsRes, salesRes, transRes] = await Promise.all([
+      const [accountsRes, creditCardsRes, chartAccountsRes, salesRes, transRes] = await Promise.all([
         (supabase.from("finance_accounts") as any)
           .select("id, name, institution, is_active")
+          .eq("is_active", true)
+          .order("created_at", { ascending: true }),
+        (supabase.from("finance_credit_cards") as any)
+          .select("*")
           .eq("is_active", true)
           .order("created_at", { ascending: true }),
         (supabase.from("finance_chart_accounts") as any)
@@ -182,11 +260,19 @@ export default function TransacoesPage() {
       ])
 
       if (accountsRes.error) throw new Error(accountsRes.error.message)
+      const creditCardsTableMissing = Boolean(creditCardsRes.error?.message?.match(/finance_credit_cards|does not exist|relation/i))
+      if (creditCardsRes.error && !creditCardsTableMissing) throw new Error(creditCardsRes.error.message)
       if (chartAccountsRes.error) throw new Error(chartAccountsRes.error.message)
       if (salesRes.error) throw new Error(salesRes.error.message)
       if (transRes.error) throw new Error(transRes.error.message)
 
       setFinanceAccounts(accountsRes.data || [])
+      setCreditCards((creditCardsTableMissing ? [] : creditCardsRes.data || []).map((card: any) => ({
+        ...card,
+        due_day: Number(card.due_day || 1),
+        closing_day: card.closing_day === null ? null : Number(card.closing_day),
+        closing_days_before_due: Number(card.closing_days_before_due ?? 7),
+      })))
       const accountNameById = new Map((accountsRes.data || []).map((account: FinanceAccount) => [
         account.id,
         account.institution ? `${account.name} · ${account.institution}` : account.name,
@@ -207,6 +293,7 @@ export default function TransacoesPage() {
           account_id: t.account_id,
           account_name: t.account_id ? accountNameById.get(t.account_id) || "Conta não encontrada" : null,
           chart_account_id: t.chart_account_id,
+          credit_card_id: t.credit_card_id,
           type: t.type,
           category: t.category,
           description: t.description || t.category,
@@ -250,15 +337,34 @@ export default function TransacoesPage() {
   }, [chartAccounts])
 
   const selectableChartAccounts = useMemo(() => {
-    return chartAccounts.filter((account) => isDreAccountForMovement(account, formType))
+    return chartAccounts.filter((account) => isSelectableAccountForMovement(account, formType))
   }, [chartAccounts, formType])
 
   const findFallbackChartAccount = (type: "income" | "expense", category: string) => {
-    return chartAccounts.find((account) => isDreAccountForMovement(account, type) && account.name === category)
-      || chartAccounts.find((account) => isDreAccountForMovement(account, type) && account.name === (type === "income" ? "Receitas diversas" : "Outras despesas operacionais"))
-      || chartAccounts.find((account) => isDreAccountForMovement(account, type))
+    return chartAccounts.find((account) => isSelectableAccountForMovement(account, type) && account.name === category)
+      || chartAccounts.find((account) => isSelectableAccountForMovement(account, type) && account.name === (type === "income" ? "Receitas diversas" : "Outras despesas operacionais"))
+      || chartAccounts.find((account) => isSelectableAccountForMovement(account, type))
       || null
   }
+
+  const selectedCreditCard = useMemo(() => {
+    return creditCards.find((card) => card.id === formCreditCardId) || null
+  }, [creditCards, formCreditCardId])
+
+  const selectedCardInvoice = useMemo(() => {
+    if (!selectedCreditCard || !formDate) return null
+    return resolveCardInvoice(selectedCreditCard, formDate, forceNextInvoice)
+  }, [forceNextInvoice, formDate, selectedCreditCard])
+
+  const selectedCardInvoiceTotal = useMemo(() => {
+    if (!selectedCardInvoice || !selectedCreditCard) return 0
+    const currentAmount = parseCurrencyInput(formAmount)
+    const existing = data
+      .filter((item) => item.source === "manual" && item.credit_card_id === selectedCreditCard.id && (item.due_date || item.date)?.slice(0, 10) === selectedCardInvoice.dueDate && item.status !== "cancelled")
+      .filter((item) => item.id !== editingItem?.id)
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0)
+    return existing + (Number.isFinite(currentAmount) ? currentAmount : 0)
+  }, [data, editingItem?.id, formAmount, selectedCardInvoice, selectedCreditCard])
 
   const openNewTransaction = () => {
     setEditingItem(null)
@@ -272,8 +378,13 @@ export default function TransacoesPage() {
     setFormDate(new Date().toISOString().split("T")[0])
     setFormDueDate("")
     setFormPayment("Pix")
+    setFormCreditCardId("")
+    setForceNextInvoice(false)
     setFormNotes("")
     setCategoryQuery("")
+    setRepeatMode("single")
+    setInstallmentCount("2")
+    setRecurringCount("3")
     setModalOpen(true)
   }
 
@@ -293,8 +404,13 @@ export default function TransacoesPage() {
     setFormDate(item.date.slice(0, 10))
     setFormDueDate(item.due_date?.slice(0, 10) || "")
     setFormPayment(item.payment_method === "-" ? "Pix" : item.payment_method)
+    setFormCreditCardId(item.credit_card_id || "")
+    setForceNextInvoice(false)
     setFormNotes(item.notes || "")
     setCategoryQuery("")
+    setRepeatMode("single")
+    setInstallmentCount("2")
+    setRecurringCount("3")
     setModalOpen(true)
   }
 
@@ -311,27 +427,73 @@ export default function TransacoesPage() {
       toast({ title: "Preencha categoria, descrição, valor e data", type: "error" })
       return
     }
+    const isCreditCardExpense = formType === "expense" && formPayment === "Cartão de Crédito"
+    const creditCard = isCreditCardExpense ? selectedCreditCard : null
+    if (isCreditCardExpense && !creditCard) {
+      toast({ title: "Selecione o cartão de crédito", description: "Assim o sistema calcula a fatura e o vencimento correto.", type: "error" })
+      return
+    }
 
     setIsSubmitting(true)
     try {
-      const nextStatus = formAccountId ? "reconciled" : "pending"
-      const payload = {
+      const isMultiExpense = !editingItem && formType === "expense" && repeatMode !== "single"
+      const totalRepeats = repeatMode === "installments"
+        ? Math.max(2, Math.min(60, Number(installmentCount) || 2))
+        : repeatMode === "recurring"
+          ? Math.max(2, Math.min(120, Number(recurringCount) || 2))
+          : 1
+      const cardInvoice = creditCard ? resolveCardInvoice(creditCard, formDate, forceNextInvoice) : null
+      const baseDueDate = cardInvoice?.dueDate || formDueDate || formDate
+      const nextStatus = formAccountId && !isMultiExpense && !isCreditCardExpense ? "reconciled" : "pending"
+      const basePayload = {
         type: formType,
-        account_id: formAccountId || null,
+        account_id: isMultiExpense || isCreditCardExpense ? null : formAccountId || null,
         chart_account_id: selectedAccount.id,
+        credit_card_id: creditCard?.id || null,
         category: selectedAccount.name,
         description: formDesc.trim(),
-        amount,
         date: formDate,
-        due_date: formDueDate || null,
         payment_method: formPayment,
         status: nextStatus,
-        reconciled_at: formAccountId ? new Date().toISOString() : null,
-        notes: formNotes.trim() || null,
+        reconciled_at: formAccountId && !isMultiExpense && !isCreditCardExpense ? new Date().toISOString() : null,
       }
-      const { error } = editingItem
-        ? await (supabase.from("transactions") as any).update(payload).eq("id", editingItem.id)
-        : await (supabase.from("transactions") as any).insert(payload)
+
+      let error: any = null
+      if (editingItem) {
+        const result = await (supabase.from("transactions") as any).update({
+          ...basePayload,
+          amount,
+          due_date: baseDueDate || null,
+          notes: formNotes.trim() || null,
+        }).eq("id", editingItem.id)
+        error = result.error
+      } else if (isMultiExpense) {
+        const installmentAmount = repeatMode === "installments" ? Math.round((amount / totalRepeats) * 100) / 100 : amount
+        const installmentRemainder = repeatMode === "installments" ? Math.round((amount - installmentAmount * (totalRepeats - 1)) * 100) / 100 : amount
+        const rows = Array.from({ length: totalRepeats }, (_, index) => {
+          const dueDate = addMonthsISO(baseDueDate, index) || baseDueDate
+          const suffix = repeatMode === "installments" ? `${index + 1}/${totalRepeats}` : `${index + 1}/${totalRepeats}`
+          const kindLabel = repeatMode === "installments" ? "Parcela" : "Recorrência"
+          return {
+            ...basePayload,
+            amount: repeatMode === "installments" && index === totalRepeats - 1 ? installmentRemainder : installmentAmount,
+            date: dueDate,
+            due_date: dueDate,
+            description: `${formDesc.trim()} (${suffix})`,
+            notes: [formNotes.trim(), `${kindLabel}: ${suffix}`].filter(Boolean).join(" · ") || null,
+          }
+        })
+        const result = await (supabase.from("transactions") as any).insert(rows)
+        error = result.error
+      } else {
+        const result = await (supabase.from("transactions") as any).insert({
+          ...basePayload,
+          amount,
+          due_date: baseDueDate || null,
+          notes: formNotes.trim() || null,
+        })
+        error = result.error
+      }
 
       if (error) throw error
 
@@ -342,8 +504,15 @@ export default function TransacoesPage() {
       setFormDesc("")
       setFormAmount("R$ 0,00")
       setFormDueDate("")
+      setFormCreditCardId("")
+      setForceNextInvoice(false)
       setFormNotes("")
-      toast({ title: editingItem ? "Lançamento atualizado" : "Lançamento registrado", type: "success" })
+      setRepeatMode("single")
+      toast({
+        title: editingItem ? "Lançamento atualizado" : repeatMode === "single" ? "Lançamento registrado" : "Lançamentos gerados",
+        description: !editingItem && repeatMode !== "single" ? `${totalRepeats} contas foram criadas em Contas a Pagar.` : undefined,
+        type: "success",
+      })
       fetchData()
     } catch (error: any) {
       toast({ title: "Erro ao salvar lançamento", description: error.message, type: "error" })
@@ -388,7 +557,7 @@ export default function TransacoesPage() {
       return [
         item.description,
         item.category,
-        item.payment_method,
+        formatPaymentMethod(item.payment_method),
         item.account_name || "",
         formatBRL(item.amount),
         item.notes || "",
@@ -645,21 +814,136 @@ export default function TransacoesPage() {
                 <Input label="Valor" inputMode="numeric" value={formAmount} onChange={(event) => setFormAmount(formatCurrencyInput(event.target.value))} />
                 <Input label="Data" type="date" value={formDate} onChange={(event) => setFormDate(event.target.value)} />
                 <Input label="Vencimento" type="date" value={formDueDate} onChange={(event) => setFormDueDate(event.target.value)} />
+                {formType === "expense" && !editingItem && (
+                  <div className="space-y-3 rounded-xl border border-gray-100 bg-gray-50 p-3 sm:col-span-2">
+                    <div>
+                      <p className="text-xs font-semibold text-navy-900">Repetição</p>
+                      <p className="text-xs text-gray-500">Use para despesas parceladas ou recorrentes. Elas entram pendentes em Contas a Pagar.</p>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      {[
+                        { key: "single", label: "Única", hint: "Uma conta" },
+                        { key: "installments", label: "Parcelada", hint: "Divide o valor total" },
+                        { key: "recurring", label: "Recorrente", hint: "Repete o mesmo valor" },
+                      ].map((item) => (
+                        <button
+                          key={item.key}
+                          type="button"
+                          onClick={() => setRepeatMode(item.key as RepeatMode)}
+                          className={cn(
+                            "rounded-xl border px-3 py-2 text-left transition-all",
+                            repeatMode === item.key ? "border-royal-500 bg-white ring-2 ring-royal-500/10" : "border-gray-100 bg-white text-gray-500 hover:border-gray-200"
+                          )}
+                        >
+                          <span className="block text-sm font-bold text-navy-900">{item.label}</span>
+                          <span className="block text-xs text-gray-500">{item.hint}</span>
+                        </button>
+                      ))}
+                    </div>
+                    {repeatMode === "installments" && (
+                      <div className="grid gap-3 sm:grid-cols-[160px_1fr] sm:items-end">
+                        <Input label="Parcelas" inputMode="numeric" value={installmentCount} onChange={(event) => setInstallmentCount(event.target.value.replace(/\D/g, "").slice(0, 2) || "2")} />
+                        <p className="pb-3 text-xs text-gray-500">
+                          O valor total será dividido em {Math.max(2, Number(installmentCount) || 2)} parcelas mensais.
+                        </p>
+                      </div>
+                    )}
+                    {repeatMode === "recurring" && (
+                      <div className="grid gap-3 sm:grid-cols-[160px_1fr] sm:items-end">
+                        <Input label="Meses" inputMode="numeric" value={recurringCount} onChange={(event) => setRecurringCount(event.target.value.replace(/\D/g, "").slice(0, 3) || "2")} />
+                        <p className="pb-3 text-xs text-gray-500">
+                          O mesmo valor será repetido mensalmente por {Math.max(2, Number(recurringCount) || 2)} meses.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <label className="space-y-1.5">
                   <span className="text-xs font-semibold text-navy-900">Forma de pagamento</span>
                   <select
                     value={formPayment}
-                    onChange={(event) => setFormPayment(event.target.value)}
+                    onChange={(event) => {
+                      const method = event.target.value
+                      setFormPayment(method)
+                      if (method !== "Cartão de Crédito") {
+                        setFormCreditCardId("")
+                        setForceNextInvoice(false)
+                      }
+                    }}
                     className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
                   >
                     {METHODS.map((method) => <option key={method} value={method}>{method}</option>)}
                   </select>
                 </label>
+                {formType === "expense" && formPayment === "Cartão de Crédito" && (
+                  <div className="space-y-3 rounded-xl border border-royal-100 bg-royal-50/40 p-3 sm:col-span-2">
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-royal-600 shadow-sm">
+                        <CreditCard className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-navy-900">Despesa no cartão de crédito</p>
+                        <p className="text-xs text-gray-500">O vencimento será calculado pela fatura do cartão, não pela data da compra.</p>
+                      </div>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="space-y-1.5">
+                        <span className="text-xs font-semibold text-navy-900">Cartão</span>
+                        <select
+                          value={formCreditCardId}
+                          onChange={(event) => setFormCreditCardId(event.target.value)}
+                          className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                        >
+                          <option value="">Selecione o cartão</option>
+                          {creditCards.map((card) => (
+                            <option key={card.id} value={card.id}>
+                              {card.name}{card.last_four ? ` • final ${card.last_four}` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 bg-white px-3 py-2">
+                        <span>
+                          <span className="block text-xs font-semibold text-navy-900">Lançar na próxima fatura</span>
+                          <span className="block text-xs text-gray-500">Use quando a fatura já fechou manualmente.</span>
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={forceNextInvoice}
+                          onChange={(event) => setForceNextInvoice(event.target.checked)}
+                          className="h-5 w-5 accent-royal-500"
+                        />
+                      </label>
+                    </div>
+                    {selectedCreditCard && selectedCardInvoice && (
+                      <div className="grid gap-2 rounded-xl bg-white p-3 text-sm sm:grid-cols-3">
+                        <div>
+                          <p className="text-xs font-semibold uppercase text-gray-400">Fatura</p>
+                          <p className="font-bold text-navy-900">Venc. {formatDate(selectedCardInvoice.dueDate)}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold uppercase text-gray-400">Fechamento</p>
+                          <p className="font-bold text-navy-900">{formatDate(selectedCardInvoice.closingDate)}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold uppercase text-gray-400">Previsto na fatura</p>
+                          <p className="font-bold text-red-600">{formatBRL(selectedCardInvoiceTotal)}</p>
+                        </div>
+                      </div>
+                    )}
+                    {creditCards.length === 0 && (
+                      <p className="rounded-xl bg-yellow-50 px-3 py-2 text-xs font-semibold text-yellow-700">
+                        Cadastre um cartão em Financeiro &gt; Cartões para usar esta forma de pagamento.
+                      </p>
+                    )}
+                  </div>
+                )}
                 <label className="space-y-1.5">
                   <span className="text-xs font-semibold text-navy-900">Conta</span>
                   <select
                     value={formAccountId}
                     onChange={(event) => setFormAccountId(event.target.value)}
+                    disabled={formType === "expense" && formPayment === "Cartão de Crédito"}
                     className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
                   >
                     <option value="">Não conciliar agora</option>
@@ -670,7 +954,9 @@ export default function TransacoesPage() {
                     ))}
                   </select>
                   <span className="block text-xs text-gray-400">
-                    Com conta selecionada, o lançamento entra como conciliado.
+                    {formType === "expense" && formPayment === "Cartão de Crédito"
+                      ? "Cartão entra como conta a pagar na data da fatura."
+                      : "Com conta selecionada, o lançamento entra como conciliado."}
                   </span>
                 </label>
                 <Input label="Observações" value={formNotes} onChange={(event) => setFormNotes(event.target.value)} />
@@ -843,7 +1129,7 @@ function MovementRow({
       <td className="px-4 py-4 text-sm text-gray-600">
         <AccountLabel item={item} />
       </td>
-      <td className="px-4 py-4 text-sm text-gray-600">{item.payment_method}</td>
+      <td className="px-4 py-4 text-sm text-gray-600">{formatPaymentMethod(item.payment_method)}</td>
       <td className="px-4 py-4 text-center"><StatusBadge status={item.status} /></td>
       <td className={cn("px-5 py-4 text-right font-bold", item.type === "income" ? "text-emerald-600" : "text-red-600")}>
         {item.type === "income" ? "+" : "-"}{formatBRL(item.amount)}

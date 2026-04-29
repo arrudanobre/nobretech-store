@@ -23,7 +23,7 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 export const DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
-export const DEFAULT_USER_EMAIL = "local@nobretech.store"
+export const DEFAULT_USER_EMAIL = "arrudanobre@gmail.com"
 
 export async function ensureDefaultCompanyAndUser() {
   await pool.query(`

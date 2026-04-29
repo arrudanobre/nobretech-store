@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
-import { ArrowLeft, Edit3, ListTree, Plus, RefreshCw, Save, ToggleLeft, ToggleRight, X } from "lucide-react"
+import { ArrowLeft, ChevronDown, Edit3, ListTree, Plus, RefreshCw, Save, ToggleLeft, ToggleRight, X } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -87,12 +87,55 @@ const emptyForm = {
   affects_owner_equity: false,
 }
 
+const DEFAULT_PARENT_BY_TYPE: Record<FinancialType, { code: string; name: string; group: string }> = {
+  revenue: { code: "1", name: "Receita Bruta de Vendas", group: "1. Receita Bruta de Vendas" },
+  deduction: { code: "2", name: "Deduções da Receita", group: "2. Deduções da Receita" },
+  cogs: { code: "3", name: "Custo das Mercadorias Vendidas (CMV)", group: "3. CMV" },
+  operating_expense: { code: "4", name: "Despesas Operacionais", group: "4. Despesas Operacionais" },
+  financial_expense: { code: "5", name: "Resultado Financeiro", group: "5. Resultado Financeiro" },
+  financial_revenue: { code: "5", name: "Resultado Financeiro", group: "5. Resultado Financeiro" },
+  tax: { code: "6", name: "Impostos", group: "6. Impostos" },
+  inventory_asset: { code: "7", name: "Estoque / Caixa", group: "7. Estoque / Caixa" },
+  owner_equity: { code: "8", name: "Sócios / Patrimônio", group: "8. Sócios" },
+  transfer: { code: "9", name: "Transferências", group: "9. Transferências" },
+  adjustment: { code: "9", name: "Ajustes", group: "9. Ajustes" },
+}
+
 function financialTypeLabel(type: string) {
   return FINANCIAL_TYPES.find((item) => item.value === type)?.label || type
 }
 
 function nextSortOrder(accounts: ChartAccount[]) {
   return String((Math.max(0, ...accounts.map((account) => Number(account.sort_order || 0))) || 0) + 10)
+}
+
+function sortOrderFromCode(code: string) {
+  const [main, child] = code.split(".")
+  return String((Number(main || 0) * 1000) + (Number(child || 0) * 10))
+}
+
+function nextChildCode(accounts: ChartAccount[], parentCode: string) {
+  const children = accounts.filter((account) => account.parent_code === parentCode)
+  const next = Math.max(0, ...children.map((account) => Number(String(account.code).split(".")[1] || 0))) + 1
+  return `${parentCode}.${String(next).padStart(2, "0")}`
+}
+
+function defaultSectionForType(type: FinancialType): StatementSection {
+  if (type === "inventory_asset") return "inventory"
+  if (type === "owner_equity") return "equity"
+  if (["transfer"].includes(type)) return "transfer"
+  if (["adjustment"].includes(type)) return "adjustment"
+  return "dre"
+}
+
+function defaultCashFlowForType(type: FinancialType): CashFlowType {
+  if (type === "revenue" || type === "financial_revenue" || type === "owner_equity") return "income"
+  if (type === "transfer" || type === "adjustment") return "none"
+  return "expense"
+}
+
+function shouldAffectDre(type: FinancialType) {
+  return !["inventory_asset", "owner_equity", "transfer", "adjustment"].includes(type)
 }
 
 export default function PlanoDrePage() {
@@ -102,6 +145,7 @@ export default function PlanoDrePage() {
   const [editing, setEditing] = useState<ChartAccount | null>(null)
   const [form, setForm] = useState(emptyForm)
   const [search, setSearch] = useState("")
+  const [showAdvanced, setShowAdvanced] = useState(false)
   const { toast } = useToast()
 
   useEffect(() => {
@@ -126,6 +170,20 @@ export default function PlanoDrePage() {
   }
 
   const parentAccounts = useMemo(() => accounts.filter((account) => account.level === 1 && account.is_active), [accounts])
+  const parentOptions = useMemo(() => {
+    const defaults = Array.from(
+      new Map(Object.values(DEFAULT_PARENT_BY_TYPE).map((item) => [item.code, item])).values()
+    )
+    const syntheticParents = defaults
+      .filter((item) => !parentAccounts.some((account) => account.code === item.code))
+      .map((item) => ({
+        id: `default-${item.code}`,
+        code: item.code,
+        name: `${item.name} (será criado automaticamente)`,
+        dre_group: item.group,
+      }))
+    return [...parentAccounts, ...syntheticParents]
+  }, [parentAccounts])
   const filteredAccounts = useMemo(() => {
     const query = search.toLowerCase().trim()
     if (!query) return accounts
@@ -139,7 +197,10 @@ export default function PlanoDrePage() {
 
   const resetForm = () => {
     setEditing(null)
-    setForm({ ...emptyForm, sort_order: nextSortOrder(accounts) })
+    const parent = DEFAULT_PARENT_BY_TYPE[emptyForm.financial_type]
+    const code = nextChildCode(accounts, parent.code)
+    setForm({ ...emptyForm, parent_code: parent.code, dre_group: parent.group, code, sort_order: sortOrderFromCode(code), level: "2" })
+    setShowAdvanced(false)
   }
 
   const startEdit = (account: ChartAccount) => {
@@ -162,16 +223,61 @@ export default function PlanoDrePage() {
   }
 
   const handleFinancialTypeChange = (type: FinancialType) => {
-    const isDre = !["inventory_asset", "owner_equity", "transfer", "adjustment"].includes(type)
+    const parent = DEFAULT_PARENT_BY_TYPE[type]
+    const code = nextChildCode(accounts, parent.code)
+    const isDre = shouldAffectDre(type)
     setForm((current) => ({
       ...current,
+      code,
+      parent_code: parent.code,
+      dre_group: parent.group,
+      level: "2",
+      sort_order: sortOrderFromCode(code),
       financial_type: type,
-      cash_flow_type: type === "revenue" || type === "financial_revenue" || type === "owner_equity" ? "income" : type === "transfer" || type === "adjustment" ? "none" : "expense",
-      statement_section: type === "inventory_asset" ? "inventory" : type === "owner_equity" ? "equity" : isDre ? "dre" : "adjustment",
+      cash_flow_type: defaultCashFlowForType(type),
+      statement_section: defaultSectionForType(type),
       affects_dre: isDre,
       affects_inventory: type === "inventory_asset",
       affects_owner_equity: type === "owner_equity",
     }))
+  }
+
+  useEffect(() => {
+    if (editing || loading || form.code) return
+    const parent = DEFAULT_PARENT_BY_TYPE[form.financial_type]
+    const code = nextChildCode(accounts, parent.code)
+    setForm((current) => ({
+      ...current,
+      parent_code: parent.code,
+      dre_group: parent.group,
+      code,
+      sort_order: sortOrderFromCode(code),
+      level: "2",
+    }))
+  }, [accounts, editing, form.code, form.financial_type, loading])
+
+  const ensureParentAccount = async (parentCode: string, type: FinancialType) => {
+    if (!parentCode) return
+    if (accounts.some((account) => account.code === parentCode)) return
+    const parent = DEFAULT_PARENT_BY_TYPE[type]
+    if (!parent || parent.code !== parentCode) return
+    const { error } = await (supabase.from("finance_chart_accounts") as any).insert({
+      code: parent.code,
+      name: parent.name,
+      parent_code: null,
+      dre_group: parent.group,
+      level: 1,
+      cash_flow_type: "none",
+      financial_type: type,
+      statement_section: defaultSectionForType(type),
+      sort_order: sortOrderFromCode(parent.code),
+      affects_cash: false,
+      affects_dre: false,
+      affects_inventory: type === "inventory_asset",
+      affects_owner_equity: type === "owner_equity",
+      is_active: true,
+    })
+    if (error) throw error
   }
 
   const saveAccount = async (event: React.FormEvent) => {
@@ -183,6 +289,7 @@ export default function PlanoDrePage() {
 
     setSaving(true)
     try {
+      await ensureParentAccount(form.parent_code, form.financial_type)
       const payload = {
         code: form.code.trim(),
         name: form.name.trim(),
@@ -257,10 +364,7 @@ export default function PlanoDrePage() {
           </div>
 
           <form onSubmit={saveAccount} className="space-y-4">
-            <div className="grid grid-cols-[120px_1fr] gap-3">
-              <Input label="Código" placeholder="4.91" value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} />
-              <Input label="Nome" placeholder="Ex: Material de escritório" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
-            </div>
+            <Input label="Nome" placeholder="Ex: Aporte temporário do proprietário" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
 
             <label className="space-y-1.5 block">
               <span className="text-xs font-semibold text-navy-900">Tipo DRE</span>
@@ -275,22 +379,36 @@ export default function PlanoDrePage() {
               </select>
             </label>
 
+            <div className="rounded-2xl border border-royal-100 bg-royal-50/50 p-3 text-sm text-navy-900">
+              <p className="font-semibold">Classificação sugerida pelo sistema</p>
+              <p className="mt-1 text-gray-600">
+                Código <strong>{form.code || "automático"}</strong> · Grupo <strong>{form.dre_group || "automático"}</strong> · Ordem <strong>{form.sort_order || "automática"}</strong>
+              </p>
+            </div>
+
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="space-y-1.5 block">
                 <span className="text-xs font-semibold text-navy-900">Grupo pai</span>
                 <select
                   value={form.parent_code}
                   onChange={(event) => {
-                    const parent = parentAccounts.find((item) => item.code === event.target.value)
-                    setForm({ ...form, parent_code: event.target.value, dre_group: parent?.dre_group || form.dre_group, level: event.target.value ? "2" : "1" })
+                    const parent = parentOptions.find((item) => item.code === event.target.value)
+                    const code = event.target.value ? nextChildCode(accounts, event.target.value) : String(Math.max(0, ...parentAccounts.map((item) => Number(item.code) || 0)) + 1)
+                    setForm({
+                      ...form,
+                      code,
+                      parent_code: event.target.value,
+                      dre_group: parent?.dre_group || form.dre_group,
+                      level: event.target.value ? "2" : "1",
+                      sort_order: sortOrderFromCode(code),
+                    })
                   }}
                   className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
                 >
                   <option value="">Item principal</option>
-                  {parentAccounts.map((account) => <option key={account.id} value={account.code}>{account.code} · {account.name}</option>)}
+                  {parentOptions.map((account) => <option key={account.id} value={account.code}>{account.code} · {account.name}</option>)}
                 </select>
               </label>
-              <Input label="Grupo visual" placeholder="4.2 Administrativas" value={form.dre_group} onChange={(event) => setForm({ ...form, dre_group: event.target.value })} />
               <label className="space-y-1.5 block">
                 <span className="text-xs font-semibold text-navy-900">Movimento</span>
                 <select
@@ -301,6 +419,21 @@ export default function PlanoDrePage() {
                   {CASH_FLOW_TYPES.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
                 </select>
               </label>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowAdvanced((current) => !current)}
+              className="flex w-full items-center justify-between rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-100"
+            >
+              Ajustes avançados
+              <ChevronDown className={cn("h-4 w-4 transition-transform", showAdvanced && "rotate-180")} />
+            </button>
+
+            {showAdvanced && (
+              <div className="grid gap-3 rounded-2xl border border-gray-100 p-3 sm:grid-cols-2">
+                <Input label="Código" placeholder="4.91" value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value, sort_order: sortOrderFromCode(event.target.value) })} />
+                <Input label="Grupo visual" placeholder="4.2 Administrativas" value={form.dre_group} onChange={(event) => setForm({ ...form, dre_group: event.target.value })} />
               <label className="space-y-1.5 block">
                 <span className="text-xs font-semibold text-navy-900">Área</span>
                 <select
@@ -313,7 +446,8 @@ export default function PlanoDrePage() {
               </label>
               <Input label="Ordem" inputMode="numeric" value={form.sort_order} onChange={(event) => setForm({ ...form, sort_order: event.target.value.replace(/\D/g, "") })} />
               <Input label="Nível" inputMode="numeric" value={form.level} onChange={(event) => setForm({ ...form, level: event.target.value.replace(/\D/g, "") || "2" })} />
-            </div>
+              </div>
+            )}
 
             <div className="grid gap-2 sm:grid-cols-2">
               {[

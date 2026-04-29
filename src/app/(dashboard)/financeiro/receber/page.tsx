@@ -2,16 +2,19 @@
 
 import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
-import { CalendarClock, CheckCircle2, Clock3, Eye, Pencil, Save, Wallet, X } from "lucide-react"
+import { CalendarClock, CheckCircle2, Clock3, Eye, Pencil, Plus, Save, Wallet, X } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
+import { FinanceTransactionModal } from "@/components/finance/transaction-modal"
 import { supabase } from "@/lib/supabase"
 import { formatBRL, formatDate } from "@/lib/helpers"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/toaster"
 
 type FinanceAccount = { id: string; name: string; institution?: string | null }
+type ChartAccount = { id: string; name: string; cash_flow_type: string; financial_type: string; statement_section: string; level?: number | null; affects_dre?: boolean | null; sort_order?: number | null }
 type Transaction = {
   id: string
   account_id?: string | null
@@ -33,6 +36,8 @@ type ReceivableItem = Receivable & {
   additional_count?: number
   sale_status?: string | null
 }
+
+const METHODS = ["Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência"]
 
 function todayISO() {
   return new Date().toISOString().split("T")[0]
@@ -57,8 +62,19 @@ function formatDueDate(date?: string | null) {
   return formatDate(toDateOnly(date))
 }
 
+function formatCurrencyInput(value: string) {
+  const digits = value.replace(/\D/g, "")
+  const cents = Number(digits || "0")
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(cents / 100)
+}
+
+function parseCurrencyInput(value: string) {
+  return Number(value.replace(/\D/g, "") || "0") / 100
+}
+
 export default function ContasReceberPage() {
   const [accounts, setAccounts] = useState<FinanceAccount[]>([])
+  const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([])
   const [selectedAccountId, setSelectedAccountId] = useState("")
   const [items, setItems] = useState<ReceivableItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -66,6 +82,14 @@ export default function ContasReceberPage() {
   const [editingDueId, setEditingDueId] = useState<string | null>(null)
   const [dueDateInput, setDueDateInput] = useState("")
   const [savingDueId, setSavingDueId] = useState<string | null>(null)
+  const [quickModalOpen, setQuickModalOpen] = useState(false)
+  const [sharedModalOpen, setSharedModalOpen] = useState(false)
+  const [quickSaving, setQuickSaving] = useState(false)
+  const [quickChartAccountId, setQuickChartAccountId] = useState("")
+  const [quickDesc, setQuickDesc] = useState("")
+  const [quickAmount, setQuickAmount] = useState("R$ 0,00")
+  const [quickDueDate, setQuickDueDate] = useState(todayISO())
+  const [quickPayment, setQuickPayment] = useState("Pix")
   const [filter, setFilter] = useState<"open" | "today" | "week" | "received">("open")
   const { toast } = useToast()
 
@@ -80,12 +104,18 @@ export default function ContasReceberPage() {
   const fetchData = async () => {
     setLoading(true)
     try {
-      const [accountsRes, salesRes, transRes] = await Promise.all([
+      const [accountsRes, chartAccountsRes, salesRes, transRes] = await Promise.all([
         (supabase.from("finance_accounts") as any).select("id, name, institution").eq("is_active", true).order("created_at", { ascending: true }),
+        (supabase.from("finance_chart_accounts") as any)
+          .select("id, name, cash_flow_type, financial_type, statement_section, level, affects_dre, sort_order")
+          .eq("is_active", true)
+          .eq("cash_flow_type", "income")
+          .order("sort_order", { ascending: true }),
         (supabase.from("sales") as any).select("id, sale_date, payment_due_date, sale_status, sale_price, net_amount, payment_method, customer_id, customer:customer_id(full_name, name), inventory:inventory_id(catalog:catalog_id(model)), sales_additional_items(id)").neq("sale_status", "cancelled").order("sale_date", { ascending: true }),
         (supabase.from("transactions") as any).select("*").eq("type", "income").neq("status", "cancelled").order("due_date", { ascending: true }),
       ])
       if (accountsRes.error) throw new Error(accountsRes.error.message)
+      if (chartAccountsRes.error) throw new Error(chartAccountsRes.error.message)
       if (salesRes.error) throw new Error(salesRes.error.message)
       if (transRes.error) throw new Error(transRes.error.message)
 
@@ -130,6 +160,9 @@ export default function ContasReceberPage() {
         }
       })
       setAccounts(accountsRes.data || [])
+      const validChartAccounts = (chartAccountsRes.data || []).filter((account: ChartAccount) => account.level !== 1 && account.statement_section === "dre")
+      setChartAccounts(validChartAccounts)
+      if (!quickChartAccountId && validChartAccounts[0]?.id) setQuickChartAccountId(validChartAccounts[0].id)
       setItems([...manual, ...sales].sort((a, b) => String(a.due_date || a.date).localeCompare(String(b.due_date || b.date))))
     } catch (error: any) {
       toast({ title: "Erro ao carregar contas a receber", description: error.message, type: "error" })
@@ -159,6 +192,48 @@ export default function ContasReceberPage() {
     }).reduce((sum, item) => sum + Number(item.amount), 0)
     return { open, today, week }
   }, [items])
+
+  const openQuickModal = () => {
+    const account = chartAccounts[0]
+    setQuickChartAccountId(account?.id || "")
+    setQuickDesc("")
+    setQuickAmount("R$ 0,00")
+    setQuickDueDate(todayISO())
+    setQuickPayment("Pix")
+    setQuickModalOpen(true)
+  }
+
+  const saveQuickIncome = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const chartAccount = chartAccounts.find((account) => account.id === quickChartAccountId)
+    const amount = parseCurrencyInput(quickAmount)
+    if (!chartAccount || !quickDesc.trim() || amount <= 0 || !quickDueDate) {
+      toast({ title: "Preencha categoria, descrição, valor e previsão", type: "error" })
+      return
+    }
+    setQuickSaving(true)
+    try {
+      const { error } = await (supabase.from("transactions") as any).insert({
+        type: "income",
+        chart_account_id: chartAccount.id,
+        category: chartAccount.name,
+        description: quickDesc.trim(),
+        amount,
+        date: quickDueDate,
+        due_date: quickDueDate,
+        payment_method: quickPayment,
+        status: "pending",
+      })
+      if (error) throw error
+      toast({ title: "Recebível criado", type: "success" })
+      setQuickModalOpen(false)
+      fetchData()
+    } catch (error: any) {
+      toast({ title: "Erro ao criar recebível", description: error.message, type: "error" })
+    } finally {
+      setQuickSaving(false)
+    }
+  }
 
   const startEditDueDate = (item: ReceivableItem) => {
     setEditingDueId(item.id)
@@ -308,10 +383,15 @@ export default function ContasReceberPage() {
           <h2 className="font-display font-bold text-2xl text-navy-900 font-syne">Contas a Receber</h2>
           <p className="text-sm text-gray-500">Vendas e receitas pendentes de entrada na conta da empresa.</p>
         </div>
-        <select value={selectedAccountId} onChange={(event) => setSelectedAccountId(event.target.value)} className="h-11 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-navy-900 shadow-sm outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10">
-          <option value="">Selecione uma conta</option>
-          {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.institution ? ` · ${account.institution}` : ""}</option>)}
-        </select>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <select value={selectedAccountId} onChange={(event) => setSelectedAccountId(event.target.value)} className="h-11 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-navy-900 shadow-sm outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10">
+            <option value="">Selecione uma conta</option>
+            {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.institution ? ` · ${account.institution}` : ""}</option>)}
+          </select>
+          <Button variant="primary" className="w-full sm:w-auto" onClick={() => setSharedModalOpen(true)}>
+            <Plus className="mr-2 h-4 w-4" /> Novo lançamento
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
@@ -401,6 +481,58 @@ export default function ContasReceberPage() {
           </>
         )}
       </Card>
+      {quickModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-gray-100 bg-gray-50/80 p-5">
+              <div>
+                <h3 className="font-display text-lg font-bold text-navy-900 font-syne">Novo lançamento a receber</h3>
+                <p className="text-sm text-gray-500">Crie uma entrada pendente sem sair desta tela.</p>
+              </div>
+              <button onClick={() => setQuickModalOpen(false)} className="rounded-xl border border-gray-200 p-2 text-gray-500 hover:bg-white">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <form onSubmit={saveQuickIncome} className="space-y-4 p-5">
+              <label className="space-y-1.5">
+                <span className="text-xs font-semibold text-navy-900">Categoria DRE</span>
+                <select
+                  value={quickChartAccountId}
+                  onChange={(event) => setQuickChartAccountId(event.target.value)}
+                  className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                >
+                  {chartAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+                </select>
+              </label>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Input label="Descrição" placeholder="Ex: Receita manual" value={quickDesc} onChange={(event) => setQuickDesc(event.target.value)} />
+                <Input label="Valor" inputMode="numeric" value={quickAmount} onChange={(event) => setQuickAmount(formatCurrencyInput(event.target.value))} />
+                <Input label="Previsão" type="date" value={quickDueDate} onChange={(event) => setQuickDueDate(event.target.value)} />
+                <label className="space-y-1.5">
+                  <span className="text-xs font-semibold text-navy-900">Forma de pagamento</span>
+                  <select
+                    value={quickPayment}
+                    onChange={(event) => setQuickPayment(event.target.value)}
+                    className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                  >
+                    {METHODS.map((method) => <option key={method} value={method}>{method}</option>)}
+                  </select>
+                </label>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <Button type="button" variant="ghost" fullWidth onClick={() => setQuickModalOpen(false)}>Cancelar</Button>
+                <Button type="submit" fullWidth isLoading={quickSaving}>Salvar lançamento</Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      <FinanceTransactionModal
+        open={sharedModalOpen}
+        defaultType="income"
+        onClose={() => setSharedModalOpen(false)}
+        onSaved={fetchData}
+      />
     </div>
   )
 }

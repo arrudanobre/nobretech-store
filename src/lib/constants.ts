@@ -536,6 +536,59 @@ export const PAYMENT_METHODS = [
   { value: 'credit_18x', label: 'Crédito 18x', icon: '💳', maxInstallments: 18 },
 ] as const
 
+/**
+ * Sidepay repasse table.
+ * Values are the percentage added to the amount Nobretech wants to receive.
+ * Example: credit_18x = 18.5818 means R$ 100 net becomes R$ 118,58 paid by the customer.
+ */
+export const SIDEPAY_FEE_PCTS: Record<string, number> = {
+  cash: 0,
+  pix: 0.5025,
+  debit: 1.1020,
+  credit_1x: 3.0821,
+  credit_2x: 4.6682,
+  credit_3x: 5.4964,
+  credit_4x: 6.3377,
+  credit_5x: 7.1697,
+  credit_6x: 8.0264,
+  credit_7x: 8.9325,
+  credit_8x: 9.7815,
+  credit_9x: 10.6439,
+  credit_10x: 11.5075,
+  credit_11x: 12.3722,
+  credit_12x: 13.2503,
+  credit_13x: 14.1292,
+  credit_14x: 15.0087,
+  credit_15x: 15.9018,
+  credit_16x: 16.7815,
+  credit_17x: 17.6886,
+  credit_18x: 18.5818,
+}
+
+export const LEGACY_SIDEPAY_FEE_PCTS: Record<string, number> = {
+  cash: 0,
+  pix: 0,
+  debit: 1.10,
+  credit_1x: 3.08,
+  credit_2x: 4.67,
+  credit_3x: 5.50,
+  credit_4x: 6.34,
+  credit_5x: 7.17,
+  credit_6x: 8.03,
+  credit_7x: 8.93,
+  credit_8x: 9.78,
+  credit_9x: 10.64,
+  credit_10x: 11.51,
+  credit_11x: 12.37,
+  credit_12x: 13.25,
+  credit_13x: 14.13,
+  credit_14x: 15.01,
+  credit_15x: 15.90,
+  credit_16x: 16.78,
+  credit_17x: 17.69,
+  credit_18x: 18.58,
+}
+
 export const CATEGORIES = [
   { value: 'iphone', label: 'iPhone' },
   { value: 'ipad', label: 'iPad' },

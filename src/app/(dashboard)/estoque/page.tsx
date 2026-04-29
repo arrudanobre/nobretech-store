@@ -6,12 +6,14 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { CategoryIcon } from "@/components/ui/icon-helpers"
-import { formatBRL, daysBetween, getProductName, getInventoryStatusMeta, getComputedInventoryStatus, isPendingInventoryStatus } from "@/lib/helpers"
+import { formatBRL, getProductName, getInventoryStatusMeta, getComputedInventoryStatus, isPendingInventoryStatus, normalizeInventoryStatus } from "@/lib/helpers"
 import { CATEGORIES, GRADES } from "@/lib/constants"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/toaster"
 import { useBadgeCount } from "@/components/layout/sidebar"
 import { Plus, Search, Package, Loader2, Trash2, Eye, Pencil } from "lucide-react"
+
+const INVENTORY_DELETE_ALLOWED_EMAIL = "arrudanobre@gmail.com"
 
 interface InventoryItem {
   id: string
@@ -50,15 +52,19 @@ export default function InventoryPage() {
   const [hasMore, setHasMore] = useState(true)
   const [page, setPage] = useState(1)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [canDeleteInventory, setCanDeleteInventory] = useState(false)
   const { toast } = useToast()
   const { refresh: refreshBadge } = useBadgeCount()
 
   const pageRef = useRef(1)
-  const hasFetchedRef = useRef(false)
 
   const getManualCategoryLabel = (item: InventoryItem) => {
     const text = `${item.notes || ""} ${item.condition_notes || ""}`.toLowerCase()
     return /capa|pel[ií]cula|pencil|caneta|cabo|fonte|carregador|acess[oó]rio/.test(text) ? "Acessório" : "Outros"
+  }
+
+  const getManualCategoryValue = (item: InventoryItem) => {
+    return getManualCategoryLabel(item) === "Acessório" ? "accessories" : "other"
   }
 
   const fetchInventory = useCallback(async (loadMore = false) => {
@@ -75,8 +81,26 @@ export default function InventoryPage() {
       const from = (currentPage - 1) * itemsPerPage
       const to = from + itemsPerPage - 1
 
-      const { data: inventoryData, error: inventoryError } = await (supabase
-        .from("inventory") as any)
+      let categoryCatalogIds: string[] | null = null
+      if (activeCategory !== "all" && activeCategory !== "accessories") {
+        const { data: categoryCatalogs, error: categoryError } = await (supabase
+          .from("product_catalog") as any)
+          .select("id")
+          .eq("category", activeCategory)
+
+        if (categoryError) throw categoryError
+        categoryCatalogIds = (categoryCatalogs || []).map((catalog: any) => catalog.id)
+
+        if (categoryCatalogIds && categoryCatalogIds.length === 0) {
+          setItems([])
+          setPage(1)
+          pageRef.current = 1
+          setHasMore(false)
+          return
+        }
+      }
+
+      let query = (supabase.from("inventory") as any)
         .select(`
           id,
           catalog_id,
@@ -97,6 +121,23 @@ export default function InventoryPage() {
           created_at
         `)
         .order("created_at", { ascending: false })
+
+      if (activeGrade !== "all") query = query.eq("grade", activeGrade)
+      if (activeStatus !== "all") {
+        if (activeStatus === "active") {
+          query = query.in("status", ["active", "in_stock"])
+        } else {
+          query = query.eq("status", activeStatus)
+        }
+      }
+      if (categoryCatalogIds) query = query.in("catalog_id", categoryCatalogIds)
+
+      const searchTerm = search.trim()
+      if (searchTerm) {
+        query = query.or(`imei.ilike.%${searchTerm}%,serial_number.ilike.%${searchTerm}%,notes.ilike.%${searchTerm}%,condition_notes.ilike.%${searchTerm}%`)
+      }
+
+      const { data: inventoryData, error: inventoryError } = await query
         .range(from, to)
         .limit(itemsPerPage)
 
@@ -151,24 +192,48 @@ export default function InventoryPage() {
       setLoadingMore(false)
       refreshBadge()
     }
-  }, [toast, refreshBadge])
+  }, [activeCategory, activeGrade, activeStatus, refreshBadge, search, toast])
 
   useEffect(() => {
-    if (hasFetchedRef.current) return
-    hasFetchedRef.current = true
-    fetchInventory(false)
+    const timeout = window.setTimeout(() => {
+      fetchInventory(false)
+    }, search.trim() ? 250 : 0)
+    return () => window.clearTimeout(timeout)
+  }, [fetchInventory, search])
+
+  useEffect(() => {
+    let mounted = true
+    const loadDeletePermission = async () => {
+      const { data } = await supabase.auth.getUser()
+      if (!mounted) return
+      setCanDeleteInventory(data.user?.email === INVENTORY_DELETE_ALLOWED_EMAIL)
+    }
+    loadDeletePermission()
+    return () => {
+      mounted = false
+    }
   }, [])
+
   const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
 
     try {
+      if (!canDeleteInventory) {
+        toast({
+          title: "Acesso negado",
+          description: `Apenas ${INVENTORY_DELETE_ALLOWED_EMAIL} pode excluir itens do estoque.`,
+          type: "error",
+        })
+        return
+      }
+
       // 1. Check permissions (Admin only)
       const { data: { user } } = await supabase.auth.getUser()
-      if (user?.email !== "arrudanobre@gmail.com") {
+      if (user?.email !== INVENTORY_DELETE_ALLOWED_EMAIL) {
         toast({
-          title: "Acesso Negado",
-          description: "Apenas o administrador (arrudanobre@gmail.com) pode excluir aparelhos.",
+          title: "Acesso negado",
+          description: `Apenas ${INVENTORY_DELETE_ALLOWED_EMAIL} pode excluir itens do estoque.`,
           type: "error",
         })
         return
@@ -212,6 +277,7 @@ export default function InventoryPage() {
     return items.filter((item) => {
       const cat = item.catalog || item.product_catalog
       const categoryLabel = CATEGORIES.find((category) => category.value === cat?.category)?.label || cat?.category || getManualCategoryLabel(item)
+      const categoryValue = cat?.category || getManualCategoryValue(item)
       const searchText = [
         getProductName(item),
         cat?.model,
@@ -222,8 +288,8 @@ export default function InventoryPage() {
         item.notes,
         item.condition_notes,
       ].filter(Boolean).join(" ").toLowerCase()
-      const matchCategory = activeCategory === "all" || cat?.category === activeCategory
-      const matchStatus = activeStatus === "all" || item.status === activeStatus
+      const matchCategory = activeCategory === "all" || categoryValue === activeCategory
+      const matchStatus = activeStatus === "all" || normalizeInventoryStatus(getComputedInventoryStatus(item)) === activeStatus
       const matchGrade = activeGrade === "all" ? true : item.grade === activeGrade
       const matchSearch = search ? searchText.includes(search.toLowerCase()) : true
       return matchCategory && matchStatus && matchSearch && matchGrade
@@ -240,11 +306,18 @@ export default function InventoryPage() {
           <h2 className="text-xl font-display font-bold text-navy-900 font-syne">Estoque</h2>
           <p className="text-sm text-gray-500">{inStockCount} disponíveis · {items.length} total</p>
         </div>
-        <Link href="/estoque/novo">
-          <Button variant="primary" size="sm">
-            <Plus className="w-4 h-4" /> Novo Aparelho
-          </Button>
-        </Link>
+        <div className="flex flex-wrap justify-end gap-2">
+          <Link href="/estoque/compras/nova">
+            <Button variant="outline" size="sm">
+              <Package className="w-4 h-4" /> Compra em lote
+            </Button>
+          </Link>
+          <Link href="/estoque/novo">
+            <Button variant="primary" size="sm">
+              <Plus className="w-4 h-4" /> Novo Aparelho
+            </Button>
+          </Link>
+        </div>
       </div>
 
       {/* Search + Filters */}
@@ -264,7 +337,7 @@ export default function InventoryPage() {
             onChange={(e) => setActiveStatus(e.target.value)}
           >
             <option value="all">Todos</option>
-            <option value="in_stock">Disponível</option>
+            <option value="active">Disponível</option>
             <option value="reserved">Reservado</option>
             <option value="sold">Vendido</option>
             <option value="under_repair">Em reparo</option>
@@ -361,11 +434,18 @@ export default function InventoryPage() {
           <Package className="w-12 h-12 text-gray-300 mx-auto mb-3" />
           <p className="text-navy-900 font-medium">Nenhum aparelho encontrado</p>
           <p className="text-sm text-gray-500 mt-1">Tente ajustar os filtros ou cadastre um novo produto</p>
-          <Link href="/estoque/novo">
-            <Button className="mt-4" variant="primary" size="sm">
-              <Plus className="w-4 h-4" /> Cadastrar Aparelho
-            </Button>
-          </Link>
+          <div className="mt-4 flex flex-wrap justify-center gap-2">
+            <Link href="/estoque/compras/nova">
+              <Button variant="outline" size="sm">
+                <Package className="w-4 h-4" /> Compra em lote
+              </Button>
+            </Link>
+            <Link href="/estoque/novo">
+              <Button variant="primary" size="sm">
+                <Plus className="w-4 h-4" /> Cadastrar Aparelho
+              </Button>
+            </Link>
+          </div>
         </div>
       )}
 
@@ -438,9 +518,11 @@ export default function InventoryPage() {
                         <Pencil className="w-4 h-4" />
                       </Button>
                     </Link>
-                    <button onClick={(e) => handleDelete(item.id, e)} disabled={deletingId === item.id} className="h-10 w-10 rounded-xl text-gray-400 hover:bg-danger-500 hover:text-white inline-flex items-center justify-center transition-colors" title="Excluir item">
-                      {deletingId === item.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                    </button>
+                    {canDeleteInventory && (
+                      <button onClick={(e) => handleDelete(item.id, e)} disabled={deletingId === item.id} className="h-10 w-10 rounded-xl text-gray-400 hover:bg-danger-500 hover:text-white inline-flex items-center justify-center transition-colors" title="Excluir item">
+                        {deletingId === item.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                      </button>
+                    )}
                   </div>
                 </div>
               )

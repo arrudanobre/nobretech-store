@@ -42,8 +42,15 @@ type Sale = {
   net_amount?: number | null
   supplier_cost?: number | null
   sale_status?: "reserved" | "completed" | "cancelled" | null
-  inventory?: { purchase_price?: number | null; catalog?: { category?: string | null } | null } | null
+  inventory?: { id?: string | null; purchase_price?: number | null; catalog?: { category?: string | null } | null } | null
   sales_additional_items?: { cost_price: number }[]
+}
+
+type PurchaseItemCost = {
+  inventory_id?: string | null
+  unit_cost?: number | null
+  freight_allocated?: number | null
+  other_cost_allocated?: number | null
 }
 
 type DreRow = {
@@ -136,6 +143,7 @@ export default function DrePage() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([])
   const [sales, setSales] = useState<Sale[]>([])
+  const [purchaseItems, setPurchaseItems] = useState<PurchaseItemCost[]>([])
   const [loading, setLoading] = useState(true)
   const yearOptions = useMemo(() => buildYearOptions(), [])
   const { toast } = useToast()
@@ -155,7 +163,7 @@ export default function DrePage() {
           .order("sort_order", { ascending: true }),
         (supabase.from("transactions") as any).select("*").gte("date", start).lte("date", end),
         (supabase.from("sales") as any)
-          .select("id, sale_date, sale_price, net_amount, supplier_cost, sale_status, inventory:inventory_id(purchase_price, catalog:catalog_id(category)), sales_additional_items(cost_price)")
+          .select("id, sale_date, sale_price, net_amount, supplier_cost, sale_status, inventory:inventory_id(id, purchase_price, catalog:catalog_id(category)), sales_additional_items(cost_price)")
           .gte("sale_date", start)
           .lte("sale_date", endOfDay),
       ])
@@ -167,6 +175,17 @@ export default function DrePage() {
       setChartAccounts(chartAccountsRes.data || [])
       setTransactions(transactionsRes.data || [])
       setSales(salesRes.data || [])
+
+      const inventoryIds = (salesRes.data || []).map((sale: Sale) => sale.inventory?.id).filter(Boolean)
+      if (inventoryIds.length > 0) {
+        const purchaseItemsRes = await (supabase.from("inventory_purchase_items") as any)
+          .select("inventory_id, unit_cost, freight_allocated, other_cost_allocated")
+          .in("inventory_id", inventoryIds)
+        if (purchaseItemsRes.error) throw new Error(purchaseItemsRes.error.message)
+        setPurchaseItems(purchaseItemsRes.data || [])
+      } else {
+        setPurchaseItems([])
+      }
     } catch (error: any) {
       toast({ title: "Erro ao carregar DRE", description: error.message, type: "error" })
     } finally {
@@ -176,6 +195,7 @@ export default function DrePage() {
 
   const chartAccountById = useMemo(() => new Map(chartAccounts.map((account) => [account.id, account])), [chartAccounts])
   const chartAccountByName = useMemo(() => new Map(chartAccounts.map((account) => [account.name, account])), [chartAccounts])
+  const purchaseItemByInventoryId = useMemo(() => new Map(purchaseItems.map((item) => [item.inventory_id, item])), [purchaseItems])
 
   const getTransactionAccount = (transaction: Transaction) => {
     if (transaction.type === "expense" && transaction.category === "Estoque (Peças/Acessórios)") {
@@ -225,14 +245,29 @@ export default function DrePage() {
 
     for (const sale of completedSales) {
       const index = monthIndex(sale.sale_date)
+      const purchaseItem = sale.inventory?.id ? purchaseItemByInventoryId.get(sale.inventory.id) : null
+      const baseCost = Number(sale.supplier_cost ?? purchaseItem?.unit_cost ?? sale.inventory?.purchase_price ?? 0)
+      const additionalCost = (sale.sales_additional_items || []).reduce((sum, item) => sum + Number(item.cost_price || 0), 0)
+      const otherAllocated = Number(purchaseItem?.other_cost_allocated || 0)
+      const freightAllocated = Number(purchaseItem?.freight_allocated || 0)
       addAccountValue(chartAccountByName.get(saleRevenueAccountName(sale)) || chartAccounts.find((account) => account.code === "1.90"), index, saleNetRevenue(sale))
-      addAccountValue(chartAccountByName.get(saleCostAccountName(sale)) || chartAccounts.find((account) => account.code === "3.01"), index, saleCost(sale))
+      addAccountValue(chartAccountByName.get(saleCostAccountName(sale)) || chartAccounts.find((account) => account.code === "3.01"), index, baseCost + additionalCost + otherAllocated)
+      if (freightAllocated > 0) {
+        addAccountValue(chartAccountByName.get("Frete de compra") || chartAccounts.find((account) => account.code === "3.03"), index, freightAllocated)
+      }
+    }
+
+    for (const transaction of activeTransactions) {
+      const isPendingManualIncome = transaction.type === "income" && transaction.status !== "reconciled" && transaction.source_type !== "sale"
+      if (isPendingManualIncome) continue
+
+      const index = monthIndex(transaction.date)
+      const account = getTransactionAccount(transaction)
+      if (transaction.source_type !== "sale") addAccountValue(account, index, Number(transaction.amount))
     }
 
     for (const transaction of reconciledTransactions) {
       const index = monthIndex(transaction.date)
-      const account = getTransactionAccount(transaction)
-      if (transaction.source_type !== "sale") addAccountValue(account, index, Number(transaction.amount))
       if (hasFinancialType(transaction, "inventory_asset")) addTo(inventoryCash, index, Number(transaction.amount))
       if (hasFinancialType(transaction, "owner_equity")) {
         addTo(ownerEquity, index, transaction.type === "income" ? Number(transaction.amount) : -Number(transaction.amount))
@@ -305,7 +340,7 @@ export default function DrePage() {
 
     rows.push(
       { key: "informativo", label: "Informativos de caixa", values: [], total: 0, kind: "section" },
-      { key: "pendingOperating", label: "Despesas operacionais em aberto (não DRE)", values: pendingOperating, total: sumValues(pendingOperating), kind: "muted", sign: "negative" },
+      { key: "pendingOperating", label: "Despesas operacionais em aberto (já incluídas no DRE)", values: pendingOperating, total: sumValues(pendingOperating), kind: "muted", sign: "negative" },
       { key: "inventoryCash", label: "Compras de estoque (caixa, não DRE)", values: inventoryCash, total: sumValues(inventoryCash), kind: "muted", sign: "negative" },
       { key: "ownerEquity", label: "Sócios: aportes menos retiradas (não DRE)", values: ownerEquity, total: sumValues(ownerEquity), kind: "muted", sign: "auto" },
     )

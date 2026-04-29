@@ -104,7 +104,8 @@ seed_accounts AS (
       -- Informativos fora do DRE
       ('7.01', 'Compra de estoque', 'expense', 'inventory_asset', 'inventory', true, false, true, false, 910, null, 'Informativos de caixa', 2),
       ('8.01', 'Aporte do proprietário', 'income', 'owner_equity', 'equity', true, false, false, true, 1010, null, 'Sócios', 2),
-      ('8.02', 'Retirada de lucro', 'expense', 'owner_equity', 'equity', true, false, false, true, 1020, null, 'Sócios', 2)
+      ('8.02', 'Retirada de lucro', 'expense', 'owner_equity', 'equity', true, false, false, true, 1020, null, 'Sócios', 2),
+      ('9.01', 'Recebimento de venda anterior', 'income', 'adjustment', 'cash', true, false, false, false, 1110, null, 'Ajustes de caixa', 2)
   ) AS account(code, name, cash_flow_type, financial_type, statement_section, affects_cash, affects_dre, affects_inventory, affects_owner_equity, sort_order, parent_code, dre_group, level)
 )
 INSERT INTO finance_chart_accounts (
