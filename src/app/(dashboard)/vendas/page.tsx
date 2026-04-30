@@ -6,8 +6,9 @@ import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
-import { formatBRL, formatDate, daysBetween, todayISO, addDaysISO, getProductName, getAdditionalItemDisplayName } from "@/lib/helpers"
+import { formatBRL, formatDate, daysBetween, todayISO, addDaysISO, getProductName, getAdditionalItemDisplayName, getTradeInDisplayName } from "@/lib/helpers"
 import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
+import { calculateSaleEconomics } from "@/lib/sale-economics"
 import { supabase } from "@/lib/supabase"
 import { Plus, Search, TrendingUp, ShoppingCart, Calendar, CreditCard, ChevronRight } from "lucide-react"
 
@@ -18,6 +19,14 @@ function formatPayment(method?: string) {
     .replace("debit", "Débito")
     .replace("pix", "PIX")
     .replace("cash", "Dinheiro")
+}
+
+function getSaleFeeSettings(sale: any) {
+  if (!sale?.payment_method || sale.card_fee_pct === null || sale.card_fee_pct === undefined) {
+    return {}
+  }
+
+  return { [sale.payment_method]: Number(sale.card_fee_pct) }
 }
 
 function getWarrantyPeriod(sale: any) {
@@ -61,6 +70,20 @@ function getWarrantyBadge(sale: any) {
   }
 }
 
+function getTradeInName(sale: any) {
+  if (!sale?.trade_in) return ""
+  return getTradeInDisplayName({
+    model: sale.trade_in.notes || sale.trade_in_inventory?.catalog?.model || undefined,
+    storage: sale.trade_in_inventory?.catalog?.storage || undefined,
+    color: sale.trade_in_inventory?.catalog?.color || undefined,
+    fallback: "Aparelho recebido",
+  })
+}
+
+function getTradeInGrade(sale: any) {
+  return sale?.trade_in?.grade || sale?.trade_in_inventory?.grade || null
+}
+
 export default function SalesPage() {
   const [search, setSearch] = useState("")
   const [sales, setSales] = useState<any[]>([])
@@ -81,17 +104,55 @@ export default function SalesPage() {
             inventory:inventory_id (
               id,
               purchase_price,
+              suggested_price,
               imei,
+              grade,
               status,
               catalog:catalog_id (id, brand, model, variant, storage, color)
             ),
+            card_fee_pct,
             sales_additional_items (id, type, name, cost_price, sale_price, profit)
           `)
           .order("sale_date", { ascending: false })
           .limit(100)
 
         if (error) throw error
-        setSales(data || [])
+
+        const rows = data || []
+        const tradeInIds = rows.map((sale: any) => sale.trade_in_id).filter(Boolean)
+
+        if (tradeInIds.length > 0) {
+          const { data: tradeIns } = await (supabase
+            .from("trade_ins") as any)
+            .select("id, trade_in_value, notes, grade, linked_inventory_id")
+            .in("id", tradeInIds)
+
+          const tradeInMap = new Map((tradeIns || []).map((item: any) => [item.id, item]))
+          const linkedInventoryIds = (tradeIns || [])
+            .map((item: any) => item.linked_inventory_id)
+            .filter(Boolean)
+
+          let linkedInventoryMap = new Map()
+          if (linkedInventoryIds.length > 0) {
+            const { data: linkedInventory } = await (supabase
+              .from("inventory") as any)
+              .select("id, grade, status, catalog:catalog_id(id, model, storage, color)")
+              .in("id", linkedInventoryIds)
+
+            linkedInventoryMap = new Map((linkedInventory || []).map((item: any) => [item.id, item]))
+          }
+
+          setSales(rows.map((sale: any) => {
+            const tradeIn = (tradeInMap.get(sale.trade_in_id) || null) as any
+            return {
+              ...sale,
+              trade_in: tradeIn,
+              trade_in_inventory: tradeIn?.linked_inventory_id ? linkedInventoryMap.get(tradeIn.linked_inventory_id) || null : null,
+            }
+          }))
+        } else {
+          setSales(rows)
+        }
       } catch (err: any) {
         console.error("Erro ao carregar vendas:", err?.message)
       } finally {
@@ -166,7 +227,7 @@ export default function SalesPage() {
                   <th className="text-center px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Itens</th>
                   <th className="text-left px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Pagamento</th>
                   <th className="text-left px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Status</th>
-                  <th className="text-right px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Total</th>
+                  <th className="text-right px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Negociação</th>
                   <th className="text-right px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Lucro</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Garantia</th>
                   <th className="px-4 py-3"></th>
@@ -182,11 +243,23 @@ export default function SalesPage() {
                     additionalItems,
                     supplierCost: s.supplier_cost,
                   })
+                  const economics = calculateSaleEconomics({
+                    saleRevenue: totals.valorTotal,
+                    cashAmountDue: Math.max(0, totals.valorTotal - Number(s.trade_in?.trade_in_value || 0)),
+                    paymentMethod: s.payment_method,
+                    settings: getSaleFeeSettings(s),
+                    costTotal: totals.custoTotal,
+                  })
                   const statusMeta = getSaleStatusMeta(s.sale_status)
                   const warrantyMeta = getWarrantyBadge(s)
                   const productName = getProductName(s.inventory || {})
                   const customerName = s.customers?.full_name || "—"
                   const upsellItems = additionalItems.filter((i: any) => i.type === "upsell")
+                  const tradeInValue = Number(s.trade_in?.trade_in_value || 0)
+                  const suggestedMainValue = Number(s.inventory?.suggested_price || 0) * parseQtyFromNotes(s.notes)
+                  const discountAmount = suggestedMainValue > 0 ? Math.max(0, suggestedMainValue - totals.valorPrincipal) : 0
+                  const tradeInName = getTradeInName(s)
+                  const tradeInGrade = getTradeInGrade(s)
                   return (
                     <tr
                       key={s.id}
@@ -202,6 +275,13 @@ export default function SalesPage() {
                             + {upsellItems.map((i: any) => getAdditionalItemDisplayName(i.name)).join(", ")}
                           </p>
                         )}
+                        {tradeInValue > 0 && (
+                          <p className="text-xs text-amber-700 mt-1">
+                            Trade-in: {tradeInName}
+                            {tradeInGrade ? ` · Classe ${tradeInGrade}` : ""}
+                            {" · "}recebido por {formatBRL(tradeInValue)}
+                          </p>
+                        )}
                       </td>
                       <td className="px-3 py-3 text-center">
                         <span className="text-xs font-semibold bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
@@ -214,10 +294,28 @@ export default function SalesPage() {
                           {statusMeta.label}
                         </Badge>
                       </td>
-                      <td className="px-4 py-3 text-right font-bold text-navy-900 whitespace-nowrap">{formatBRL(totals.valorTotal)}</td>
-                      <td className={`px-4 py-3 text-right font-bold whitespace-nowrap ${totals.lucroTotal >= 0 ? "text-success-600" : "text-danger-500"}`}>
-                        {totals.lucroTotal >= 0 ? "+" : ""}{formatBRL(totals.lucroTotal)}
-                        <span className="text-xs font-normal text-gray-400 ml-1">({totals.margemTotal.toFixed(1)}%)</span>
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                        <p className="font-bold text-navy-900">{formatBRL(economics.storeCashReceives)}</p>
+                        <p className="text-[11px] text-gray-400">Saldo após trade-in</p>
+                        {suggestedMainValue > 0 && (
+                          <p className="text-[11px] text-gray-500">Tabela {formatBRL(suggestedMainValue)}</p>
+                        )}
+                        {discountAmount > 0 && (
+                          <p className="text-[11px] text-amber-700">Desconto {formatBRL(discountAmount)}</p>
+                        )}
+                        {tradeInValue > 0 && (
+                          <p className="text-[11px] text-gray-500">Trade-in -{formatBRL(tradeInValue)}</p>
+                        )}
+                        {economics.embeddedFee > 0 && (
+                          <p className="text-[11px] text-gray-400">Cliente pagou {formatBRL(economics.customerCashPays)}</p>
+                        )}
+                      </td>
+                      <td className={`px-4 py-3 text-right font-bold whitespace-nowrap ${economics.grossProfit >= 0 ? "text-success-600" : "text-danger-500"}`}>
+                        {economics.grossProfit >= 0 ? "+" : ""}{formatBRL(economics.grossProfit)}
+                        <span className="text-xs font-normal text-gray-400 ml-1">({economics.realMarginPct.toFixed(1)}%)</span>
+                        {economics.embeddedFee > 0 && (
+                          <p className="text-[10px] font-normal text-gray-400">taxa embutida {formatBRL(economics.embeddedFee)}</p>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <Badge variant={warrantyMeta.variant} dot>
@@ -245,11 +343,23 @@ export default function SalesPage() {
                 additionalItems,
                 supplierCost: s.supplier_cost,
               })
+              const economics = calculateSaleEconomics({
+                saleRevenue: totals.valorTotal,
+                cashAmountDue: Math.max(0, totals.valorTotal - Number(s.trade_in?.trade_in_value || 0)),
+                paymentMethod: s.payment_method,
+                settings: getSaleFeeSettings(s),
+                costTotal: totals.custoTotal,
+              })
               const statusMeta = getSaleStatusMeta(s.sale_status)
               const warrantyMeta = getWarrantyBadge(s)
               const productName = getProductName(s.inventory || {})
               const customerName = s.customers?.full_name || "—"
               const upsellItems = additionalItems.filter((i: any) => i.type === "upsell")
+              const tradeInValue = Number(s.trade_in?.trade_in_value || 0)
+              const suggestedMainValue = Number(s.inventory?.suggested_price || 0) * parseQtyFromNotes(s.notes)
+              const discountAmount = suggestedMainValue > 0 ? Math.max(0, suggestedMainValue - totals.valorPrincipal) : 0
+              const tradeInName = getTradeInName(s)
+              const tradeInGrade = getTradeInGrade(s)
 
               return (
                 <button
@@ -268,12 +378,28 @@ export default function SalesPage() {
                           Inclui: {upsellItems.map((i: any) => getAdditionalItemDisplayName(i.name)).join(", ")}
                         </p>
                       )}
+                      {tradeInValue > 0 && (
+                        <p className="text-xs text-amber-700 mt-1">
+                          Trade-in: {tradeInName}
+                          {tradeInGrade ? ` · Classe ${tradeInGrade}` : ""}
+                          {" · "}recebido por {formatBRL(tradeInValue)}
+                        </p>
+                      )}
                     </div>
                     <div className="text-right shrink-0">
-                      <p className="font-bold text-navy-900">{formatBRL(totals.valorTotal)}</p>
-                      {totals.quantidadeTotalItens > 1 && (
-                        <p className="text-xs text-gray-400">{totals.quantidadeTotalItens} itens</p>
-                      )}
+                      <p className="font-bold text-navy-900">{formatBRL(economics.storeCashReceives)}</p>
+                      <p className="text-xs text-gray-400">saldo</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-gray-500">
+                    <div className="rounded-lg bg-surface px-3 py-2">
+                      <p className="text-gray-400">Tabela</p>
+                      <p className="font-semibold text-navy-900">{formatBRL(suggestedMainValue || totals.valorPrincipal)}</p>
+                    </div>
+                    <div className="rounded-lg bg-surface px-3 py-2">
+                      <p className="text-gray-400">Final</p>
+                      <p className="font-semibold text-navy-900">{formatBRL(totals.valorTotal)}</p>
+                      {discountAmount > 0 && <p className="text-amber-700">desc. {formatBRL(discountAmount)}</p>}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 mt-2">
@@ -283,9 +409,9 @@ export default function SalesPage() {
                     <Badge variant={warrantyMeta.variant} dot>
                       Garantia: {warrantyMeta.label}
                     </Badge>
-                    {totals.lucroTotal !== 0 && (
-                      <Badge variant={totals.lucroTotal > 0 ? "green" : "red"} dot>
-                        Lucro: {totals.lucroTotal > 0 ? "+" : ""}{formatBRL(totals.lucroTotal)}
+                    {economics.grossProfit !== 0 && (
+                      <Badge variant={economics.grossProfit > 0 ? "green" : "red"} dot>
+                        Lucro real: {economics.grossProfit > 0 ? "+" : ""}{formatBRL(economics.grossProfit)}
                       </Badge>
                     )}
                   </div>

@@ -14,11 +14,25 @@ type SaleDocumentItem = {
 export type ReceiptLineItem = {
   name: string
   imei?: string | null
+  imei2?: string | null
   quantity: number
   unitPrice: number
   totalPrice: number
   warrantyMonths: number
   type: "principal" | "upsell" | "free"
+}
+
+export type ReceiptFinancialSummary = {
+  officialProductTotal?: number
+  saleTotal?: number
+  discountAmount?: number
+  tradeInName?: string | null
+  tradeInGrade?: string | null
+  tradeInValue?: number
+  cashAmountDue?: number
+  customerPaid?: number
+  embeddedFee?: number
+  storeReceives?: number
 }
 
 export type SaleDocumentData = {
@@ -34,6 +48,7 @@ export type SaleDocumentData = {
   item: SaleDocumentItem
   /** Optional: multiple line items for multi-product receipt */
   receiptItems?: ReceiptLineItem[]
+  receiptSummary?: ReceiptFinancialSummary
 }
 
 const STORE_NAME = "NobreTech Store"
@@ -143,9 +158,12 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
     ? data.receiptItems
     : [{ ...data.item, type: "principal" as const }]
 
-  const grandTotal = lines
+  const productSubtotal = lines
     .filter((l) => l.type !== "free")
     .reduce((sum, l) => sum + l.totalPrice, 0)
+  const summary = data.receiptSummary
+  const saleTotal = Number(summary?.saleTotal ?? productSubtotal)
+  const customerPaid = Number(summary?.customerPaid ?? saleTotal)
 
   doc.setDrawColor(0, 0, 0)
   doc.setLineWidth(0.35)
@@ -196,7 +214,7 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
   text(doc, data.customerCpf || "", 167, 67)
 
   // ── Products table ──
-  const ROW_H = 10
+  const ROW_H = 13
   const tableTop = 75
   setFont(doc, 9, "bold")
   text(doc, "PRODUTOS", 17.5, 74)
@@ -226,13 +244,18 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
     const rowY = tableTop + 5 + idx * ROW_H
     const isFree = line.type === "free"
     const typeLabel = line.type === "principal" ? "Principal" : line.type === "upsell" ? "Upsell" : "Brinde"
-    const descLine = [line.name, line.imei ? `IMEI: ${line.imei}` : null].filter(Boolean).join(" — ")
-    text(doc, typeLabel, 28.5, rowY + 6, { align: "center" })
-    text(doc, doc.splitTextToSize(descLine, 86).slice(0, 1), 41, rowY + 6)
-    text(doc, warrantyLabel(line.warrantyMonths), 135, rowY + 6, { align: "center" })
-    text(doc, String(line.quantity), 146.5, rowY + 6, { align: "center" })
-    text(doc, isFree ? "—" : money(line.unitPrice), 162, rowY + 6, { align: "center" })
-    text(doc, isFree ? "Brinde" : money(line.totalPrice), 183, rowY + 6, { align: "center" })
+    const descLine = [
+      line.name,
+      line.imei ? `IMEI: ${line.imei}` : null,
+      line.imei2 ? `IMEI 2: ${line.imei2}` : null,
+    ].filter(Boolean).join(" — ")
+    const descLines = doc.splitTextToSize(descLine, 84).slice(0, 2)
+    text(doc, typeLabel, 28.5, rowY + 7, { align: "center" })
+    text(doc, descLines, 41, rowY + 4.6)
+    text(doc, warrantyLabel(line.warrantyMonths), 135, rowY + 7, { align: "center" })
+    text(doc, String(line.quantity), 146.5, rowY + 7, { align: "center" })
+    text(doc, isFree ? "—" : money(line.unitPrice), 162, rowY + 7, { align: "center" })
+    text(doc, isFree ? "Brinde" : money(line.totalPrice), 183, rowY + 7, { align: "center" })
     if (idx < lines.length - 1) doc.line(17, rowY + ROW_H, 193, rowY + ROW_H)
   })
 
@@ -240,10 +263,72 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
   doc.rect(151, afterTableY, 42, 4)
   setFont(doc, 8.2, "bold")
   text(doc, "Total", 152, afterTableY + 3)
-  text(doc, money(grandTotal), 183, afterTableY + 3, { align: "center" })
+  text(doc, money(productSubtotal), 183, afterTableY + 3, { align: "center" })
+
+  let settlementY = afterTableY + 7
+  if (summary && (
+    Number(summary.discountAmount || 0) > 0 ||
+    Number(summary.tradeInValue || 0) > 0 ||
+    Number(summary.embeddedFee || 0) > 0 ||
+    Number(summary.cashAmountDue || 0) !== customerPaid
+  )) {
+    const tradeInLine = summary.tradeInName
+      ? `${summary.tradeInName}${summary.tradeInGrade ? ` - Classe ${summary.tradeInGrade}` : ""}`
+      : "Aparelho recebido no trade-in"
+    const settlementRows: Array<{ label: string; value: string; bold?: boolean }> = [
+      { label: "Valor oficial dos produtos", value: money(productSubtotal) },
+    ]
+
+    if (Number(summary.discountAmount || 0) > 0) {
+      settlementRows.push({
+        label: "Desconto concedido",
+        value: `-${money(Number(summary.discountAmount || 0))}`,
+      })
+    }
+
+    settlementRows.push({ label: "Valor final da venda", value: money(saleTotal) })
+
+    if (Number(summary.tradeInValue || 0) > 0) {
+      settlementRows.push({
+        label: `Trade-in recebido: ${tradeInLine}`,
+        value: `-${money(Number(summary.tradeInValue || 0))}`,
+      })
+    }
+
+    settlementRows.push({
+      label: "Saldo em dinheiro/cartão",
+      value: money(Number(summary.cashAmountDue ?? customerPaid)),
+    })
+
+    if (Number(summary.embeddedFee || 0) > 0) {
+      settlementRows.push({
+        label: "Taxa embutida no pagamento",
+        value: money(Number(summary.embeddedFee || 0)),
+      })
+    }
+
+    settlementRows.push({ label: "Cliente pagou", value: money(customerPaid), bold: true })
+
+    const settlementH = 8 + settlementRows.length * 4.4
+
+    doc.rect(17, settlementY, 176, settlementH)
+    doc.setFillColor(245, 246, 247)
+    doc.rect(17, settlementY, 176, 5, "F")
+    setFont(doc, 8.2, "bold")
+    text(doc, "ACERTOS DA NEGOCIAÇÃO", 19, settlementY + 3.5)
+
+    settlementRows.forEach((row, index) => {
+      const rowY = settlementY + 9.5 + index * 4.4
+      setFont(doc, row.bold ? 7.8 : 7.2, row.bold ? "bold" : "normal")
+      text(doc, doc.splitTextToSize(row.label, 132).slice(0, 1), 20, rowY)
+      text(doc, row.value, 190, rowY, { align: "right" })
+    })
+
+    settlementY += settlementH + 3
+  }
 
   // ── Payment ──
-  const payY = afterTableY + 7
+  const payY = settlementY
   setFont(doc, 9, "bold")
   text(doc, "PAGAMENTO", 17.5, payY)
   doc.rect(17, payY + 1, 176, 5)
@@ -255,7 +340,7 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
   text(doc, "Valor Pago", 176, payY + 5, { align: "center" })
   setFont(doc, 8.2)
   text(doc, data.paymentMethod, 87, payY + 10, { align: "center" })
-  text(doc, money(grandTotal), 176, payY + 10, { align: "center" })
+  text(doc, money(customerPaid), 176, payY + 10, { align: "center" })
 
   // ── Observations ──
   const obsY = payY + 13

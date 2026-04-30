@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { formatBRL, daysBetween, buildPriceTable, getInventoryStatusMeta, getComputedInventoryStatus, getProductName, getTradeInOriginLabel, isPendingInventoryStatus } from "@/lib/helpers"
 import { CATEGORIES, GRADES, CHECKLIST_TEMPLATES, SIDEPAY_FEE_PCTS } from "@/lib/constants"
+import { calculateSaleEconomics, estimateRiskReserve } from "@/lib/sale-economics"
 import { supabase } from "@/lib/supabase"
 import {
   Activity,
@@ -21,7 +22,6 @@ import {
   Hash,
   Loader2,
   MinusCircle,
-  PackageCheck,
   ShieldCheck,
   ShoppingCart,
   Smartphone,
@@ -261,11 +261,23 @@ export default function ProductDetailPage() {
   const suggested = Number(product.suggested_price || 0)
   const targetPrice = suggested > 0 ? suggested : buildPriceTable(cost, settings?.default_margin_pct || 15, settings || {}).find(p => p.method === "pix")?.price || 0
   const targetProfit = Math.max(0, targetPrice - cost)
-  const targetMarginPct = cost > 0 ? (targetProfit / cost) * 100 : 0
-  const targetMarkupPct = targetPrice > 0 ? (targetProfit / targetPrice) * 100 : 0
   const soldPrice = Number(saleData?.sale_price || 0)
   const displayPrice = product.status === "sold" && soldPrice > 0 ? soldPrice : targetPrice
-  const displayProfit = Math.max(0, displayPrice - cost)
+  const riskReserve = estimateRiskReserve({
+    cost,
+    category: categoryLabel,
+    grade: product.grade,
+    batteryHealth: product.battery_health,
+    warrantyMonths: 6,
+  })
+  const pixEconomics = calculateSaleEconomics({
+    saleRevenue: displayPrice,
+    cashAmountDue: displayPrice,
+    paymentMethod: "pix",
+    settings: settings || {},
+    costTotal: cost,
+    riskReserve,
+  })
   const safeNegotiationPrice = targetProfit > 0 ? cost + targetProfit * 0.75 : targetPrice
   const quickSalePrice = targetProfit > 0 ? cost + targetProfit * (days > 45 ? 0.45 : 0.6) : targetPrice
   const safeDiscount = Math.max(0, targetPrice - safeNegotiationPrice)
@@ -346,15 +358,15 @@ export default function ProductDetailPage() {
                 {product.status === "sold" && soldPrice > 0 ? "Vendido por" : "Preço alvo"}
               </p>
               <p className="mt-1 text-2xl font-bold tabular-nums">{formatBRL(displayPrice)}</p>
-              <p className="text-xs text-emerald-200">+ {formatBRL(displayProfit)} lucro estimado</p>
+              <p className="text-xs text-emerald-200">+ {formatBRL(pixEconomics.grossProfit)} lucro em caixa</p>
             </div>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <StrategyStat icon={BadgeDollarSign} label="Custo real" value={formatBRL(cost)} helper="Base de compra" />
-            <StrategyStat icon={TrendingUp} label="Margem" value={`${targetMarginPct.toFixed(1)}%`} helper={`${targetMarkupPct.toFixed(1)}% sobre venda`} tone="green" />
+            <StrategyStat icon={TrendingUp} label="Margem real" value={`${pixEconomics.realMarginPct.toFixed(1)}%`} helper={`${formatBRL(pixEconomics.embeddedFee)} taxa no Pix`} tone="green" />
+            <StrategyStat icon={ShieldCheck} label="Reserva risco" value={formatBRL(riskReserve)} helper="Garantia/defeito" tone={riskReserve > 0 ? "amber" : "navy"} />
             <StrategyStat icon={Clock3} label="Giro" value={`${days}d`} helper={stockMessage} tone={days > 45 ? "red" : days > 20 ? "amber" : "green"} />
-            <StrategyStat icon={PackageCheck} label="Status" value={statusMeta.label} helper={originLabel} />
           </div>
 
           {product.status !== "sold" && targetPrice > 0 && (
@@ -447,20 +459,35 @@ export default function ProductDetailPage() {
             </button>
           </div>
           <div className="grid gap-2">
-            {visiblePayments.map((row: any) => (
-              <div key={row.method} className="grid grid-cols-[1fr_auto] gap-3 rounded-xl border border-gray-100 bg-surface px-3 py-2.5">
-                <div>
-                  <p className="text-sm font-semibold text-navy-900">{row.label}</p>
-                  <p className="text-xs text-gray-500">
-                    {row.installments > 1 ? `${row.installments}x de ${formatBRL(row.installmentValue)}` : "Recebimento direto"}
-                  </p>
+            {visiblePayments.map((row: any) => {
+              const economics = calculateSaleEconomics({
+                saleRevenue: targetPrice,
+                cashAmountDue: targetPrice,
+                paymentMethod: row.method,
+                settings: settings || {},
+                costTotal: cost,
+                riskReserve,
+              })
+              return (
+                <div key={row.method} className="grid grid-cols-[1fr_auto] gap-3 rounded-xl border border-gray-100 bg-surface px-3 py-2.5">
+                  <div>
+                    <p className="text-sm font-semibold text-navy-900">{row.label}</p>
+                    <p className="text-xs text-gray-500">
+                      {economics.installments > 1 ? `${economics.installments}x de ${formatBRL(economics.installmentValue)}` : "Recebimento direto"}
+                    </p>
+                    {economics.embeddedFee > 0 && (
+                      <p className="text-[11px] text-gray-400">Taxa embutida {formatBRL(economics.embeddedFee)}</p>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <p className="font-bold text-navy-900">{formatBRL(economics.customerCashPays)}</p>
+                    <p className="text-[10px] text-emerald-600">
+                      lucro {formatBRL(economics.grossProfit)} · {economics.realMarginPct.toFixed(1)}%
+                    </p>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <p className="font-bold text-navy-900">{formatBRL(row.price)}</p>
-                  <p className="text-[10px] text-gray-400">{row.fee > 0 ? `${row.fee.toFixed(2)}% taxa` : "sem taxa"}</p>
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       </div>

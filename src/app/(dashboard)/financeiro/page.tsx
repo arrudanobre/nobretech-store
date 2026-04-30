@@ -3,13 +3,13 @@
 import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar, Cell } from "recharts"
-import { Banknote, Building2, CheckCircle2, Landmark, LineChart, Plus, ReceiptText, Wallet, ArrowUpRight, ArrowDownRight, Sparkles } from "lucide-react"
+import { Banknote, Building2, CalendarClock, CheckCircle2, Landmark, LineChart, Plus, ReceiptText, Wallet, ArrowUpRight, ArrowDownRight, Sparkles } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { supabase } from "@/lib/supabase"
-import { formatBRL, formatDate, getProductName } from "@/lib/helpers"
+import { formatBRL, formatDate, getProductName, todayISO } from "@/lib/helpers"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/toaster"
 
@@ -37,6 +37,8 @@ type Transaction = {
   status?: "pending" | "reconciled" | "cancelled" | null
   source_type?: string | null
   source_id?: string | null
+  due_date?: string | null
+  credit_card_id?: string | null
 }
 
 type ChartAccount = {
@@ -79,6 +81,11 @@ type InventoryItem = {
 }
 
 const expenseColors = ["#ef4444", "#f97316", "#eab308", "#2563eb", "#14b8a6", "#8b5cf6"]
+const STOCK_PURCHASE_CATEGORY = "Estoque (Peças/Acessórios)"
+
+function isInventoryPurchaseTransaction(transaction: Transaction) {
+  return transaction.source_type === "inventory_purchase" || transaction.category === STOCK_PURCHASE_CATEGORY
+}
 
 function monthRange(month: string) {
   const [year, monthNumber] = month.split("-").map(Number)
@@ -96,6 +103,10 @@ function saleCost(sale: Sale) {
 
 function saleNetRevenue(sale: Sale) {
   return Number(sale.net_amount ?? sale.sale_price ?? 0)
+}
+
+function saleBusinessRevenue(sale: Sale) {
+  return Number(sale.sale_price ?? sale.net_amount ?? 0)
 }
 
 function compactCurrency(value: number) {
@@ -124,11 +135,27 @@ function buildMonthOptions() {
   })
 }
 
+function toDateOnly(value?: string | null) {
+  return String(value || "").slice(0, 10)
+}
+
+function addDaysISO(dateISO: string, days: number) {
+  const date = new Date(`${dateISO}T00:00:00`)
+  date.setDate(date.getDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
+function formatShortDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number)
+  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short" }).format(new Date(year, month - 1, day))
+}
+
 export default function FinanceiroPage() {
   const [month, setMonth] = useState(new Date().toISOString().substring(0, 7))
   const [accounts, setAccounts] = useState<FinanceAccount[]>([])
   const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
+  const [projectionTransactions, setProjectionTransactions] = useState<Transaction[]>([])
   const [sales, setSales] = useState<Sale[]>([])
   const [inventory, setInventory] = useState<InventoryItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -159,10 +186,12 @@ export default function FinanceiroPage() {
     setLoading(true)
     try {
       const { start, end, endOfDay } = monthRange(month)
-      const [accountsRes, chartAccountsRes, transactionsRes, salesRes, inventoryRes] = await Promise.all([
+      const [accountsRes, chartAccountsRes, transactionsRes, projectionTransactionsRes, projectionSalesRes, salesRes, inventoryRes] = await Promise.all([
         (supabase.from("finance_accounts") as any).select("*").eq("is_active", true).order("created_at", { ascending: true }),
         (supabase.from("finance_chart_accounts") as any).select("*").eq("is_active", true).order("sort_order", { ascending: true }),
         (supabase.from("transactions") as any).select("*").gte("date", start).lte("date", end).order("date", { ascending: false }),
+        (supabase.from("transactions") as any).select("*").or("status.is.null,status.neq.cancelled").order("due_date", { ascending: true }),
+        (supabase.from("sales") as any).select("id, sale_status"),
         (supabase.from("sales") as any)
           .select("*, inventory:inventory_id(*, catalog:catalog_id(model)), sales_additional_items(*)")
           .gte("sale_date", start)
@@ -176,12 +205,23 @@ export default function FinanceiroPage() {
       if (accountsRes.error) throw new Error(accountsRes.error.message)
       if (chartAccountsRes.error) throw new Error(chartAccountsRes.error.message)
       if (transactionsRes.error) throw new Error(transactionsRes.error.message)
+      if (projectionTransactionsRes.error) throw new Error(projectionTransactionsRes.error.message)
+      if (projectionSalesRes.error) throw new Error(projectionSalesRes.error.message)
       if (salesRes.error) throw new Error(salesRes.error.message)
       if (inventoryRes.error) throw new Error(inventoryRes.error.message)
 
+      const validProjectionSaleIds = new Set(
+        (projectionSalesRes.data || [])
+          .filter((sale: any) => sale.sale_status !== "cancelled")
+          .map((sale: any) => String(sale.id))
+      )
+
       setAccounts(accountsRes.data || [])
       setChartAccounts(chartAccountsRes.data || [])
-      setTransactions(transactionsRes.data || [])
+      setTransactions((transactionsRes.data || []).map((item: any) => ({ ...item, amount: Number(item.amount || 0) })))
+      setProjectionTransactions((projectionTransactionsRes.data || [])
+        .filter((item: any) => item.source_type !== "sale" || validProjectionSaleIds.has(String(item.source_id)))
+        .map((item: any) => ({ ...item, amount: Number(item.amount || 0) })))
       setSales(salesRes.data || [])
       setInventory((inventoryRes.data || []).map((item: any) => ({
         ...item,
@@ -230,7 +270,7 @@ export default function FinanceiroPage() {
   }, [chartAccounts])
 
   const getTransactionAccount = (transaction: Transaction) => {
-    if (transaction.type === "expense" && transaction.category === "Estoque (Peças/Acessórios)") {
+    if (transaction.type === "expense" && isInventoryPurchaseTransaction(transaction)) {
       return chartAccounts.find((account) => account.code === "7.01") || null
     }
     return (
@@ -243,11 +283,11 @@ export default function FinanceiroPage() {
   const hasFinancialType = (transaction: Transaction, type: ChartAccount["financial_type"]) => {
     const account = getTransactionAccount(transaction)
     if (account) return account.financial_type === type
-    if (type === "inventory_asset") return transaction.type === "expense" && transaction.category === "Estoque (Peças/Acessórios)"
+    if (type === "inventory_asset") return transaction.type === "expense" && isInventoryPurchaseTransaction(transaction)
     if (type === "owner_equity") return ["Retirada de Lucro", "Aporte do proprietário"].includes(transaction.category)
     if (type === "tax") return transaction.category === "Impostos / Taxas"
     if (type === "revenue") return transaction.type === "income" && !["Aporte do proprietário"].includes(transaction.category)
-    if (type === "operating_expense") return transaction.type === "expense" && !["Estoque (Peças/Acessórios)", "Retirada de Lucro", "Impostos / Taxas"].includes(transaction.category)
+    if (type === "operating_expense") return transaction.type === "expense" && !isInventoryPurchaseTransaction(transaction) && !["Retirada de Lucro", "Impostos / Taxas"].includes(transaction.category)
     return false
   }
 
@@ -274,7 +314,7 @@ export default function FinanceiroPage() {
     const paidOperatingExpenses = reconciledTransactions.filter(isResultExpense).reduce((sum, t) => sum + Number(t.amount), 0)
     const plannedOperatingExpenses = activeTransactions.filter(isResultExpense).reduce((sum, t) => sum + Number(t.amount), 0)
     const pendingOperatingExpenses = activeTransactions.filter((t) => t.status !== "reconciled" && isResultExpense(t)).reduce((sum, t) => sum + Number(t.amount), 0)
-    const salesRevenue = completedSales.reduce((sum, sale) => sum + saleNetRevenue(sale), 0)
+    const salesRevenue = completedSales.reduce((sum, sale) => sum + saleBusinessRevenue(sale), 0)
     const cmv = completedSales.reduce((sum, sale) => sum + saleCost(sale), 0)
     const netRevenue = salesRevenue + manualIncome
     const grossProfit = salesRevenue - cmv
@@ -332,6 +372,81 @@ export default function FinanceiroPage() {
       pendingAmount,
     }
   }, [accountBalances, chartAccountById, chartAccountByName, reconciledSaleIds, sales, transactions])
+
+  const cashProjection = useMemo(() => {
+    const today = todayISO()
+    const horizon = addDaysISO(today, 60)
+    const startingBalance = metrics.accountTotal
+    const pendingItems = projectionTransactions
+      .filter((transaction) => transaction.status !== "reconciled" && transaction.status !== "cancelled")
+      .map((transaction) => {
+        const rawDate = toDateOnly(transaction.due_date || transaction.date)
+        const dueDate = rawDate && rawDate < today ? today : rawDate
+        return {
+          id: transaction.id,
+          type: transaction.type,
+          date: dueDate,
+          originalDate: rawDate,
+          description: transaction.description || transaction.category,
+          category: transaction.category,
+          amount: Number(transaction.amount || 0),
+          signedAmount: transaction.type === "income" ? Number(transaction.amount || 0) : -Number(transaction.amount || 0),
+          isOverdue: Boolean(rawDate && rawDate < today),
+          isCardInvoice: transaction.payment_method === "Cartão de Crédito" || Boolean(transaction.credit_card_id),
+        }
+      })
+      .filter((item) => item.date && item.date <= horizon)
+      .sort((a, b) => a.date.localeCompare(b.date))
+
+    const byDate = new Map<string, { date: string; entradas: number; saidas: number; saldo: number }>()
+    for (const item of pendingItems) {
+      const row = byDate.get(item.date) || { date: item.date, entradas: 0, saidas: 0, saldo: startingBalance }
+      if (item.type === "income") row.entradas += item.amount
+      else row.saidas += item.amount
+      byDate.set(item.date, row)
+    }
+
+    let running = startingBalance
+    const chart = [{ date: today, label: "Hoje", entradas: 0, saidas: 0, saldo: startingBalance }]
+    for (const row of Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date))) {
+      running += row.entradas - row.saidas
+      chart.push({ ...row, label: formatShortDate(row.date), saldo: running })
+    }
+    const lastKnownBalanceAt = (days: number) => {
+      const limit = addDaysISO(today, days)
+      return startingBalance + pendingItems
+        .filter((item) => item.date <= limit)
+        .reduce((sum, item) => sum + item.signedAmount, 0)
+    }
+    const totalByWindow = (days: number, type: "income" | "expense") => {
+      const limit = addDaysISO(today, days)
+      return pendingItems
+        .filter((item) => item.date <= limit && item.type === type)
+        .reduce((sum, item) => sum + item.amount, 0)
+    }
+    const overdue = pendingItems
+      .filter((item) => item.isOverdue)
+      .reduce((sum, item) => sum + item.signedAmount, 0)
+    const nextSevenOut = totalByWindow(7, "expense")
+    const nextSevenIn = totalByWindow(7, "income")
+    const minBalance = chart.reduce((min, item) => Math.min(min, item.saldo), startingBalance)
+
+    return {
+      today,
+      startingBalance,
+      pendingItems,
+      chart,
+      balance15: lastKnownBalanceAt(15),
+      balance30: lastKnownBalanceAt(30),
+      balance60: lastKnownBalanceAt(60),
+      income30: totalByWindow(30, "income"),
+      expense30: totalByWindow(30, "expense"),
+      overdue,
+      nextSevenOut,
+      nextSevenIn,
+      minBalance,
+    }
+  }, [metrics.accountTotal, projectionTransactions])
 
   const productRecommendations = useMemo(() => {
     return inventory
@@ -649,6 +764,77 @@ export default function FinanceiroPage() {
         <MetricCard title="Saídas de caixa" value={formatBRL(metrics.cashOutflows)} icon={ArrowDownRight} tone="red" hint={`Estoque ${formatBRL(metrics.reconciledInventoryPurchases)} · retiradas ${formatBRL(metrics.reconciledOwnerWithdrawals)}`} />
         <MetricCard title="Resultado líquido" value={formatBRL(metrics.netProfit)} icon={LineChart} tone={metrics.netProfit >= 0 ? "green" : "red"} hint="Lucro bruto menos despesas operacionais" />
       </div>
+
+      <Card className="overflow-hidden">
+        <div className="grid gap-4 border-b border-gray-100 p-5 lg:grid-cols-[1fr_auto] lg:items-start">
+          <div>
+            <div className="flex items-center gap-2">
+              <CalendarClock className="h-5 w-5 text-royal-500" />
+              <h3 className="font-display font-bold text-navy-900 font-syne">Fluxo de caixa futuro</h3>
+            </div>
+            <p className="mt-1 text-sm text-gray-500">
+              Projeção baseada em contas a pagar, contas a receber e faturas de cartão já lançadas. Cartão parcelado não vira parcelas a receber, porque a maquininha liquida no ato.
+            </p>
+          </div>
+          <Badge variant={cashProjection.minBalance >= 0 ? "green" : "red"}>
+            {cashProjection.minBalance >= 0 ? "Caixa saudável" : "Risco de caixa"}
+          </Badge>
+        </div>
+        <div className="grid gap-4 p-5 lg:grid-cols-[0.95fr_1.05fr]">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <ProjectionCard title="15 dias" value={cashProjection.balance15} hint={`Entradas ${formatBRL(cashProjection.nextSevenIn)} · saídas ${formatBRL(cashProjection.nextSevenOut)} em 7d`} />
+            <ProjectionCard title="30 dias" value={cashProjection.balance30} hint={`${formatBRL(cashProjection.income30)} entra · ${formatBRL(cashProjection.expense30)} sai`} />
+            <ProjectionCard title="60 dias" value={cashProjection.balance60} hint={`Menor saldo: ${formatBRL(cashProjection.minBalance)}`} />
+          </div>
+          <div className="h-48 rounded-2xl border border-gray-100 bg-surface p-3">
+            {cashProjection.chart.length > 1 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={cashProjection.chart} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="futureCashColor" x1="0" x2="0" y1="0" y2="1">
+                      <stop offset="5%" stopColor="#2563eb" stopOpacity={0.28} />
+                      <stop offset="95%" stopColor="#2563eb" stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid stroke="#e8eef7" vertical={false} />
+                  <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} minTickGap={18} />
+                  <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11 }} tickFormatter={(value) => compactCurrency(Number(value))} />
+                  <Tooltip formatter={(value) => formatBRL(Number(value || 0))} labelFormatter={(label) => `Saldo previsto em ${label}`} />
+                  <Area type="monotone" dataKey="saldo" stroke="#2563eb" strokeWidth={2} fill="url(#futureCashColor)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-full items-center justify-center text-center text-sm text-gray-400">
+                Sem entradas ou saídas futuras lançadas para os próximos 60 dias.
+              </div>
+            )}
+          </div>
+        </div>
+        {cashProjection.pendingItems.length > 0 && (
+          <div className="border-t border-gray-100 px-5 pb-5">
+            <div className="mb-3 mt-4 flex items-center justify-between">
+              <p className="text-xs font-semibold uppercase text-gray-400">Próximos movimentos</p>
+              <Link href="/financeiro/transacoes" className="text-xs font-semibold text-royal-500">Ver todos</Link>
+            </div>
+            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+              {cashProjection.pendingItems.slice(0, 6).map((item) => (
+                <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 bg-white p-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-navy-900">{item.description}</p>
+                    <p className="text-xs text-gray-500">
+                      {item.isOverdue ? "Vencido" : formatShortDate(item.date)}
+                      {item.isCardInvoice ? " · cartão" : ""}
+                    </p>
+                  </div>
+                  <p className={cn("shrink-0 text-sm font-bold", item.type === "income" ? "text-emerald-600" : "text-red-600")}>
+                    {item.type === "income" ? "+" : "-"}{formatBRL(item.amount)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </Card>
 
       <div className="grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
         <Card id="dre" className="scroll-mt-24 p-5">
@@ -973,6 +1159,22 @@ function MetricCard({ title, value, hint, icon: Icon, tone }: { title: string; v
       <p className="min-w-0 text-[1.45rem] font-bold leading-tight text-navy-900 tabular-nums 2xl:text-2xl">{value}</p>
       <p className="mt-2 text-xs text-gray-500">{hint}</p>
     </Card>
+  )
+}
+
+function ProjectionCard({ title, value, hint }: { title: string; value: number; hint: string }) {
+  const positive = value >= 0
+  return (
+    <div className={cn(
+      "min-w-0 rounded-2xl border p-4",
+      positive ? "border-emerald-100 bg-emerald-50/40" : "border-red-100 bg-red-50/50"
+    )}>
+      <p className="text-xs font-semibold uppercase text-gray-400">{title}</p>
+      <p className={cn("mt-2 text-[1.35rem] font-bold leading-tight tabular-nums", positive ? "text-navy-900" : "text-red-600")}>
+        {formatBRL(value)}
+      </p>
+      <p className="mt-1 text-xs text-gray-500">{hint}</p>
+    </div>
   )
 }
 

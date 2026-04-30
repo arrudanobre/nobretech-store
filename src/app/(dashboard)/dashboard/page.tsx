@@ -172,7 +172,7 @@ export default function DashboardPage() {
 
       const profits = salesMonth.map((s) => {
         const cost = (s.inventory as any)?.purchase_price ?? 0
-        const revenue = s.net_amount ?? s.sale_price ?? 0
+        const revenue = s.sale_price ?? s.net_amount ?? 0
         const qty = parseQtyFromNotes(s.notes)
         const totals = calcSaleTotals({
           salePrice: revenue,

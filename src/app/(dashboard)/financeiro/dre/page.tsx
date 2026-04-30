@@ -7,10 +7,12 @@ import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { supabase } from "@/lib/supabase"
 import { formatBRL } from "@/lib/helpers"
+import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/toaster"
 
 const MONTH_LABELS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+const STOCK_PURCHASE_CATEGORY = "Estoque (Peças/Acessórios)"
 
 type Transaction = {
   id: string
@@ -41,9 +43,10 @@ type Sale = {
   sale_price: number
   net_amount?: number | null
   supplier_cost?: number | null
+  notes?: string | null
   sale_status?: "reserved" | "completed" | "cancelled" | null
-  inventory?: { id?: string | null; purchase_price?: number | null; catalog?: { category?: string | null } | null } | null
-  sales_additional_items?: { cost_price: number }[]
+  inventory?: { id?: string | null; purchase_price?: number | null; suggested_price?: number | null; catalog?: { category?: string | null } | null } | null
+  sales_additional_items?: { type?: string | null; sale_price?: number | null; cost_price: number }[]
 }
 
 type PurchaseItemCost = {
@@ -87,7 +90,27 @@ function addTo(values: number[], index: number, amount: number) {
 }
 
 function saleNetRevenue(sale: Sale) {
-  return Number(sale.net_amount ?? sale.sale_price ?? 0)
+  return Number(sale.sale_price ?? sale.net_amount ?? 0)
+}
+
+function saleTotals(sale: Sale) {
+  return calcSaleTotals({
+    salePrice: sale.sale_price,
+    mainCost: sale.inventory?.purchase_price ?? null,
+    qty: parseQtyFromNotes(sale.notes),
+    additionalItems: (sale.sales_additional_items || []).map((item) => ({
+      ...item,
+      type: item.type || "upsell",
+      sale_price: item.sale_price ?? null,
+    })),
+    supplierCost: sale.supplier_cost ?? null,
+  })
+}
+
+function saleDiscount(sale: Sale) {
+  const suggestedMain = Number(sale.inventory?.suggested_price || 0) * parseQtyFromNotes(sale.notes)
+  if (suggestedMain <= 0) return 0
+  return Math.max(0, suggestedMain - saleTotals(sale).valorPrincipal)
 }
 
 function saleCost(sale: Sale) {
@@ -123,6 +146,10 @@ function accountSign(type: ChartAccount["financial_type"]): DreRow["sign"] {
 
 function shouldShowInDre(account: ChartAccount) {
   return account.level !== 1 && account.financial_type !== "inventory_asset" && account.financial_type !== "owner_equity"
+}
+
+function isInventoryPurchaseTransaction(transaction: Transaction) {
+  return transaction.source_type === "inventory_purchase" || transaction.category === STOCK_PURCHASE_CATEGORY
 }
 
 function buildYearOptions() {
@@ -163,7 +190,7 @@ export default function DrePage() {
           .order("sort_order", { ascending: true }),
         (supabase.from("transactions") as any).select("*").gte("date", start).lte("date", end),
         (supabase.from("sales") as any)
-          .select("id, sale_date, sale_price, net_amount, supplier_cost, sale_status, inventory:inventory_id(id, purchase_price, catalog:catalog_id(category)), sales_additional_items(cost_price)")
+          .select("id, sale_date, sale_price, net_amount, supplier_cost, notes, sale_status, inventory:inventory_id(id, purchase_price, suggested_price, catalog:catalog_id(category)), sales_additional_items(type, sale_price, cost_price)")
           .gte("sale_date", start)
           .lte("sale_date", endOfDay),
       ])
@@ -198,7 +225,7 @@ export default function DrePage() {
   const purchaseItemByInventoryId = useMemo(() => new Map(purchaseItems.map((item) => [item.inventory_id, item])), [purchaseItems])
 
   const getTransactionAccount = (transaction: Transaction) => {
-    if (transaction.type === "expense" && transaction.category === "Estoque (Peças/Acessórios)") {
+    if (transaction.type === "expense" && isInventoryPurchaseTransaction(transaction)) {
       return chartAccounts.find((account) => account.code === "7.01") || null
     }
     return (
@@ -212,13 +239,13 @@ export default function DrePage() {
     const account = getTransactionAccount(transaction)
     if (account) return account.financial_type === type
     if (type === "deduction") return transaction.type === "expense" && ["Descontos concedidos", "Taxas de cartão", "Taxas de marketplace", "Estornos / devoluções"].includes(transaction.category)
-    if (type === "inventory_asset") return transaction.type === "expense" && transaction.category === "Estoque (Peças/Acessórios)"
+    if (type === "inventory_asset") return transaction.type === "expense" && isInventoryPurchaseTransaction(transaction)
     if (type === "owner_equity") return ["Retirada de Lucro", "Aporte do proprietário"].includes(transaction.category)
     if (type === "tax") return transaction.category === "Impostos / Taxas"
     if (type === "financial_expense") return transaction.type === "expense" && ["Juros de parcelamento", "Taxas bancárias", "Multas"].includes(transaction.category)
     if (type === "financial_revenue") return transaction.type === "income" && ["Receitas financeiras", "Rendimentos"].includes(transaction.category)
     if (type === "revenue") return transaction.type === "income" && transaction.category !== "Aporte do proprietário"
-    if (type === "operating_expense") return transaction.type === "expense" && !["Estoque (Peças/Acessórios)", "Retirada de Lucro", "Impostos / Taxas"].includes(transaction.category)
+    if (type === "operating_expense") return transaction.type === "expense" && !isInventoryPurchaseTransaction(transaction) && !["Retirada de Lucro", "Impostos / Taxas"].includes(transaction.category)
     return false
   }
 
@@ -250,7 +277,11 @@ export default function DrePage() {
       const additionalCost = (sale.sales_additional_items || []).reduce((sum, item) => sum + Number(item.cost_price || 0), 0)
       const otherAllocated = Number(purchaseItem?.other_cost_allocated || 0)
       const freightAllocated = Number(purchaseItem?.freight_allocated || 0)
-      addAccountValue(chartAccountByName.get(saleRevenueAccountName(sale)) || chartAccounts.find((account) => account.code === "1.90"), index, saleNetRevenue(sale))
+      const discount = saleDiscount(sale)
+      addAccountValue(chartAccountByName.get(saleRevenueAccountName(sale)) || chartAccounts.find((account) => account.code === "1.90"), index, saleNetRevenue(sale) + discount)
+      if (discount > 0) {
+        addAccountValue(chartAccountByName.get("Descontos concedidos") || chartAccounts.find((account) => account.code === "2.01"), index, discount)
+      }
       addAccountValue(chartAccountByName.get(saleCostAccountName(sale)) || chartAccounts.find((account) => account.code === "3.01"), index, baseCost + additionalCost + otherAllocated)
       if (freightAllocated > 0) {
         addAccountValue(chartAccountByName.get("Frete de compra") || chartAccounts.find((account) => account.code === "3.03"), index, freightAllocated)

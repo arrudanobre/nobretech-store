@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { supabase } from "@/lib/supabase"
 import { formatBRL, formatDate, getAdditionalItemDisplayName, getTradeInDisplayName, getTradeInSummaryStatus, getInventoryStatusMeta, isPendingInventoryStatus, getProductName } from "@/lib/helpers"
 import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
+import { calculateSaleEconomics, estimateRiskReserve } from "@/lib/sale-economics"
 import { CHECKLIST_TEMPLATES } from "@/lib/constants"
 import { generateWarrantyPDF as generateWarrantyTermDocument, generateReceiptPDF, type SaleDocumentData, type ReceiptLineItem } from "@/lib/sale-documents"
 import jsPDF from "jspdf"
@@ -19,6 +20,14 @@ for (const [cat, items] of Object.entries(CHECKLIST_TEMPLATES)) {
   for (const item of items) {
     checklistLabels[item.id] = item.label
   }
+}
+
+function getSaleFeeSettings(sale: any) {
+  if (!sale?.payment_method || sale.card_fee_pct === null || sale.card_fee_pct === undefined) {
+    return {}
+  }
+
+  return { [sale.payment_method]: Number(sale.card_fee_pct) }
 }
 
 export default function SaleDetailPage() {
@@ -117,7 +126,7 @@ export default function SaleDetailPage() {
             if ((ti as any).linked_inventory_id) {
               const { data: tiInventory } = await (supabase
                 .from("inventory") as any)
-                .select("id, status, origin")
+                .select("id, status, origin, grade, imei, serial_number, catalog:catalog_id(id, model, storage, color)")
                 .eq("id", (ti as any).linked_inventory_id)
                 .single()
               if (tiInventory) setTradeInInventory(tiInventory)
@@ -179,8 +188,36 @@ export default function SaleDetailPage() {
     additionalItems: additionalItems || [],
     supplierCost: sale?.supplier_cost,
   })
+  const tradeInValueForSale = Number(tradeInData?.trade_in_value || 0)
+  const saleCashAmountDue = Math.max(0, totals.valorTotal - tradeInValueForSale)
+  const saleRiskReserve = estimateRiskReserve({
+    cost: totals.custoTotal,
+    category: product?.catalog?.category || product?.catalog?.model || product?.notes,
+    grade: product?.grade,
+    batteryHealth: product?.battery_health,
+    warrantyMonths: Number(sale?.warranty_months || 0),
+  })
+  const saleEconomics = calculateSaleEconomics({
+    saleRevenue: totals.valorTotal,
+    cashAmountDue: saleCashAmountDue,
+    paymentMethod: sale?.payment_method,
+    settings: getSaleFeeSettings(sale),
+    costTotal: totals.custoTotal,
+    riskReserve: saleRiskReserve,
+  })
+  const suggestedMainValue = Number(product?.suggested_price || 0) * parseQtyFromNotes(sale?.notes)
+  const discountAmount = suggestedMainValue > 0 ? Math.max(0, suggestedMainValue - totals.valorPrincipal) : 0
+  const tradeInDisplayName = tradeInData ? getTradeInDisplayName({
+    model: tradeInData.notes || tradeInInventory?.catalog?.model || undefined,
+    storage: tradeInInventory?.catalog?.storage || undefined,
+    color: tradeInInventory?.catalog?.color || undefined,
+    fallback: "Aparelho recebido",
+  }) : ""
+  const tradeInGrade = tradeInData?.grade || tradeInInventory?.grade || null
 
   const handleDownloadInspectionPDF = async () => {
+    if (generatingPdf) return
+
     const { default: jsPDF } = await import("jspdf")
     const html2canvasF = (await import("html2canvas")).default
 
@@ -269,24 +306,31 @@ export default function SaleDetailPage() {
   }
 
   const handleDownloadReceiptPDF = async () => {
+    if (generating) return
+
     setGenerating("receipt")
     try {
       const catalog = product?.catalog || {}
       const mainProductName = `${catalog.model || "Aparelho"}${catalog.variant ? ` ${catalog.variant}` : ""}${catalog.storage ? ` ${catalog.storage}` : ""}${catalog.color ? ` ${catalog.color}` : ""}`.trim()
+      const mainQuantity = parseQtyFromNotes(sale?.notes)
+      const officialMainTotal = suggestedMainValue > 0 ? suggestedMainValue : totals.valorPrincipal
+      const officialMainUnit = mainQuantity > 0 ? officialMainTotal / mainQuantity : officialMainTotal
 
       const receiptLines: ReceiptLineItem[] = [
         {
           name: mainProductName,
           imei: product?.imei || null,
-          quantity: parseQtyFromNotes(sale?.notes),
-          unitPrice: totals.valorPrincipal,
-          totalPrice: totals.valorPrincipal,
+          imei2: product?.imei2 || null,
+          quantity: mainQuantity,
+          unitPrice: officialMainUnit,
+          totalPrice: officialMainTotal,
           warrantyMonths: Number(sale?.warranty_months || 0),
           type: "principal",
         },
         ...(additionalItems || []).map((item: any) => ({
           name: getAdditionalItemDisplayName(item.name),
-          imei: item.imei || null,
+          imei: item.imei || item.inventory?.imei || null,
+          imei2: item.imei2 || item.inventory?.imei2 || null,
           quantity: 1,
           unitPrice: Number(item.sale_price || 0),
           totalPrice: Number(item.sale_price || 0),
@@ -311,12 +355,25 @@ export default function SaleDetailPage() {
         item: {
           name: mainProductName,
           imei: product?.imei || null,
+          imei2: product?.imei2 || null,
           quantity: 1,
-          unitPrice: totals.valorTotal,
-          totalPrice: totals.valorTotal,
+          unitPrice: officialMainUnit,
+          totalPrice: officialMainTotal,
           warrantyMonths: Number(sale?.warranty_months || 0),
         },
         receiptItems: receiptLines,
+        receiptSummary: {
+          officialProductTotal: officialMainTotal + totals.valorAdicionais,
+          saleTotal: totals.valorTotal,
+          discountAmount,
+          tradeInName: tradeInDisplayName || null,
+          tradeInGrade: tradeInGrade || null,
+          tradeInValue: tradeInValueForSale,
+          cashAmountDue: saleEconomics.storeCashReceives,
+          customerPaid: saleEconomics.customerCashPays,
+          embeddedFee: saleEconomics.embeddedFee,
+          storeReceives: saleEconomics.storeCashReceives,
+        },
       })
       toast({ title: "Recibo gerado!", type: "success" })
     } catch (err) {
@@ -329,6 +386,8 @@ export default function SaleDetailPage() {
 
   /** Generate warranty PDF for a specific item (main product or additional) */
   const handleDownloadItemWarrantyPDF = async (itemProduct: any, itemName: string, warrantyMonths: number) => {
+    if (generating) return
+
     setGenerating(`warranty-${itemProduct?.id || itemName}`)
     try {
       const itemCatalog = itemProduct?.catalog || {}
@@ -759,37 +818,100 @@ export default function SaleDetailPage() {
   const handleDeleteSale = async () => {
     setIsSubmitting(true)
     try {
-      // Revert main product inventory
-      await (supabase.from("inventory") as any).update({ status: "in_stock" }).eq("id", sale.inventory_id)
+      const tradeInInventoryId = tradeInData?.linked_inventory_id || null
 
-      // Revert trade-in inventory
-      if (tradeInData?.linked_inventory_id) {
-         await (supabase.from("inventory") as any).delete().eq("id", tradeInData.linked_inventory_id)
+      // Revert main product inventory
+      if (sale.inventory_id) {
+        const { error } = await (supabase.from("inventory") as any)
+          .update({ status: "in_stock" })
+          .eq("id", sale.inventory_id)
+        if (error) throw error
       }
+
+      // Break the sale -> trade-in link before deleting trade-in records.
       if (tradeInData?.id) {
-         await (supabase.from("trade_ins") as any).delete().eq("id", tradeInData.id)
+        const { error: unlinkError } = await (supabase.from("sales") as any)
+          .update({ has_trade_in: false, trade_in_id: null })
+          .eq("id", id)
+        if (unlinkError) throw unlinkError
+
+        const { error } = await (supabase.from("trade_ins") as any)
+          .delete()
+          .eq("id", tradeInData.id)
+        if (error) throw error
+      }
+
+      // Remove the inventory item created from the trade-in after its FK is gone.
+      if (tradeInInventoryId) {
+        const { error } = await (supabase.from("inventory") as any)
+          .delete()
+          .eq("id", tradeInInventoryId)
+        if (error) throw error
       }
 
       // Revert additional items
       for (const item of additionalItems) {
-         if (item.product_id) {
-           await (supabase.from("inventory") as any).update({ status: "in_stock" }).eq("id", item.product_id)
-         }
+        if (item.product_id) {
+          const { error } = await (supabase.from("inventory") as any)
+            .update({ status: "in_stock" })
+            .eq("id", item.product_id)
+          if (error) throw error
+        }
       }
 
       // Delete additional items
-      await (supabase.from("sales_additional_items") as any).delete().eq("sale_id", id)
+      {
+        const { error } = await (supabase.from("sales_additional_items") as any)
+          .delete()
+          .eq("sale_id", id)
+        if (error) throw error
+      }
+
+      // Delete sale-derived finance and support records before deleting the sale itself.
+      {
+        const { error } = await (supabase.from("transactions") as any)
+          .delete()
+          .eq("source_type", "sale")
+          .eq("source_id", id)
+        if (error) throw error
+      }
+
+      {
+        const { error } = await (supabase.from("warranties") as any)
+          .delete()
+          .eq("sale_id", id)
+        if (error) throw error
+      }
+
+      {
+        const { error } = await (supabase.from("problems") as any)
+          .delete()
+          .eq("sale_id", id)
+        if (error) throw error
+      }
 
       // Delete audit logs
-      await (supabase.from("audit_logs") as any).delete().eq("record_id", id)
+      {
+        const { error } = await (supabase.from("audit_logs") as any)
+          .delete()
+          .eq("record_id", id)
+        if (error) throw error
+      }
 
       // Delete sale
-      await (supabase.from("sales") as any).delete().eq("id", id)
+      {
+        const { data, error } = await (supabase.from("sales") as any)
+          .delete()
+          .eq("id", id)
+          .select("id")
+        if (error) throw error
+        if (!data?.length) throw new Error("Nenhuma venda foi removida. Atualize a página e tente novamente.")
+      }
 
       toast({ title: "Venda excluída com sucesso", type: "success" })
-      router.push("/vendas")
-    } catch (e) {
-      toast({ title: "Erro ao excluir venda", type: "error" })
+      router.replace("/vendas")
+    } catch (e: any) {
+      toast({ title: "Erro ao excluir venda", description: e?.message || "Não foi possível remover os vínculos da venda.", type: "error" })
       setIsSubmitting(false)
     }
   }
@@ -801,8 +923,6 @@ export default function SaleDetailPage() {
   const fullModel = `${catalog.model || "—"}${catalog.variant ? " " + catalog.variant : ""} ${catalog.storage || ""} ${catalog.color || ""}`.trim()
   const okCount = checklist.filter((i: any) => i.status === "ok").length
   const failCount = checklist.filter((i: any) => i.status === "fail").length
-
-  const mainProductPrice = totals.valorPrincipal
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -834,33 +954,84 @@ export default function SaleDetailPage() {
           <h3 className="font-display font-bold text-white font-syne text-sm uppercase tracking-wider">Resumo Financeiro</h3>
           <span className="ml-auto text-xs bg-white/10 text-white/80 px-2 py-0.5 rounded-full">{totals.quantidadeTotalItens} {totals.quantidadeTotalItens === 1 ? 'item' : 'itens'}</span>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
           <div>
-            <p className="text-xs text-white/60 mb-0.5">Valor Total</p>
-            <p className="text-xl font-bold text-white">{formatBRL(totals.valorTotal)}</p>
+            <p className="text-xs text-white/60 mb-0.5">Valor da venda</p>
+            <p className="text-xl font-bold text-white">{formatBRL(saleEconomics.storeReceives)}</p>
             {totals.valorAdicionais > 0 && (
               <p className="text-xs text-white/60 mt-0.5">
                 Principal {formatBRL(totals.valorPrincipal)} + Adicionais {formatBRL(totals.valorAdicionais)}
               </p>
             )}
-          </div>
-          <div>
-            <p className="text-xs text-white/60 mb-0.5">Lucro Total</p>
-            <p className={`text-xl font-bold ${totals.lucroTotal >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
-              {totals.lucroTotal >= 0 ? '+' : ''}{formatBRL(totals.lucroTotal)}
-            </p>
-            {totals.custoAdicionais > 0 && (
-              <p className="text-xs text-white/60 mt-0.5">Custo total {formatBRL(totals.custoTotal)}</p>
+            {discountAmount > 0 && (
+              <p className="text-xs text-amber-200 mt-0.5">Desconto {formatBRL(discountAmount)}</p>
             )}
           </div>
-          <div className="col-span-2 sm:col-span-1">
-            <p className="text-xs text-white/60 mb-0.5">Margem</p>
-            <p className={`text-xl font-bold ${totals.margemTotal >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
-              {totals.margemTotal.toFixed(1)}%
+          <div>
+            <p className="text-xs text-white/60 mb-0.5">Cliente paga</p>
+            <p className="text-xl font-bold text-white">{formatBRL(saleEconomics.customerCashPays)}</p>
+            {saleEconomics.embeddedFee > 0 && (
+              <p className="text-xs text-white/60 mt-0.5">Taxa embutida {formatBRL(saleEconomics.embeddedFee)}</p>
+            )}
+            {saleEconomics.tradeInCredit > 0 && (
+              <p className="text-xs text-white/60 mt-0.5">Total negociado {formatBRL(saleEconomics.customerTotalPays)}</p>
+            )}
+          </div>
+          <div>
+            <p className="text-xs text-white/60 mb-0.5">Loja recebe</p>
+            <p className="text-xl font-bold text-white">{formatBRL(saleEconomics.storeCashReceives)}</p>
+            <p className="text-xs text-white/60 mt-0.5">Caixa líquido após trade-in/taxa</p>
+          </div>
+          <div>
+            <p className="text-xs text-white/60 mb-0.5">Lucro real</p>
+            <p className={`text-xl font-bold ${saleEconomics.grossProfit >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+              {saleEconomics.grossProfit >= 0 ? '+' : ''}{formatBRL(saleEconomics.grossProfit)}
+            </p>
+            <p className="text-xs text-white/60 mt-0.5">Custo total {formatBRL(saleEconomics.costTotal)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-white/60 mb-0.5">Margem real</p>
+            <p className={`text-xl font-bold ${saleEconomics.realMarginPct >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+              {saleEconomics.realMarginPct.toFixed(1)}%
             </p>
             <p className="text-xs text-white/60 mt-0.5">{formatDate(sale?.sale_date)}</p>
           </div>
         </div>
+        {tradeInData && (
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/10 p-3">
+            <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto] gap-3 md:items-center">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-white/60">Aparelho recebido no trade-in</p>
+                <p className="text-sm font-bold text-white mt-0.5">
+                  {tradeInDisplayName}
+                  {tradeInGrade ? ` · Classe ${tradeInGrade}` : ""}
+                </p>
+              </div>
+              <div className="md:text-right">
+                <p className="text-xs text-white/60">Crédito concedido</p>
+                <p className="text-sm font-bold text-amber-200">-{formatBRL(tradeInValueForSale)}</p>
+              </div>
+              <div className="md:text-right">
+                <p className="text-xs text-white/60">Saldo antes da taxa</p>
+                <p className="text-sm font-bold text-white">{formatBRL(saleEconomics.storeCashReceives)}</p>
+              </div>
+            </div>
+            <p className="mt-2 text-xs text-white/60">
+              O trade-in entra como bem recebido no estoque e reduz o valor em dinheiro que o cliente precisa pagar nesta venda.
+            </p>
+          </div>
+        )}
+        {saleEconomics.riskReserve > 0 && (
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/10 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wider text-white/70">Reserva técnica informativa</p>
+              <p className="text-sm font-bold text-amber-200">{formatBRL(saleEconomics.riskReserve)}</p>
+            </div>
+            <p className="mt-1 text-xs text-white/65">
+              Estimativa para garantia/defeito. Não muda caixa nem DRE; serve para enxergar o lucro conservador de {formatBRL(saleEconomics.conservativeProfit)}.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* ── Aparelho Principal ── */}
@@ -886,6 +1057,11 @@ export default function SaleDetailPage() {
             <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Custo / Venda</p>
             <p className="text-sm font-bold text-navy-900">{formatBRL(totals.valorPrincipal)}</p>
             <p className="text-xs text-gray-500 mt-0.5">Custo: {formatBRL(totals.custoPrincipal)}</p>
+            {discountAmount > 0 && (
+              <p className="text-xs text-amber-700 mt-0.5">
+                Tabela {formatBRL(suggestedMainValue)} · desconto {formatBRL(discountAmount)}
+              </p>
+            )}
             {sale?.source_type === "supplier" && (
               <p className="text-xs text-gray-500">{sale?.supplier_name ? `Forn.: ${sale.supplier_name}` : "Fornecedor"}</p>
             )}
@@ -897,21 +1073,21 @@ export default function SaleDetailPage() {
         const inventoryStatus = tradeInInventory?.status || "pending"
         const statusMeta = getInventoryStatusMeta(inventoryStatus)
         const tradeInLabel = getTradeInSummaryStatus(inventoryStatus)
-        const tradeInName = getTradeInDisplayName({
-          model: tradeInData.notes || undefined,
-          fallback: "Aparelho recebido",
-        })
 
         return (
           <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
             <div className="flex items-center justify-between gap-3 mb-3">
-              <h3 className="font-display font-bold text-navy-900 font-syne">Aparelho recebido</h3>
+              <h3 className="font-display font-bold text-navy-900 font-syne">Aparelho recebido no trade-in</h3>
               <Badge variant={statusMeta.badge} dot>{tradeInLabel}</Badge>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
               <div className="bg-surface rounded-xl p-3">
                 <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Nome</p>
-                <p className="text-sm font-semibold text-navy-900">{tradeInName}</p>
+                <p className="text-sm font-semibold text-navy-900">{tradeInDisplayName}</p>
+              </div>
+              <div className="bg-surface rounded-xl p-3">
+                <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Classe</p>
+                <p className="text-sm font-semibold text-navy-900">{tradeInGrade || "—"}</p>
               </div>
               <div className="bg-surface rounded-xl p-3">
                 <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Valor atribuído</p>
@@ -1140,9 +1316,10 @@ export default function SaleDetailPage() {
           <h3 className="font-display font-bold text-navy-900 font-syne">Documentos da Venda</h3>
         </div>
         <button
+          type="button"
           onClick={handleDownloadReceiptPDF}
           disabled={generating === "receipt"}
-          className="w-full flex items-center gap-4 p-4 rounded-xl border border-gray-100 bg-surface hover:border-royal-200 hover:bg-royal-50/30 transition-all text-left disabled:opacity-60 disabled:cursor-wait"
+          className="w-full flex cursor-pointer items-center gap-4 p-4 rounded-xl border border-gray-100 bg-surface hover:border-royal-200 hover:bg-royal-50/30 transition-all text-left disabled:opacity-60 disabled:cursor-wait"
         >
           <div className="w-10 h-10 rounded-xl bg-royal-100 flex items-center justify-center shrink-0">
             {generating === "receipt" ? <Loader2 className="w-5 h-5 text-royal-500 animate-spin" /> : <Download className="w-5 h-5 text-royal-500" />}
@@ -1150,7 +1327,10 @@ export default function SaleDetailPage() {
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-navy-900">Recibo da Venda</p>
             <p className="text-xs text-gray-400 mt-0.5">
-              Negociação completa · Total: {formatBRL(totals.valorTotal)}
+              Tabela: {formatBRL((suggestedMainValue || totals.valorPrincipal) + totals.valorAdicionais)}
+              {discountAmount > 0 && ` · Desconto: ${formatBRL(discountAmount)}`}
+              {tradeInValueForSale > 0 && ` · Trade-in: ${formatBRL(tradeInValueForSale)}`}
+              {` · Cliente pagou: ${formatBRL(saleEconomics.customerCashPays)}`}
               {totals.quantidadeTotalItens > 1 && ` · ${totals.quantidadeTotalItens} itens`}
             </p>
           </div>
@@ -1172,7 +1352,7 @@ export default function SaleDetailPage() {
             const hasChecklist = checklist.length > 0
             const warrantyMonths = Number(sale?.warranty_months || 0)
             return (
-              <div className="rounded-xl border border-gray-100 bg-surface p-4">
+              <div className="rounded-xl border border-gray-100 bg-surface p-4 cursor-default">
                 <div className="flex items-start gap-3 mb-3">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -1189,10 +1369,14 @@ export default function SaleDetailPage() {
                 </div>
                 <div className="flex gap-2 flex-wrap">
                   <button
-                    onClick={handleDownloadInspectionPDF}
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      handleDownloadInspectionPDF()
+                    }}
                     disabled={generatingPdf || isSealed || !hasChecklist}
                     title={isSealed ? "Laudo não aplicável para produto lacrado" : !hasChecklist ? "Sem checklist disponível" : "Baixar laudo técnico"}
-                    className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-all
+                    className="flex cursor-pointer items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-all
                       disabled:opacity-40 disabled:cursor-not-allowed
                       enabled:hover:bg-navy-900 enabled:hover:text-white enabled:hover:border-navy-900
                       border-gray-200 text-gray-600 bg-white"
@@ -1201,10 +1385,14 @@ export default function SaleDetailPage() {
                     {isSealed ? "Laudo N/A" : "Baixar Laudo"}
                   </button>
                   <button
-                    onClick={() => handleDownloadItemWarrantyPDF(product, fullModel, warrantyMonths)}
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      handleDownloadItemWarrantyPDF(product, fullModel, warrantyMonths)
+                    }}
                     disabled={generating?.startsWith("warranty-") || warrantyMonths === 0}
                     title={warrantyMonths === 0 ? "Sem garantia registrada" : "Baixar termo de garantia"}
-                    className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-all
+                    className="flex cursor-pointer items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-all
                       disabled:opacity-40 disabled:cursor-not-allowed
                       enabled:hover:bg-success-500 enabled:hover:text-white enabled:hover:border-success-500
                       border-gray-200 text-gray-600 bg-white"
@@ -1229,7 +1417,7 @@ export default function SaleDetailPage() {
             const itemSerial = invItem?.serial_number || null
             const itemName = getAdditionalItemDisplayName(item.name)
             return (
-              <div key={item.id} className="rounded-xl border border-gray-100 bg-surface p-4">
+              <div key={item.id} className="rounded-xl border border-gray-100 bg-surface p-4 cursor-default">
                 <div className="flex items-start gap-3 mb-3">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -1252,9 +1440,10 @@ export default function SaleDetailPage() {
                 </div>
                 <div className="flex gap-2 flex-wrap">
                   <button
+                    type="button"
                     disabled={!hasInventoryLink || isSealed}
                     title={!hasInventoryLink ? "Item manual — sem laudo disponível" : isSealed ? "Laudo não aplicável para produto lacrado" : "Baixar laudo técnico"}
-                    className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-all
+                    className="flex cursor-pointer items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-all
                       disabled:opacity-40 disabled:cursor-not-allowed
                       enabled:hover:bg-navy-900 enabled:hover:text-white enabled:hover:border-navy-900
                       border-gray-200 text-gray-600 bg-white"
@@ -1263,10 +1452,14 @@ export default function SaleDetailPage() {
                     {isSealed ? "Laudo N/A" : "Baixar Laudo"}
                   </button>
                   <button
-                    onClick={() => hasInventoryLink && handleDownloadItemWarrantyPDF(invItem, itemName, warrantyMonths)}
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      if (hasInventoryLink) handleDownloadItemWarrantyPDF(invItem, itemName, warrantyMonths)
+                    }}
                     disabled={!hasInventoryLink || warrantyMonths === 0}
                     title={!hasInventoryLink ? "Item manual — sem garantia disponível" : warrantyMonths === 0 ? "Sem garantia registrada" : "Baixar termo de garantia"}
-                    className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-all
+                    className="flex cursor-pointer items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-all
                       disabled:opacity-40 disabled:cursor-not-allowed
                       enabled:hover:bg-success-500 enabled:hover:text-white enabled:hover:border-success-500
                       border-gray-200 text-gray-600 bg-white"

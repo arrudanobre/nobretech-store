@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { calculatePaymentPrice, formatBRL, maskCPF, formatPhone, validateCPF, getProductName, getAdditionalItemDisplayName, calculateDeviceValue, formatTradeInSuggestedRange, getTradeInSummaryStatus, getComputedInventoryStatus, normalizePaymentFeePct, todayISO, addDaysISO } from "@/lib/helpers"
 import { atualizarStatusEstoque } from "@/services/vendaService"
 import { PAYMENT_METHODS, CATEGORIES, PRODUCT_CATALOG, GRADES, SIDEPAY_FEE_PCTS } from "@/lib/constants"
+import { calculateSaleEconomics, estimateRiskReserve } from "@/lib/sale-economics"
 import { useToast } from "@/components/ui/toaster"
 import { supabase } from "@/lib/supabase"
 import { generateReceiptPDF, generateWarrantyPDF, type SaleDocumentData } from "@/lib/sale-documents"
@@ -33,6 +34,7 @@ type InventoryProduct = {
   cost: number
   suggested: number
   battery: number
+  grade?: string | null
   status?: string
   type?: "own" | "supplier"
   supplier_name?: string | null
@@ -621,7 +623,7 @@ function NewSaleContent() {
       try {
         const { data, error } = await supabase
           .from("inventory")
-          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, status, quantity, condition_notes, notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color)")
+          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, grade, status, quantity, condition_notes, notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color)")
           .in("status", ["active", "in_stock"] as any)
           .order("created_at", { ascending: false })
 
@@ -638,6 +640,7 @@ function NewSaleContent() {
             cost: item.purchase_price || 0,
             suggested: item.suggested_price || 0,
             battery: item.battery_health || 0,
+            grade: item.grade || null,
             status: item.status || "active",
             type: item.type || "own",
             supplier_name: item.supplier_name || null,
@@ -660,7 +663,7 @@ function NewSaleContent() {
     const fetchProduct = async () => {
       try {
         const { data: items, error } = await (supabase.from("inventory") as any)
-          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, status, quantity, condition_notes, notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color)")
+          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, grade, status, quantity, condition_notes, notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color)")
           .eq("id", preselectId)
           .single()
 
@@ -684,6 +687,7 @@ function NewSaleContent() {
           cost: items.purchase_price || 0,
           suggested: items.suggested_price || 0,
           battery: items.battery_health || 0,
+          grade: items.grade || null,
           status: items.status || "active",
           type: items.type || "own",
           supplier_name: items.supplier_name || null,
@@ -794,6 +798,10 @@ function NewSaleContent() {
   const totalProfit = useMemo(() => {
     return totalBaseProfit + additionalProfit
   }, [totalBaseProfit, additionalProfit])
+
+  const totalCost = useMemo(() => {
+    return finalTotal - totalProfit
+  }, [finalTotal, totalProfit])
 
   const getAvailableQty = useCallback((product?: Pick<InventoryProduct, "quantity" | "type"> | null) => {
     if (!product || product.type === "supplier") return 1
@@ -1036,11 +1044,12 @@ function NewSaleContent() {
 
   const updateSaleTradeInLink = useCallback(async (saleId: string, tradeInId: string) => {
     const { error } = await (supabase.from("sales") as any)
-      .update({ trade_in_id: tradeInId })
+      .update({ trade_in_id: tradeInId, has_trade_in: true })
       .eq("id", saleId)
 
     if (error) {
       console.error("Erro ao vincular trade-in à venda:", error)
+      throw new Error(error.message || "Erro ao vincular aparelho recebido à venda")
     }
   }, [])
 
@@ -1137,6 +1146,8 @@ function NewSaleContent() {
           inventory_id: selectedProduct!.id,
           customer_id: customerId,
           sale_price: finalTotal,
+          net_amount: saleEconomics.storeCashReceives,
+          card_fee_pct: saleEconomics.feePct || 0,
           payment_method: paymentMethod || (storeAmountDue > 0 ? "trade_in_return" : null),
           warranty_months: parseInt(warrantyMonths),
           warranty_start: today,
@@ -1148,7 +1159,9 @@ function NewSaleContent() {
           payment_due_date: isReservation ? paymentDueDate : null,
           sale_date: today,
           notes: quantity > 1 ? `[${quantity}x ${selectedProduct!.name}]` + (saleNotes ? `\n${saleNotes}` : "") : saleNotes || null,
-          has_trade_in: hasTradeIn,
+          // O banco exige trade_in_id quando has_trade_in=true. Como o trade-in
+          // só existe depois que a venda é criada, ligamos essa flag no vínculo.
+          has_trade_in: false,
         })
         .select()
         .single()
@@ -1225,6 +1238,7 @@ function NewSaleContent() {
 
         if (tradeInError) {
           console.error("Erro ao registrar trade-in:", tradeInError)
+          throw new Error(tradeInError.message || "Erro ao registrar aparelho recebido na troca")
         } else if (tradeInRow?.id) {
           await updateSaleTradeInLink(sale.id, tradeInRow.id)
 
@@ -1282,7 +1296,7 @@ function NewSaleContent() {
           type: "income",
           category: "Venda de produtos",
           description: `Reserva · ${selectedProduct!.name}`,
-          amount: amountAfterTradeIn,
+          amount: saleEconomics.storeCashReceives,
           date: today,
           due_date: paymentDueDate,
           payment_method: paymentMethod,
@@ -1323,9 +1337,26 @@ function NewSaleContent() {
   const balanceAfterTradeIn = finalTotal - tradeInValue
   const customerAmountDue = Math.max(0, balanceAfterTradeIn)
   const storeAmountDue = Math.max(0, -balanceAfterTradeIn)
-  const selectedPayment = paymentMethod
-    ? calculatePaymentPrice(customerAmountDue, paymentMethod, fees as any)
-    : null
+  const riskReserve = useMemo(() => {
+    if (!selectedProduct) return 0
+    return estimateRiskReserve({
+      cost: selectedProduct.cost * quantity,
+      category: selectedProduct.name,
+      grade: selectedProduct.grade,
+      batteryHealth: selectedProduct.battery,
+      warrantyMonths: Number(warrantyMonths || 0),
+    })
+  }, [selectedProduct, quantity, warrantyMonths])
+  const saleEconomics = useMemo(() => {
+    return calculateSaleEconomics({
+      saleRevenue: finalTotal,
+      cashAmountDue: customerAmountDue,
+      paymentMethod,
+      settings: fees as any,
+      costTotal: totalCost,
+      riskReserve,
+    })
+  }, [finalTotal, customerAmountDue, paymentMethod, fees, totalCost, riskReserve])
   const selectedPaymentLabel = paymentMethod
     ? getPaymentMethodLabel(paymentMethod)
     : storeAmountDue > 0
@@ -1973,7 +2004,7 @@ function NewSaleContent() {
                 </div>
               </div>
               <p className="mt-4 text-3xl font-bold">
-                {storeAmountDue > 0 ? formatBRL(storeAmountDue) : formatBRL(selectedPayment?.price || amountAfterTradeIn)}
+                {storeAmountDue > 0 ? formatBRL(storeAmountDue) : formatBRL(saleEconomics.customerCashPays)}
               </p>
               <p className="mt-1 text-sm text-white/60">{selectedPaymentLabel}</p>
             </div>
@@ -2044,33 +2075,62 @@ function NewSaleContent() {
                     </p>
                   </div>
                 )}
-                {selectedPayment && selectedPayment.price > amountAfterTradeIn && (
+                {saleEconomics.embeddedFee > 0 && (
                   <div className="mt-2 flex justify-between text-sm">
-                    <span className="text-gray-500">Taxa/juros</span>
-                    <span className="font-semibold text-navy-900">+{formatBRL(selectedPayment.price - amountAfterTradeIn)}</span>
+                    <span className="text-gray-500">Taxa embutida</span>
+                    <span className="font-semibold text-navy-900">+{formatBRL(saleEconomics.embeddedFee)}</span>
                   </div>
                 )}
                 <div className="mt-3 border-t border-gray-200 pt-3">
                   <div className="flex justify-between">
                     <span className="font-bold text-navy-900">Cliente paga</span>
-                    <span className="font-bold text-navy-900">{formatBRL(selectedPayment?.price || amountAfterTradeIn)}</span>
+                    <span className="font-bold text-navy-900">{formatBRL(saleEconomics.customerCashPays)}</span>
                   </div>
-                  {selectedPayment?.installments && selectedPayment.installments > 1 && (
-                    <p className="mt-1 text-right text-xs text-gray-500">{selectedPayment.installments}x de {formatBRL(selectedPayment.installmentValue)}</p>
+                  {saleEconomics.installments > 1 && (
+                    <p className="mt-1 text-right text-xs text-gray-500">{saleEconomics.installments}x de {formatBRL(saleEconomics.installmentValue)}</p>
+                  )}
+                  <div className="mt-2 flex justify-between text-xs text-gray-500">
+                    <span>Valor da venda</span>
+                    <span className="font-semibold text-navy-900">{formatBRL(saleEconomics.storeReceives)}</span>
+                  </div>
+                  <div className="mt-1 flex justify-between text-xs text-gray-500">
+                    <span>Loja recebe em caixa</span>
+                    <span className="font-semibold text-navy-900">{formatBRL(saleEconomics.storeCashReceives)}</span>
+                  </div>
+                  {saleEconomics.tradeInCredit > 0 && (
+                    <div className="mt-1 flex justify-between text-xs text-gray-500">
+                      <span>Total negociado</span>
+                      <span className="font-semibold text-navy-900">{formatBRL(saleEconomics.customerTotalPays)}</span>
+                    </div>
                   )}
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
                 <div className="rounded-2xl bg-success-100/30 p-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Lucro</p>
-                  <p className={`mt-1 text-lg font-bold ${totalProfit >= 0 ? "text-success-500" : "text-danger-500"}`}>{formatBRL(totalProfit)}</p>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Lucro real</p>
+                  <p className={`mt-1 text-lg font-bold ${saleEconomics.grossProfit >= 0 ? "text-success-500" : "text-danger-500"}`}>{formatBRL(saleEconomics.grossProfit)}</p>
+                  <p className="mt-0.5 text-[11px] text-gray-500">{saleEconomics.realMarginPct.toFixed(1)}% sobre cliente</p>
                 </div>
                 <div className="rounded-2xl bg-royal-100/30 p-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Garantia</p>
-                  <p className="mt-1 text-lg font-bold text-navy-900">{warrantyMonths}m</p>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Reserva risco</p>
+                  <p className="mt-1 text-lg font-bold text-navy-900">{formatBRL(saleEconomics.riskReserve)}</p>
+                  <p className="mt-0.5 text-[11px] text-gray-500">{warrantyMonths}m garantia</p>
                 </div>
               </div>
+              {saleEconomics.riskReserve > 0 && (
+                <div className="rounded-2xl border border-amber-100 bg-amber-50/70 p-3">
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="font-semibold text-amber-900">Lucro conservador</span>
+                    <span className={`font-bold ${saleEconomics.conservativeProfit >= 0 ? "text-amber-900" : "text-danger-500"}`}>
+                      {formatBRL(saleEconomics.conservativeProfit)}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-amber-800">
+                    Reserva técnica informativa para garantia/defeito. Não altera DRE nem caixa.
+                  </p>
+                </div>
+              )}
 
               <Button fullWidth size="lg" variant={isReservation ? "primary" : "success"} onClick={handleConfirm} disabled={!canFinishSale} isLoading={isSubmitting}>
                 <Check className="h-4 w-4" />
