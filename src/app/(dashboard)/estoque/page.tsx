@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { CategoryIcon } from "@/components/ui/icon-helpers"
-import { formatBRL, getProductName, getInventoryStatusMeta, getComputedInventoryStatus, isPendingInventoryStatus, normalizeInventoryStatus } from "@/lib/helpers"
+import { daysBetween, formatBRL, getProductName, getInventoryStatusMeta, getComputedInventoryStatus, isPendingInventoryStatus, normalizeInventoryStatus } from "@/lib/helpers"
 import { CATEGORIES, GRADES } from "@/lib/constants"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/toaster"
@@ -65,6 +65,16 @@ export default function InventoryPage() {
 
   const getManualCategoryValue = (item: InventoryItem) => {
     return getManualCategoryLabel(item) === "Acessório" ? "accessories" : "other"
+  }
+
+  const getTurnoverMeta = (item: InventoryItem) => {
+    const days = Math.max(0, daysBetween(item.purchase_date))
+    if (getComputedInventoryStatus(item) !== "active") {
+      return { days, label: "—", className: "bg-gray-100 text-gray-500" }
+    }
+    if (days >= 45) return { days, label: `${days}d`, className: "bg-danger-100 text-danger-700" }
+    if (days >= 20) return { days, label: `${days}d`, className: "bg-warning-100 text-warning-700" }
+    return { days, label: `${days}d`, className: "bg-success-100 text-success-700" }
   }
 
   const fetchInventory = useCallback(async (loadMore = false) => {
@@ -407,7 +417,7 @@ export default function InventoryPage() {
       {loading && (
         <div className="bg-card rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
           {[1, 2, 3, 4, 5, 6].map((i) => (
-            <div key={i} className="grid grid-cols-2 lg:grid-cols-9 gap-3 p-4 border-b border-gray-50 animate-pulse">
+            <div key={i} className="grid grid-cols-2 lg:grid-cols-10 gap-3 p-4 border-b border-gray-50 animate-pulse">
               <div className="h-4 bg-gray-100 rounded col-span-2" />
               <div className="h-4 bg-gray-100 rounded" />
               <div className="h-4 bg-gray-100 rounded" />
@@ -452,7 +462,7 @@ export default function InventoryPage() {
       {/* Inventory table */}
       {!loading && filtered.length > 0 && (
         <div className="bg-card rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-          <div className="hidden lg:grid grid-cols-[1.7fr_0.8fr_1.1fr_0.8fr_0.6fr_0.6fr_0.8fr_0.8fr_0.8fr_0.8fr] gap-3 px-4 py-3 bg-gray-50 text-[11px] uppercase tracking-wider font-bold text-gray-500">
+          <div className="hidden lg:grid grid-cols-[1.6fr_0.75fr_1.05fr_0.7fr_0.55fr_0.5fr_0.75fr_0.75fr_0.65fr_0.75fr_0.75fr] gap-3 px-4 py-3 bg-gray-50 text-[11px] uppercase tracking-wider font-bold text-gray-500">
             <span>Produto</span>
             <span>Categoria</span>
             <span>IMEI / Serial</span>
@@ -461,6 +471,7 @@ export default function InventoryPage() {
             <span>Qtd</span>
             <span>Custo</span>
             <span>Sugerido</span>
+            <span>Giro</span>
             <span>Status</span>
             <span className="text-right">Ações</span>
           </div>
@@ -473,9 +484,10 @@ export default function InventoryPage() {
               const product = getProductName(item)
               const identity = [item.imei ? `IMEI ${item.imei}` : null, item.serial_number ? `Serial ${item.serial_number}` : null].filter(Boolean).join(" · ") || "—"
               const quantity = item.type === "supplier" ? "—" : Math.max(1, item.quantity || 1)
+              const turnover = getTurnoverMeta(item)
 
               return (
-                <div key={item.id} className="grid grid-cols-1 lg:grid-cols-[1.7fr_0.8fr_1.1fr_0.8fr_0.6fr_0.6fr_0.8fr_0.8fr_0.8fr_0.8fr] gap-2 lg:gap-3 px-4 py-3 hover:bg-gray-50/60 transition-colors">
+                <div key={item.id} className="grid grid-cols-1 lg:grid-cols-[1.6fr_0.75fr_1.05fr_0.7fr_0.55fr_0.5fr_0.75fr_0.75fr_0.65fr_0.75fr_0.75fr] gap-2 lg:gap-3 px-4 py-3 hover:bg-gray-50/60 transition-colors">
                   <div className="min-w-0">
                     <Link href={`/estoque/${item.id}`} className="font-semibold text-sm text-navy-900 hover:text-royal-500 truncate block">{product}</Link>
                     <p className="text-xs text-gray-500 truncate lg:hidden">{categoryLabel} · {identity}</p>
@@ -502,6 +514,12 @@ export default function InventoryPage() {
                   <div className="flex items-center text-sm font-semibold text-royal-500">
                     <span className="lg:hidden text-xs text-gray-400 mr-2">Sugerido:</span>
                     {item.suggested_price ? formatBRL(item.suggested_price) : "—"}
+                  </div>
+                  <div className="flex items-center">
+                    <span className="lg:hidden text-xs text-gray-400 mr-2">Giro:</span>
+                    <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${turnover.className}`}>
+                      {turnover.label}
+                    </span>
                   </div>
                   <div className="flex items-center gap-2">
                     <Badge variant={status.badge} dot>{status.label}</Badge>
