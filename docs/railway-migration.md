@@ -1,5 +1,7 @@
 # Migração Supabase -> Railway
 
+> Status atual: o app ja usa PostgreSQL/Railway via `DATABASE_URL` no servidor. O arquivo `src/lib/supabase.ts` foi mantido como adapter de compatibilidade para reduzir refatoracao no frontend, mas ele chama `/api/db` e nao o Supabase real.
+
 Este projeto hoje usa Supabase para tres coisas diferentes:
 
 - Auth: magic link por e-mail em `supabase.auth`.
@@ -89,25 +91,25 @@ sales_additional_items
 audit_logs
 ```
 
-## Fase 4 - Trocar a camada de dados do app
+## Fase 4 - Camada de dados atual
 
-O app ainda nao esta pronto para usar Railway diretamente, porque quase todas as telas chamam `supabase.from(...)` no client. No Railway, a conexao Postgres deve ficar no servidor, nunca exposta no browser.
+Esta fase ja foi implementada de forma incremental.
 
-Plano recomendado:
+O frontend ainda chama `supabase.from(...)` em varias telas, mas essa chamada nao vai mais para o Supabase. Ela passa pelo adapter local:
 
-1. Criar `DATABASE_URL` no `.env.local`.
-2. Instalar uma camada server-side: `pg`, Prisma ou Drizzle.
-3. Criar API routes/server actions para cada dominio:
-   - estoque
-   - vendas
-   - clientes
-   - fornecedores
-   - garantias
-   - problemas
-   - financeiro
-   - precos de fornecedor
-4. Substituir chamadas `supabase.from(...)` por chamadas a essas APIs.
-5. Substituir `supabase.auth` por Auth.js, Clerk, Better Auth ou login proprio.
+```text
+src/lib/supabase.ts -> /api/db -> src/lib/db.ts -> Railway PostgreSQL
+```
+
+Motivo: preservar o padrao das telas enquanto a migracao era feita, sem refatorar o sistema inteiro de uma vez.
+
+Pontos importantes:
+
+1. `DATABASE_URL` fica apenas no servidor.
+2. `/api/db` aplica regras basicas de consulta, normalizacao e hidratacao de dados.
+3. `src/lib/db.ts` cria a conexao com `pg` e garante usuario/empresa padrao.
+4. O login completo ainda esta temporariamente fora do escopo; o sistema usa usuario padrao enquanto o produto e estabilizado.
+5. Uma futura fase pode trocar o adapter por server actions ou APIs especificas por dominio.
 
 ## Variaveis novas sugeridas
 
