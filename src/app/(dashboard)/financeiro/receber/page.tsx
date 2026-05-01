@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { FinanceTransactionModal } from "@/components/finance/transaction-modal"
 import { supabase } from "@/lib/supabase"
-import { formatBRL, formatDate } from "@/lib/helpers"
+import { formatBRL, formatDate, todayISO } from "@/lib/helpers"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/toaster"
 
@@ -39,17 +39,16 @@ type ReceivableItem = Receivable & {
 
 const METHODS = ["Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência"]
 
-function todayISO() {
-  return new Date().toISOString().split("T")[0]
-}
-
 function toDateOnly(date?: string | null) {
   if (!date) return todayISO()
   const value = String(date)
   if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10)
   const parsed = new Date(value)
   if (Number.isNaN(parsed.getTime())) return todayISO()
-  return parsed.toISOString().split("T")[0]
+  const year = parsed.getFullYear()
+  const month = String(parsed.getMonth() + 1).padStart(2, "0")
+  const day = String(parsed.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
 }
 
 function daysUntil(date?: string | null) {

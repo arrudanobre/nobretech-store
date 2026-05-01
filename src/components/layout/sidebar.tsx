@@ -58,6 +58,7 @@ const staticNavItems: (Omit<NavItem, "badge"> & { badge?: { count?: number; defa
       { label: "Contas a Pagar", href: "/financeiro/pagar" },
       { label: "Cartões", href: "/financeiro/cartoes" },
       { label: "Gastos Mensais", href: "/financeiro/gastos" },
+      { label: "ROI de Marketing", href: "/financeiro/marketing" },
       { label: "Taxas da Maquininha", href: "/financeiro/taxas" },
       { label: "DRE", href: "/financeiro/dre" },
       { label: "Plano de DRE", href: "/financeiro/plano-dre" },

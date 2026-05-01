@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { supabase } from "@/lib/supabase"
-import { formatBRL, formatDate, getProductName, todayISO } from "@/lib/helpers"
+import { currentMonthKey, formatBRL, formatDate, getProductName, monthRangeISO, todayISO } from "@/lib/helpers"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/toaster"
 
@@ -59,6 +59,7 @@ type ChartAccount = {
 type Sale = {
   id: string
   sale_date: string
+  payment_due_date?: string | null
   sale_price: number
   net_amount?: number | null
   supplier_cost?: number | null
@@ -85,14 +86,6 @@ const STOCK_PURCHASE_CATEGORY = "Estoque (Peças/Acessórios)"
 
 function isInventoryPurchaseTransaction(transaction: Transaction) {
   return transaction.source_type === "inventory_purchase" || transaction.category === STOCK_PURCHASE_CATEGORY
-}
-
-function monthRange(month: string) {
-  const [year, monthNumber] = month.split("-").map(Number)
-  const start = `${month}-01`
-  const end = new Date(year, monthNumber, 0).toISOString().split("T")[0]
-  const endOfDay = `${end}T23:59:59.999Z`
-  return { start, end, endOfDay }
 }
 
 function saleCost(sale: Sale) {
@@ -151,11 +144,13 @@ function formatShortDate(value: string) {
 }
 
 export default function FinanceiroPage() {
-  const [month, setMonth] = useState(new Date().toISOString().substring(0, 7))
+  const [month, setMonth] = useState(currentMonthKey())
   const [accounts, setAccounts] = useState<FinanceAccount[]>([])
   const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
+  const [balanceTransactions, setBalanceTransactions] = useState<Transaction[]>([])
   const [projectionTransactions, setProjectionTransactions] = useState<Transaction[]>([])
+  const [projectionSales, setProjectionSales] = useState<Sale[]>([])
   const [sales, setSales] = useState<Sale[]>([])
   const [inventory, setInventory] = useState<InventoryItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -185,13 +180,17 @@ export default function FinanceiroPage() {
   const fetchFinance = async () => {
     setLoading(true)
     try {
-      const { start, end, endOfDay } = monthRange(month)
-      const [accountsRes, chartAccountsRes, transactionsRes, projectionTransactionsRes, projectionSalesRes, salesRes, inventoryRes] = await Promise.all([
+      const { start, end, endOfDay } = monthRangeISO(month)
+      const [accountsRes, chartAccountsRes, transactionsRes, balanceTransactionsRes, projectionTransactionsRes, projectionSalesRes, salesRes, inventoryRes] = await Promise.all([
         (supabase.from("finance_accounts") as any).select("*").eq("is_active", true).order("created_at", { ascending: true }),
         (supabase.from("finance_chart_accounts") as any).select("*").eq("is_active", true).order("sort_order", { ascending: true }),
         (supabase.from("transactions") as any).select("*").gte("date", start).lte("date", end).order("date", { ascending: false }),
+        (supabase.from("transactions") as any).select("*").eq("status", "reconciled").order("date", { ascending: true }),
         (supabase.from("transactions") as any).select("*").or("status.is.null,status.neq.cancelled").order("due_date", { ascending: true }),
-        (supabase.from("sales") as any).select("id, sale_status"),
+        (supabase.from("sales") as any)
+          .select("id, sale_date, payment_due_date, sale_status, sale_price, net_amount, payment_method, inventory:inventory_id(catalog:catalog_id(model))")
+          .neq("sale_status", "cancelled")
+          .order("payment_due_date", { ascending: true }),
         (supabase.from("sales") as any)
           .select("*, inventory:inventory_id(*, catalog:catalog_id(model)), sales_additional_items(*)")
           .gte("sale_date", start)
@@ -205,23 +204,27 @@ export default function FinanceiroPage() {
       if (accountsRes.error) throw new Error(accountsRes.error.message)
       if (chartAccountsRes.error) throw new Error(chartAccountsRes.error.message)
       if (transactionsRes.error) throw new Error(transactionsRes.error.message)
+      if (balanceTransactionsRes.error) throw new Error(balanceTransactionsRes.error.message)
       if (projectionTransactionsRes.error) throw new Error(projectionTransactionsRes.error.message)
       if (projectionSalesRes.error) throw new Error(projectionSalesRes.error.message)
       if (salesRes.error) throw new Error(salesRes.error.message)
       if (inventoryRes.error) throw new Error(inventoryRes.error.message)
 
-      const validProjectionSaleIds = new Set(
-        (projectionSalesRes.data || [])
-          .filter((sale: any) => sale.sale_status !== "cancelled")
-          .map((sale: any) => String(sale.id))
-      )
+      const projectionSalesData = (projectionSalesRes.data || []).map((sale: any) => ({
+        ...sale,
+        sale_price: Number(sale.sale_price || 0),
+        net_amount: sale.net_amount === null ? null : Number(sale.net_amount || 0),
+      }))
+      const validProjectionSaleIds = new Set(projectionSalesData.map((sale: any) => String(sale.id)))
 
       setAccounts(accountsRes.data || [])
       setChartAccounts(chartAccountsRes.data || [])
       setTransactions((transactionsRes.data || []).map((item: any) => ({ ...item, amount: Number(item.amount || 0) })))
+      setBalanceTransactions((balanceTransactionsRes.data || []).map((item: any) => ({ ...item, amount: Number(item.amount || 0) })))
       setProjectionTransactions((projectionTransactionsRes.data || [])
         .filter((item: any) => item.source_type !== "sale" || validProjectionSaleIds.has(String(item.source_id)))
         .map((item: any) => ({ ...item, amount: Number(item.amount || 0) })))
+      setProjectionSales(projectionSalesData)
       setSales(salesRes.data || [])
       setInventory((inventoryRes.data || []).map((item: any) => ({
         ...item,
@@ -242,14 +245,14 @@ export default function FinanceiroPage() {
 
   const accountBalances = useMemo(() => {
     return accounts.map((account) => {
-      const ledger = transactions
+      const ledger = balanceTransactions
         .filter((t) => t.account_id === account.id && t.status === "reconciled")
         .reduce((sum, t) => sum + (t.type === "income" ? Number(t.amount) : -Number(t.amount)), 0)
       const baseBalance = Number(account.current_balance ?? account.opening_balance ?? 0)
       const balance = baseBalance + ledger
       return { ...account, baseBalance, ledger, balance }
     })
-  }, [accounts, transactions])
+  }, [accounts, balanceTransactions])
 
   useEffect(() => {
     if (accountBalances.length === 0) {
@@ -377,7 +380,12 @@ export default function FinanceiroPage() {
     const today = todayISO()
     const horizon = addDaysISO(today, 60)
     const startingBalance = metrics.accountTotal
-    const pendingItems = projectionTransactions
+    const transactionBySaleId = new Map(
+      projectionTransactions
+        .filter((transaction) => transaction.source_type === "sale" && transaction.source_id && transaction.status !== "cancelled")
+        .map((transaction) => [String(transaction.source_id), transaction])
+    )
+    const transactionItems = projectionTransactions
       .filter((transaction) => transaction.status !== "reconciled" && transaction.status !== "cancelled")
       .map((transaction) => {
         const rawDate = toDateOnly(transaction.due_date || transaction.date)
@@ -395,6 +403,29 @@ export default function FinanceiroPage() {
           isCardInvoice: transaction.payment_method === "Cartão de Crédito" || Boolean(transaction.credit_card_id),
         }
       })
+    const saleItems = projectionSales
+      .filter((sale: Sale) => {
+        const transaction = transactionBySaleId.get(String(sale.id))
+        return !transaction && (sale.sale_status || "completed") !== "cancelled"
+      })
+      .map((sale: Sale) => {
+        const rawDate = toDateOnly(sale.payment_due_date || sale.sale_date)
+        const dueDate = rawDate && rawDate < today ? today : rawDate
+        const amount = saleNetRevenue(sale)
+        return {
+          id: sale.id,
+          type: "income" as const,
+          date: dueDate,
+          originalDate: rawDate,
+          description: `Venda${sale.inventory?.catalog?.model ? ` · ${sale.inventory.catalog.model}` : ""}`,
+          category: "Venda",
+          amount,
+          signedAmount: amount,
+          isOverdue: Boolean(rawDate && rawDate < today),
+          isCardInvoice: false,
+        }
+      })
+    const pendingItems = [...transactionItems, ...saleItems]
       .filter((item) => item.date && item.date <= horizon)
       .sort((a, b) => a.date.localeCompare(b.date))
 
@@ -446,7 +477,7 @@ export default function FinanceiroPage() {
       nextSevenIn,
       minBalance,
     }
-  }, [metrics.accountTotal, projectionTransactions])
+  }, [metrics.accountTotal, projectionTransactions, projectionSales])
 
   const productRecommendations = useMemo(() => {
     return inventory

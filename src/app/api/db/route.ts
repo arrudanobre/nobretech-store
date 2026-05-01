@@ -20,6 +20,7 @@ const TABLES_WITH_COMPANY = new Set([
   "financial_settings",
   "finance_accounts",
   "finance_credit_cards",
+  "marketing_campaigns",
   "finance_chart_accounts",
   "supplier_prices",
   "sales_additional_items",
@@ -82,6 +83,8 @@ const NUMERIC_COLUMNS = new Set([
   "other_cost_allocated",
   "landed_unit_cost",
   "margin_pct",
+  "budget_amount",
+  "actual_spend",
 ])
 
 function ident(value: string) {

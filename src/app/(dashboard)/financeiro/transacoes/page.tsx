@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { supabase } from "@/lib/supabase"
-import { addMonthsISO, formatBRL, formatDate, formatPaymentMethod } from "@/lib/helpers"
+import { addMonthsISO, currentMonthKey, formatBRL, formatDate, formatPaymentMethod, monthRangeISO, todayISO } from "@/lib/helpers"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/toaster"
 
@@ -83,13 +83,6 @@ type UnifiedTransaction = {
 type FilterScope = "all" | "sales" | "manual" | "stock" | "owners"
 type RepeatMode = "single" | "installments" | "recurring"
 
-function monthRange(month: string) {
-  const [year, monthNumber] = month.split("-").map(Number)
-  const start = `${month}-01`
-  const end = new Date(year, monthNumber, 0).toISOString().split("T")[0]
-  return { start, end, endOfDay: `${end}T23:59:59.999Z` }
-}
-
 function buildMonthOptions() {
   const formatter = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" })
   return Array.from({ length: 18 }, (_, index) => {
@@ -150,6 +143,15 @@ function resolveCardInvoice(card: CreditCardAccount, purchaseDate: string, force
   return { dueDate, closingDate }
 }
 
+function movementDate(item: Pick<UnifiedTransaction, "date" | "due_date" | "status">) {
+  return item.status === "reconciled" ? item.date : item.due_date || item.date
+}
+
+function isInMonth(date: string, start: string, end: string) {
+  const dateOnly = date.slice(0, 10)
+  return dateOnly >= start && dateOnly <= end
+}
+
 function formatDreType(type: string) {
   const labels: Record<string, string> = {
     revenue: "Receita bruta",
@@ -195,7 +197,7 @@ export default function TransacoesPage() {
   const [creditCards, setCreditCards] = useState<CreditCardAccount[]>([])
   const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([])
   const [loading, setLoading] = useState(true)
-  const [filterMonth, setFilterMonth] = useState(new Date().toISOString().substring(0, 7))
+  const [filterMonth, setFilterMonth] = useState(currentMonthKey())
   const [filterType, setFilterType] = useState<"all" | "income" | "expense">("all")
   const [filterStatus, setFilterStatus] = useState<"all" | MovementStatus>("all")
   const [filterScope, setFilterScope] = useState<FilterScope>("all")
@@ -212,7 +214,7 @@ export default function TransacoesPage() {
   const [formCategory, setFormCategory] = useState(SAIDAS_CATEGORIES[0])
   const [formDesc, setFormDesc] = useState("")
   const [formAmount, setFormAmount] = useState("R$ 0,00")
-  const [formDate, setFormDate] = useState(new Date().toISOString().split("T")[0])
+  const [formDate, setFormDate] = useState(todayISO())
   const [formDueDate, setFormDueDate] = useState("")
   const [formPayment, setFormPayment] = useState("Pix")
   const [formCreditCardId, setFormCreditCardId] = useState("")
@@ -232,7 +234,7 @@ export default function TransacoesPage() {
   const fetchData = async () => {
     setLoading(true)
     try {
-      const { start, end, endOfDay } = monthRange(filterMonth)
+      const { start, end, endOfDay } = monthRangeISO(filterMonth)
 
       const [accountsRes, creditCardsRes, chartAccountsRes, salesRes, transRes] = await Promise.all([
         (supabase.from("finance_accounts") as any)
@@ -248,14 +250,12 @@ export default function TransacoesPage() {
           .eq("is_active", true)
           .order("sort_order", { ascending: true }),
         (supabase.from("sales") as any)
-          .select("id, sale_date, sale_price, net_amount, payment_method, inventory:inventory_id(catalog:catalog_id(model))")
-          .gte("sale_date", start)
-          .lte("sale_date", endOfDay)
+          .select("id, sale_date, payment_due_date, sale_price, net_amount, payment_method, inventory:inventory_id(catalog:catalog_id(model))")
+          .or(`and(sale_date.gte.${start},sale_date.lte.${endOfDay}),and(payment_due_date.gte.${start},payment_due_date.lte.${end})`)
           .order("sale_date", { ascending: false }),
         (supabase.from("transactions") as any)
           .select("*")
-          .gte("date", start)
-          .lte("date", end)
+          .or(`and(date.gte.${start},date.lte.${end}),and(due_date.gte.${start},due_date.lte.${end})`)
           .order("date", { ascending: false }),
       ])
 
@@ -309,6 +309,7 @@ export default function TransacoesPage() {
       const sales: UnifiedTransaction[] = (salesRes.data || []).map((s: any) => {
         const modelName = s.inventory?.catalog?.model || "Produto"
         const saleTransaction = saleTransactionById.get(String(s.id))
+        const status = saleTransaction?.status === "reconciled" ? "reconciled" : "pending"
         return {
           id: s.id,
           account_id: saleTransaction?.account_id || null,
@@ -317,14 +318,19 @@ export default function TransacoesPage() {
           category: "Venda",
           description: `Venda · ${modelName}`,
           amount: Number(s.net_amount ?? s.sale_price ?? 0),
-          date: s.sale_date,
+          date: saleTransaction?.date || s.sale_date,
+          due_date: s.payment_due_date || null,
           payment_method: s.payment_method || "Não informado",
-          status: saleTransaction?.status === "reconciled" ? "reconciled" : "pending",
+          status,
           source: "sale",
         }
       })
 
-      setData([...manual, ...sales].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()))
+      setData(
+        [...manual, ...sales]
+          .filter((item) => isInMonth(movementDate(item), start, end))
+          .sort((a, b) => new Date(movementDate(b)).getTime() - new Date(movementDate(a)).getTime())
+      )
     } catch (error: any) {
       toast({ title: "Erro ao carregar movimentações", description: error.message, type: "error" })
     } finally {
@@ -375,7 +381,7 @@ export default function TransacoesPage() {
     setFormCategory(account?.name || SAIDAS_CATEGORIES[0])
     setFormDesc("")
     setFormAmount("R$ 0,00")
-    setFormDate(new Date().toISOString().split("T")[0])
+    setFormDate(todayISO())
     setFormDueDate("")
     setFormPayment("Pix")
     setFormCreditCardId("")
@@ -1113,6 +1119,7 @@ function MovementRow({
   deletingId: string | null
 }) {
   const canManage = item.source === "manual"
+  const displayDate = movementDate(item)
   return (
     <tr className="transition-colors hover:bg-gray-50/70">
       <td className="px-5 py-4">
@@ -1125,7 +1132,7 @@ function MovementRow({
         </div>
       </td>
       <td className="px-4 py-4 text-sm text-gray-600">{item.category}</td>
-      <td className="px-4 py-4 text-sm text-gray-600">{formatDate(item.date)}</td>
+      <td className="px-4 py-4 text-sm text-gray-600">{formatDate(displayDate)}</td>
       <td className="px-4 py-4 text-sm text-gray-600">
         <AccountLabel item={item} />
       </td>
@@ -1162,6 +1169,7 @@ function MovementCard({
   deletingId: string | null
 }) {
   const canManage = item.source === "manual"
+  const displayDate = movementDate(item)
   return (
     <div className="p-4">
       <div className="flex items-start justify-between gap-3">
@@ -1169,7 +1177,7 @@ function MovementCard({
           <MovementIcon item={item} />
           <div className="min-w-0">
             <p className="truncate font-semibold text-navy-900">{item.description}</p>
-            <p className="text-xs text-gray-500">{item.category} · {formatDate(item.date)}</p>
+            <p className="text-xs text-gray-500">{item.category} · {formatDate(displayDate)}</p>
             <p className="mt-1 text-xs text-gray-400"><AccountLabel item={item} /></p>
             <div className="mt-2"><StatusBadge status={item.status} /></div>
           </div>

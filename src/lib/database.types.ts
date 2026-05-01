@@ -346,6 +346,53 @@ export interface Database {
           received_at?: string | null;
         };
       };
+      marketing_campaigns: {
+        Row: {
+          id: string;
+          company_id: string;
+          name: string;
+          channel: string;
+          objective: string | null;
+          start_date: string | null;
+          end_date: string | null;
+          budget_amount: number;
+          actual_spend: number;
+          status: string;
+          notes: string | null;
+          created_at: string | null;
+          updated_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          company_id?: string;
+          name: string;
+          channel?: string;
+          objective?: string | null;
+          start_date?: string | null;
+          end_date?: string | null;
+          budget_amount?: number;
+          actual_spend?: number;
+          status?: string;
+          notes?: string | null;
+          created_at?: string | null;
+          updated_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          company_id?: string;
+          name?: string;
+          channel?: string;
+          objective?: string | null;
+          start_date?: string | null;
+          end_date?: string | null;
+          budget_amount?: number;
+          actual_spend?: number;
+          status?: string;
+          notes?: string | null;
+          created_at?: string | null;
+          updated_at?: string | null;
+        };
+      };
       sales: {
         Row: {
           id: string;
@@ -363,6 +410,9 @@ export interface Database {
           warranty_end: string | null;
           warranty_pdf_url: string | null;
           source_type: string | null;
+          sale_origin: string | null;
+          marketing_campaign_id: string | null;
+          lead_notes: string | null;
           supplier_name: string | null;
           supplier_cost: number | null;
           sale_date: string;
@@ -385,6 +435,9 @@ export interface Database {
           warranty_end?: string | null;
           warranty_pdf_url?: string | null;
           source_type?: string | null;
+          sale_origin?: string | null;
+          marketing_campaign_id?: string | null;
+          lead_notes?: string | null;
           supplier_name?: string | null;
           supplier_cost?: number | null;
           sale_date?: string;
@@ -407,6 +460,9 @@ export interface Database {
           warranty_end?: string | null;
           warranty_pdf_url?: string | null;
           source_type?: string | null;
+          sale_origin?: string | null;
+          marketing_campaign_id?: string | null;
+          lead_notes?: string | null;
           supplier_name?: string | null;
           supplier_cost?: number | null;
           sale_date?: string;

@@ -13,7 +13,8 @@ import { CHECKLIST_TEMPLATES } from "@/lib/constants"
 import { generateWarrantyPDF as generateWarrantyTermDocument, generateReceiptPDF, type SaleDocumentData, type ReceiptLineItem } from "@/lib/sale-documents"
 import jsPDF from "jspdf"
 import { Input } from "@/components/ui/input"
-import { ArrowLeft, ShieldCheck, FileText, CreditCard, User, ShoppingCart, AlertTriangle, Download, CheckCircle2, XCircle, MinusCircle, Loader2, Edit, Trash, Plus, Calendar, History, Trash2, Search } from "lucide-react"
+import { Textarea } from "@/components/ui/textarea"
+import { ArrowLeft, ShieldCheck, FileText, CreditCard, User, ShoppingCart, AlertTriangle, Download, CheckCircle2, XCircle, MinusCircle, Loader2, Edit, Trash, Plus, Calendar, History, Trash2, Search, Megaphone } from "lucide-react"
 
 const checklistLabels: Record<string, string> = {}
 for (const [cat, items] of Object.entries(CHECKLIST_TEMPLATES)) {
@@ -28,6 +29,33 @@ function getSaleFeeSettings(sale: any) {
   }
 
   return { [sale.payment_method]: Number(sale.card_fee_pct) }
+}
+
+const SALE_ORIGINS = [
+  { value: "whatsapp", label: "WhatsApp" },
+  { value: "instagram", label: "Instagram" },
+  { value: "trafego_pago", label: "Tráfego pago" },
+  { value: "indicacao", label: "Indicação" },
+  { value: "loja", label: "Loja física" },
+  { value: "recorrente", label: "Cliente recorrente" },
+  { value: "outro", label: "Outro" },
+  { value: "unknown", label: "Não informado" },
+]
+
+type MarketingCampaignOption = {
+  id: string
+  name: string
+  channel: string
+  status: string
+}
+
+const saleOriginLabel = (origin?: string | null) => {
+  return SALE_ORIGINS.find((item) => item.value === origin)?.label || origin || "Não informado"
+}
+
+const auditField = (data: unknown, key: string) => {
+  if (!data || typeof data !== "object") return undefined
+  return (data as Record<string, unknown>)[key]
 }
 
 export default function SaleDetailPage() {
@@ -50,6 +78,10 @@ export default function SaleDetailPage() {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [editDate, setEditDate] = useState("")
+  const [editSaleOrigin, setEditSaleOrigin] = useState("unknown")
+  const [editMarketingCampaignId, setEditMarketingCampaignId] = useState("")
+  const [editLeadNotes, setEditLeadNotes] = useState("")
+  const [marketingCampaigns, setMarketingCampaigns] = useState<MarketingCampaignOption[]>([])
 
   const [inventoryItems, setInventoryItems] = useState<any[]>([])
   const [searchQuery, setSearchQuery] = useState("")
@@ -155,6 +187,12 @@ export default function SaleDetailPage() {
             .select("id, imei, imei2, serial_number, condition_notes, notes, purchase_price, suggested_price, type, supplier_name, status, catalog:catalog_id(*)")
             .in("status", ["active", "in_stock"])
           if (inv) setInventoryItems(inv)
+
+          const { data: campaigns } = await (supabase
+            .from("marketing_campaigns") as any)
+            .select("id, name, channel, status")
+            .order("created_at", { ascending: false })
+          if (campaigns) setMarketingCampaigns(campaigns)
         }
       } catch (err) {
         toast({ title: "Venda não encontrada", type: "error" })
@@ -213,7 +251,7 @@ export default function SaleDetailPage() {
     color: tradeInInventory?.catalog?.color || undefined,
     fallback: "Aparelho recebido",
   }) : ""
-  const tradeInGrade = tradeInData?.grade || tradeInInventory?.grade || null
+  const tradeInGrade = tradeInInventory?.grade || tradeInData?.grade || null
 
   const handleDownloadInspectionPDF = async () => {
     if (generatingPdf) return
@@ -737,6 +775,42 @@ export default function SaleDetailPage() {
     }
   }
 
+  const openEditModal = () => {
+    const currentOrigin = sale.sale_origin || "unknown"
+    setEditDate(sale.sale_date)
+    setEditSaleOrigin(currentOrigin)
+    setEditMarketingCampaignId(currentOrigin === "trafego_pago" ? sale.marketing_campaign_id || "" : "")
+    setEditLeadNotes(sale.lead_notes || "")
+    setIsEditModalOpen(true)
+  }
+
+  const handleUpdateMarketingAttribution = async () => {
+    setIsSubmitting(true)
+    try {
+      const payload = {
+        sale_origin: editSaleOrigin || "unknown",
+        marketing_campaign_id: editSaleOrigin === "trafego_pago" && editMarketingCampaignId ? editMarketingCampaignId : null,
+        lead_notes: editLeadNotes.trim() || null,
+      }
+      const oldData = {
+        sale_origin: sale.sale_origin,
+        marketing_campaign_id: sale.marketing_campaign_id,
+        lead_notes: sale.lead_notes,
+      }
+
+      const { error } = await (supabase.from("sales") as any).update(payload).eq("id", id)
+      if (error) throw error
+
+      await logAudit("UPDATE_MARKETING_ATTRIBUTION", oldData, payload)
+      setSale({ ...sale, ...payload })
+      toast({ title: "Origem do cliente atualizada", type: "success" })
+    } catch (e) {
+      toast({ title: "Erro ao atualizar origem", description: e instanceof Error ? e.message : "Não foi possível salvar a origem do cliente.", type: "error" })
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
   const handleAddItem = async () => {
     if (!newItemName && !selectedInventoryItemId) {
       toast({ title: "Informe o nome ou selecione um item", type: "error" })
@@ -938,7 +1012,7 @@ export default function SaleDetailPage() {
         </div>
         <div className="flex items-center gap-2">
           <Badge variant="green">Concluída</Badge>
-          <Button variant="outline" size="sm" onClick={() => { setEditDate(sale.sale_date); setIsEditModalOpen(true); }} className="gap-2 shrink-0">
+          <Button variant="outline" size="sm" onClick={openEditModal} className="gap-2 shrink-0">
             <Edit className="w-4 h-4" /> <span className="hidden sm:inline">Editar</span>
           </Button>
           <Button variant="outline" size="sm" onClick={() => setIsDeleteModalOpen(true)} className="text-danger-500 border-danger-200 hover:bg-danger-50 gap-2 shrink-0">
@@ -964,7 +1038,9 @@ export default function SaleDetailPage() {
               </p>
             )}
             {discountAmount > 0 && (
-              <p className="text-xs text-amber-200 mt-0.5">Desconto {formatBRL(discountAmount)}</p>
+              <p className="mt-1 inline-flex rounded-full bg-amber-950/35 px-2 py-0.5 text-xs font-semibold text-amber-100">
+                Desconto {formatBRL(discountAmount)}
+              </p>
             )}
           </div>
           <div>
@@ -998,7 +1074,7 @@ export default function SaleDetailPage() {
           </div>
         </div>
         {tradeInData && (
-          <div className="mt-4 rounded-2xl border border-white/10 bg-white/10 p-3">
+          <div className="mt-4 rounded-2xl border border-white/15 bg-navy-950/25 p-3 shadow-inner">
             <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto] gap-3 md:items-center">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wider text-white/60">Aparelho recebido no trade-in</p>
@@ -1009,7 +1085,9 @@ export default function SaleDetailPage() {
               </div>
               <div className="md:text-right">
                 <p className="text-xs text-white/60">Crédito concedido</p>
-                <p className="text-sm font-bold text-amber-200">-{formatBRL(tradeInValueForSale)}</p>
+                <p className="mt-1 inline-flex rounded-full bg-amber-950/40 px-2 py-0.5 text-sm font-bold text-amber-100">
+                  -{formatBRL(tradeInValueForSale)}
+                </p>
               </div>
               <div className="md:text-right">
                 <p className="text-xs text-white/60">Saldo antes da taxa</p>
@@ -1022,10 +1100,12 @@ export default function SaleDetailPage() {
           </div>
         )}
         {saleEconomics.riskReserve > 0 && (
-          <div className="mt-4 rounded-2xl border border-white/10 bg-white/10 p-3">
+          <div className="mt-4 rounded-2xl border border-white/15 bg-navy-950/25 p-3 shadow-inner">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs font-semibold uppercase tracking-wider text-white/70">Reserva técnica informativa</p>
-              <p className="text-sm font-bold text-amber-200">{formatBRL(saleEconomics.riskReserve)}</p>
+              <p className="inline-flex rounded-full bg-amber-950/40 px-2 py-0.5 text-sm font-bold text-amber-100">
+                {formatBRL(saleEconomics.riskReserve)}
+              </p>
             </div>
             <p className="mt-1 text-xs text-white/65">
               Estimativa para garantia/defeito. Não muda caixa nem DRE; serve para enxergar o lucro conservador de {formatBRL(saleEconomics.conservativeProfit)}.
@@ -1229,7 +1309,7 @@ export default function SaleDetailPage() {
           <div className="w-8 h-8 rounded-lg bg-royal-100 flex items-center justify-center"><User className="w-4 h-4 text-royal-500" /></div>
           <h3 className="font-display font-bold text-navy-900 font-syne">Cliente</h3>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
             <p className="text-sm font-semibold text-navy-900">{customer?.full_name || "—"}</p>
             <p className="text-xs text-gray-500">{customer?.phone || "—"}</p>
@@ -1237,6 +1317,16 @@ export default function SaleDetailPage() {
           <div>
             <p className="text-xs text-gray-500">CPF: {customer?.cpf || "—"}</p>
             <p className="text-xs text-gray-500">{customer?.email || "—"}</p>
+          </div>
+          <div className="rounded-xl bg-surface p-3">
+            <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Origem do cliente</p>
+            <p className="text-sm font-semibold text-navy-900">{saleOriginLabel(sale.sale_origin)}</p>
+            {sale.marketing_campaign_id && (
+              <p className="text-xs text-gray-500 mt-0.5">
+                {marketingCampaigns.find((campaign) => campaign.id === sale.marketing_campaign_id)?.name || "Campanha vinculada"}
+              </p>
+            )}
+            {sale.lead_notes && <p className="text-xs text-gray-500 mt-0.5">{sale.lead_notes}</p>}
           </div>
         </div>
       </div>
@@ -1490,12 +1580,18 @@ export default function SaleDetailPage() {
                 <div className="flex-1">
                   <p className="text-navy-900 font-medium">
                     {log.action === "UPDATE_DATE" && "Data da venda alterada"}
+                    {log.action === "UPDATE_MARKETING_ATTRIBUTION" && "Origem do cliente alterada"}
                     {log.action === "ADD_ITEM" && "Item adicionado à venda"}
                     {log.action === "REMOVE_ITEM" && "Item removido da venda"}
                   </p>
                   <div className="text-gray-500 mt-1">
                     {log.action === "UPDATE_DATE" && (
                       <span>De {formatDate((log.old_data as any)?.sale_date)} para {formatDate((log.new_data as any)?.sale_date)}</span>
+                    )}
+                    {log.action === "UPDATE_MARKETING_ATTRIBUTION" && (
+                      <span>
+                        De {saleOriginLabel(auditField(log.old_data, "sale_origin") as string | null | undefined)} para {saleOriginLabel(auditField(log.new_data, "sale_origin") as string | null | undefined)}
+                      </span>
                     )}
                     {log.action === "ADD_ITEM" && (
                       <span>{(log.new_data as any)?.item} - Valor: {formatBRL((log.new_data as any)?.price)} ({(log.new_data as any)?.type === "upsell" ? "Upsell" : "Brinde"})</span>
@@ -1558,7 +1654,90 @@ export default function SaleDetailPage() {
                 </div>
               </div>
 
-              {/* ── Bloco 2: Itens da Venda ── */}
+              {/* ── Bloco 2: Origem do Cliente ── */}
+              <div className="bg-surface rounded-2xl p-4 border border-gray-100">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="w-7 h-7 rounded-lg bg-royal-100 flex items-center justify-center">
+                    <Megaphone className="w-3.5 h-3.5 text-royal-500" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-semibold text-navy-900">Origem do Cliente</h3>
+                    <p className="text-xs text-gray-500">Atualize vendas antigas para o ROI de Marketing.</p>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="block text-xs font-medium text-navy-900 mb-1.5">Origem</label>
+                    <select
+                      value={editSaleOrigin}
+                      onChange={(event) => {
+                        setEditSaleOrigin(event.target.value)
+                        if (event.target.value !== "trafego_pago") setEditMarketingCampaignId("")
+                      }}
+                      className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                    >
+                      {SALE_ORIGINS.map((origin) => (
+                        <option key={origin.value} value={origin.value}>{origin.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {editSaleOrigin === "trafego_pago" ? (
+                    <div>
+                      <label className="block text-xs font-medium text-navy-900 mb-1.5">Campanha</label>
+                      <select
+                        value={editMarketingCampaignId}
+                        onChange={(event) => setEditMarketingCampaignId(event.target.value)}
+                        className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                      >
+                        <option value="">Sem campanha vinculada</option>
+                        {marketingCampaigns.map((campaign) => (
+                          <option key={campaign.id} value={campaign.id}>
+                            {campaign.name} · {campaign.channel}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-gray-100 bg-white p-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Campanha</p>
+                      <p className="mt-1 text-sm font-semibold text-navy-900">Não se aplica</p>
+                      <p className="text-xs text-gray-500">Use apenas quando a origem for tráfego pago.</p>
+                    </div>
+                  )}
+                </div>
+
+                <Textarea
+                  label="Observação do lead"
+                  placeholder="Ex: indicação, direct, grupo..."
+                  value={editLeadNotes}
+                  onChange={(event) => setEditLeadNotes(event.target.value)}
+                  className="mt-3"
+                />
+
+                <div className="mt-3 flex justify-end">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleUpdateMarketingAttribution}
+                    isLoading={isSubmitting}
+                    disabled={
+                      isSubmitting ||
+                      (
+                        (editSaleOrigin || "unknown") === (sale.sale_origin || "unknown") &&
+                        (editSaleOrigin === "trafego_pago" ? editMarketingCampaignId || "" : "") === (sale.marketing_campaign_id || "") &&
+                        (editLeadNotes.trim() || "") === (sale.lead_notes || "")
+                      )
+                    }
+                    className="h-11 px-4 shrink-0 text-royal-500 border-royal-200 hover:bg-royal-50"
+                  >
+                    Salvar origem
+                  </Button>
+                </div>
+              </div>
+
+              {/* ── Bloco 3: Itens da Venda ── */}
               <div className="bg-surface rounded-2xl p-4 border border-gray-100">
                 <div className="flex items-center gap-2 mb-3">
                   <div className="w-7 h-7 rounded-lg bg-royal-100 flex items-center justify-center">
@@ -1621,7 +1800,7 @@ export default function SaleDetailPage() {
                 )}
               </div>
 
-              {/* ── Bloco 3: Adicionar Novo Item ── */}
+              {/* ── Bloco 4: Adicionar Novo Item ── */}
               <div className="rounded-2xl border-2 border-dashed border-royal-200 bg-royal-50/20 p-4">
                 <div className="flex items-center gap-2 mb-4">
                   <div className="w-7 h-7 rounded-lg bg-royal-500 flex items-center justify-center shadow-sm">

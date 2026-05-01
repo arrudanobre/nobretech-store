@@ -4,7 +4,7 @@ import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { useState, useEffect, useMemo } from "react"
 import { supabase } from "@/lib/supabase"
-import { formatBRL } from "@/lib/helpers"
+import { addMonthsISO, currentMonthKey, formatBRL, monthRangeISO } from "@/lib/helpers"
 import { ArrowDownIcon, ArrowUpIcon, PieChart, TrendingUp, TrendingDown, Receipt } from "lucide-react"
 
 type Transaction = {
@@ -18,7 +18,7 @@ type Transaction = {
 export default function GastosPage() {
   const [data, setData] = useState<Transaction[]>([])
   const [loading, setLoading] = useState(true)
-  const [filterMonth, setFilterMonth] = useState<string>(new Date().toISOString().substring(0, 7)) // YYYY-MM
+  const [filterMonth, setFilterMonth] = useState<string>(currentMonthKey()) // YYYY-MM
 
   // We will fetch both current and previous month to show variation
   const [prevData, setPrevData] = useState<Transaction[]>([])
@@ -30,26 +30,21 @@ export default function GastosPage() {
   const fetchData = async () => {
     setLoading(true)
     try {
-      const [year, month] = filterMonth.split("-").map(Number)
-      
-      const currentStart = `${filterMonth}-01`
-      const currentEnd = new Date(year, month, 0).toISOString().split("T")[0] // last day of month
-      
-      const prevMonthDate = new Date(year, month - 2, 1)
-      const prevStart = prevMonthDate.toISOString().substring(0, 7) + "-01"
-      const prevEnd = new Date(year, month - 1, 0).toISOString().split("T")[0]
+      const currentRange = monthRangeISO(filterMonth)
+      const previousMonth = addMonthsISO(`${filterMonth}-01`, -1)?.slice(0, 7) || currentMonthKey()
+      const previousRange = monthRangeISO(previousMonth)
 
       const [currentRes, prevRes] = await Promise.all([
         (supabase.from("transactions") as any)
           .select("*")
           .eq("type", "expense")
-          .gte("date", currentStart)
-          .lte("date", currentEnd),
+          .gte("date", currentRange.start)
+          .lte("date", currentRange.end),
         (supabase.from("transactions") as any)
           .select("*")
           .eq("type", "expense")
-          .gte("date", prevStart)
-          .lte("date", prevEnd)
+          .gte("date", previousRange.start)
+          .lte("date", previousRange.end)
       ])
 
       setData(currentRes.data || [])

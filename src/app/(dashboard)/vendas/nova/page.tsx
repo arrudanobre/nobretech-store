@@ -22,6 +22,7 @@ import {
   Gift,
   Package,
   X,
+  Megaphone,
 } from "lucide-react"
 
 type InventoryProduct = {
@@ -57,6 +58,23 @@ type TradeInCalculation = {
   evaluation: ReturnType<typeof calculateDeviceValue> | null
   suggestedDisplay: string
 }
+
+type MarketingCampaignOption = {
+  id: string
+  name: string
+  channel: string
+  status: string
+}
+
+const SALE_ORIGINS = [
+  { value: "whatsapp", label: "WhatsApp" },
+  { value: "instagram", label: "Instagram" },
+  { value: "trafego_pago", label: "Tráfego pago" },
+  { value: "indicacao", label: "Indicação" },
+  { value: "loja", label: "Loja física" },
+  { value: "recorrente", label: "Cliente recorrente" },
+  { value: "outro", label: "Outro" },
+]
 
 const EMPTY_TRADE_IN: TradeInState = {
   category: "",
@@ -552,6 +570,9 @@ function NewSaleContent() {
   const [hasTradeIn, setHasTradeIn] = useState(false)
   const [tradeIn, setTradeIn] = useState({ category: "", modelIdx: 0, storage: "", color: "", imei: "", grade: "", batteryHealth: "", value: "" })
   const [saleNotes, setSaleNotes] = useState("")
+  const [saleOrigin, setSaleOrigin] = useState("whatsapp")
+  const [marketingCampaignId, setMarketingCampaignId] = useState("")
+  const [leadNotes, setLeadNotes] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   // ── Additional item (upsell / brinde) — selecionado do estoque ──
@@ -570,6 +591,7 @@ function NewSaleContent() {
   const [tradeInModelSearch, setTradeInModelSearch] = useState("")
   const [inventoryProducts, setInventoryProducts] = useState<any[]>([])
   const [loadingInventory, setLoadingInventory] = useState(true)
+  const [marketingCampaigns, setMarketingCampaigns] = useState<MarketingCampaignOption[]>([])
   const defaultFees: Record<string, number> = { ...SIDEPAY_FEE_PCTS }
   const [fees, setFees] = useState<Partial<Record<string, number>>>(defaultFees)
 
@@ -748,6 +770,24 @@ function NewSaleContent() {
     fetchFees()
   }, [])
 
+  useEffect(() => {
+    const fetchMarketingCampaigns = async () => {
+      try {
+        const { data, error } = await ((supabase.from("marketing_campaigns") as any)
+          .select("id, name, channel, status")
+          .in("status", ["planned", "active", "paused"])
+          .order("created_at", { ascending: false }) as any)
+
+        if (error) throw error
+        setMarketingCampaigns(data || [])
+      } catch (error) {
+        console.error("Erro ao carregar campanhas:", error)
+      }
+    }
+
+    fetchMarketingCampaigns()
+  }, [])
+
   const filteredProducts = useMemo(() => {
     const products = inventoryProducts
     if (!searchTerm) return products
@@ -763,6 +803,10 @@ function NewSaleContent() {
   // Preco unitario e totais
   const unitPrice = parseFloat(salePrice) || 0
   const totalBasePrice = unitPrice * quantity
+  const originalUnitPrice = Number(selectedProduct?.suggested || 0)
+  const originalTotalPrice = originalUnitPrice * quantity
+  const hasMainProductDiscount = Boolean(selectedProduct && originalUnitPrice > 0 && unitPrice > 0 && unitPrice < originalUnitPrice)
+  const mainProductDiscount = hasMainProductDiscount ? originalTotalPrice - totalBasePrice : 0
 
   // Upsell price (brinde não entra no total pago pelo cliente)
   const upsellTotal = additionalSelectedItem?.type === "upsell"
@@ -1158,6 +1202,9 @@ function NewSaleContent() {
           sale_status: isReservation ? "reserved" : "completed",
           payment_due_date: isReservation ? paymentDueDate : null,
           sale_date: today,
+          sale_origin: saleOrigin || "unknown",
+          marketing_campaign_id: saleOrigin === "trafego_pago" && marketingCampaignId ? marketingCampaignId : null,
+          lead_notes: leadNotes || null,
           notes: quantity > 1 ? `[${quantity}x ${selectedProduct!.name}]` + (saleNotes ? `\n${saleNotes}` : "") : saleNotes || null,
           // O banco exige trade_in_id quando has_trade_in=true. Como o trade-in
           // só existe depois que a venda é criada, ligamos essa flag no vínculo.
@@ -1517,6 +1564,16 @@ function NewSaleContent() {
                     onBlur={commitSalePriceInput}
                     onKeyDown={handleSalePriceKeyDown}
                   />
+                  {hasMainProductDiscount && (
+                    <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Desconto aplicado</p>
+                      <p className="mt-1 text-sm text-gray-500">
+                        De <span className="line-through">{formatBRL(originalTotalPrice)}</span>
+                      </p>
+                      <p className="text-lg font-bold text-emerald-700">Por {formatBRL(totalBasePrice)}</p>
+                      <p className="text-xs text-emerald-700">Economia de {formatBRL(mainProductDiscount)}</p>
+                    </div>
+                  )}
                   <Input
                     label="Quantidade"
                     type="number"
@@ -1965,6 +2022,70 @@ function NewSaleContent() {
           </SectionCard>
 
           <SectionCard eyebrow="5. Garantia e observações" title="Fechamento" description="A garantia será emitida ao concluir uma venda recebida agora.">
+            <div className="mb-5 rounded-2xl border border-gray-100 bg-gray-50 p-4">
+              <div className="mb-4 flex items-start gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-royal-100 text-royal-600">
+                  <Megaphone className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Origem da venda</p>
+                  <h3 className="text-lg font-bold text-navy-900">Rastreabilidade comercial</h3>
+                  <p className="text-sm text-gray-500">Marque de onde veio o cliente para medir ROI de campanha depois.</p>
+                </div>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-3">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-navy-900">Origem</label>
+                  <select
+                    value={saleOrigin}
+                    onChange={(event) => {
+                      setSaleOrigin(event.target.value)
+                      if (event.target.value !== "trafego_pago") setMarketingCampaignId("")
+                    }}
+                    className="h-12 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                  >
+                    {SALE_ORIGINS.map((origin) => (
+                      <option key={origin.value} value={origin.value}>
+                        {origin.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {saleOrigin === "trafego_pago" ? (
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-navy-900">Campanha</label>
+                    <select
+                      value={marketingCampaignId}
+                      onChange={(event) => setMarketingCampaignId(event.target.value)}
+                      className="h-12 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                    >
+                      <option value="">Sem campanha vinculada</option>
+                      {marketingCampaigns.map((campaign) => (
+                        <option key={campaign.id} value={campaign.id}>
+                          {campaign.name} · {campaign.channel}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-gray-100 bg-white p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Campanha</p>
+                    <p className="mt-1 text-sm font-semibold text-navy-900">Não se aplica</p>
+                    <p className="text-xs text-gray-500">Use apenas quando a origem for tráfego pago.</p>
+                  </div>
+                )}
+
+                <Input
+                  label="Observação do lead"
+                  placeholder="Ex: indicação, direct, grupo..."
+                  value={leadNotes}
+                  onChange={(event) => setLeadNotes(event.target.value)}
+                />
+              </div>
+            </div>
+
             <div className="grid gap-3 md:grid-cols-[260px_1fr]">
               <div>
                 <label className="mb-2 block text-sm font-medium text-navy-900">Garantia: {warrantyMonths} meses</label>
@@ -2091,8 +2212,19 @@ function NewSaleContent() {
                   )}
                   <div className="mt-2 flex justify-between text-xs text-gray-500">
                     <span>Valor da venda</span>
-                    <span className="font-semibold text-navy-900">{formatBRL(saleEconomics.storeReceives)}</span>
+                    <span className="text-right font-semibold text-navy-900">
+                      {hasMainProductDiscount && (
+                        <span className="mr-1 text-gray-400 line-through">{formatBRL(originalTotalPrice + upsellTotal)}</span>
+                      )}
+                      {formatBRL(saleEconomics.storeReceives)}
+                    </span>
                   </div>
+                  {hasMainProductDiscount && (
+                    <div className="mt-1 flex justify-between text-xs font-semibold text-emerald-700">
+                      <span>Desconto aplicado</span>
+                      <span>-{formatBRL(mainProductDiscount)}</span>
+                    </div>
+                  )}
                   <div className="mt-1 flex justify-between text-xs text-gray-500">
                     <span>Loja recebe em caixa</span>
                     <span className="font-semibold text-navy-900">{formatBRL(saleEconomics.storeCashReceives)}</span>

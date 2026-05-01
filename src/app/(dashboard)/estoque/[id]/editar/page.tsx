@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, type ComponentType, type ReactNode } from "react"
+import { useState, useEffect, useCallback, useMemo, type ComponentType, type ReactNode } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select } from "@/components/ui/select"
 import { useToast } from "@/components/ui/toaster"
 import { supabase } from "@/lib/supabase"
-import { GRADES } from "@/lib/constants"
+import { CATEGORIES, GRADES, PRODUCT_CATALOG } from "@/lib/constants"
 import {
   ArrowLeft,
   BadgeDollarSign,
@@ -38,6 +38,8 @@ const STATUS_OPTIONS = [
   { value: "under_repair", label: "Em reparo" },
   { value: "returned", label: "Devolvido" },
 ]
+const categoryOptions = CATEGORIES.map((category) => ({ label: category.label, value: category.value }))
+type ProductMode = "catalog" | "manual"
 
 type SectionCardProps = {
   title: string
@@ -90,10 +92,15 @@ export default function EditProductPage() {
   const [saving, setSaving] = useState(false)
   const [catalogName, setCatalogName] = useState("")
   const [productName, setProductName] = useState("")
-  const [isAccessory, setIsAccessory] = useState(false)
+  const [mode, setMode] = useState<ProductMode>("catalog")
   const [catalogId, setCatalogId] = useState<string | null>(null)
   const [notes, setNotes] = useState("")
+  const [category, setCategory] = useState("iphone")
+  const [modelIdx, setModelIdx] = useState(0)
   const [formData, setFormData] = useState({
+    storage: "",
+    color: "",
+    colorHex: "",
     imei: "",
     serial_number: "",
     grade: "",
@@ -108,6 +115,18 @@ export default function EditProductPage() {
     type: "own",
     supplier_name: "",
   })
+  const models = useMemo(() => {
+    const cat = PRODUCT_CATALOG[category as keyof typeof PRODUCT_CATALOG]
+    return cat ? cat.models : []
+  }, [category])
+  const selectedModel = models[modelIdx] as any
+  const storageOptions = (selectedModel?.storage || selectedModel?.sizes || []) as string[]
+  const colorOptions = (selectedModel?.colors || []) as { name: string; hex: string }[]
+  const generatedCatalogName = useMemo(() => {
+    if (mode === "manual") return productName.trim() || catalogName
+    return [selectedModel?.name, formData.storage, formData.color].filter(Boolean).join(" ").trim()
+  }, [catalogName, formData.color, formData.storage, mode, productName, selectedModel?.name])
+  const isAccessory = mode === "manual"
   const isSealed = formData.grade === "Lacrado"
   const cost = parseFloat(formData.purchase_price) || 0
   const suggested = parseFloat(formData.suggested_price) || 0
@@ -116,6 +135,30 @@ export default function EditProductPage() {
   const markupPct = suggested > 0 ? Math.round((profit / suggested) * 100) : 0
   const hasCoreId = isAccessory ? true : Boolean(formData.imei || formData.serial_number)
   const isSupplierItem = formData.type === "supplier"
+
+  const inferCatalogSelection = (item: any, catalog?: any | null) => {
+    const rawName = getProductName({ ...item, catalog }).toLowerCase()
+    const findBestModelIndex = (modelsToSearch: readonly any[]) => {
+      const exactIndex = modelsToSearch.findIndex((model: any) => catalog?.model === model.name)
+      if (exactIndex >= 0) return exactIndex
+
+      return modelsToSearch
+        .map((model: any, index: number) => ({ index, name: String(model.name).toLowerCase() }))
+        .filter((model) => rawName.includes(model.name))
+        .sort((a, b) => b.name.length - a.name.length)[0]?.index ?? -1
+    }
+    const categoryValue = catalog?.category || Object.entries(PRODUCT_CATALOG).find(([, group]: any) =>
+      findBestModelIndex(group.models) >= 0
+    )?.[0] || "iphone"
+    const group = PRODUCT_CATALOG[categoryValue as keyof typeof PRODUCT_CATALOG]
+    const modelIndex = Math.max(0, findBestModelIndex(group?.models || []))
+    const model = group?.models[modelIndex] as any
+    const storage = catalog?.storage || (model?.storage || model?.sizes || []).find((value: string) => rawName.includes(value.toLowerCase())) || ""
+    const color = catalog?.color || model?.colors?.find((option: { name: string }) => rawName.includes(option.name.toLowerCase()))?.name || ""
+    const colorHex = catalog?.color_hex || model?.colors?.find((option: { name: string }) => option.name === color)?.hex || ""
+
+    return { categoryValue, modelIndex, storage, color, colorHex }
+  }
 
   const fetchProduct = useCallback(async () => {
     if (!productId) return
@@ -132,19 +175,13 @@ export default function EditProductPage() {
 
       const item = items[0]
 
-      // Detect accessory (no catalog + condition_notes has "Acessório:" prefix)
-      const isAcc = item.catalog_id === null
-      setIsAccessory(isAcc)
       setCatalogId(item.catalog_id || null)
       setNotes(item.notes || "")
 
-      if (isAcc) {
-        const accName = item.notes || item.condition_notes?.replace(/^Acessório:\s*/, "") || "Produto manual"
-        setCatalogName(accName)
-        setProductName(accName)
-      }
-
       setFormData({
+        storage: "",
+        color: "",
+        colorHex: "",
         imei: item.imei || "",
         serial_number: item.serial_number || "",
         grade: item.grade || "",
@@ -167,10 +204,35 @@ export default function EditProductPage() {
           .single()
 
         if (catData) {
+          const selection = inferCatalogSelection(item, catData)
+          setMode("catalog")
+          setCategory(selection.categoryValue)
+          setModelIdx(selection.modelIndex)
           const resolvedName = getProductName({ ...item, catalog: catData })
           setCatalogName(resolvedName)
           setProductName(resolvedName)
+          setFormData((prev) => ({
+            ...prev,
+            storage: selection.storage,
+            color: selection.color,
+            colorHex: selection.colorHex,
+          }))
         }
+      } else {
+        const selection = inferCatalogSelection(item)
+        const hasDeviceSignals = Boolean(item.imei || item.serial_number || item.battery_health || item.ios_version || selection.storage || selection.color || getProductName(item).toLowerCase().includes("iphone"))
+        setMode(hasDeviceSignals ? "catalog" : "manual")
+        setCategory(selection.categoryValue)
+        setModelIdx(selection.modelIndex)
+        setFormData((prev) => ({
+          ...prev,
+          storage: selection.storage,
+          color: selection.color,
+          colorHex: selection.colorHex,
+        }))
+        const fallbackName = item.notes || item.condition_notes?.replace(/^Acessório:\s*/, "") || "Produto manual"
+        setCatalogName(hasDeviceSignals ? getProductName({ model: (PRODUCT_CATALOG[selection.categoryValue as keyof typeof PRODUCT_CATALOG]?.models[selection.modelIndex] as any)?.name, storage: selection.storage, color: selection.color }) : fallbackName)
+        setProductName(hasDeviceSignals ? "" : fallbackName)
       }
     } catch (err) {
       toast({ title: "Erro ao carregar produto", type: "error" })
@@ -187,9 +249,52 @@ export default function EditProductPage() {
     setFormData((prev) => ({ ...prev, [field]: value }))
   }
 
+  const handleCategoryChange = (value: string) => {
+    setCategory(value)
+    setModelIdx(0)
+    setFormData((prev) => ({ ...prev, storage: "", color: "", colorHex: "" }))
+  }
+
+  const findOrCreateCatalog = async () => {
+    if (mode === "manual") return null
+    if (!selectedModel) throw new Error("Selecione um modelo do catálogo")
+    const storage = formData.storage || null
+    const color = formData.color || null
+
+    const { data: existing, error: findError } = await (supabase.from("product_catalog") as any)
+      .select("id, storage, color")
+      .eq("category", category)
+      .eq("model", selectedModel.name)
+    if (findError) throw findError
+    const existingMatch = (existing || []).find((item: any) =>
+      (item.storage || null) === storage && (item.color || null) === color
+    )
+    if (existingMatch?.id) return existingMatch.id
+
+    const { data: created, error } = await (supabase.from("product_catalog") as any)
+      .insert({
+        category,
+        brand: ["iphone", "ipad", "applewatch", "airpods", "macbook"].includes(category) ? "Apple" : category,
+        model: selectedModel.name,
+        variant: storage,
+        storage,
+        color,
+        color_hex: formData.colorHex || null,
+      } as any)
+      .select("id")
+      .single()
+    if (error) throw error
+    return created?.id || null
+  }
+
   const handleSave = async () => {
     setSaving(true)
     try {
+      const nextCatalogId = await findOrCreateCatalog()
+      const trimmedProductName = productName.trim()
+      const customCatalogName = mode === "catalog" && trimmedProductName && trimmedProductName !== generatedCatalogName
+        ? trimmedProductName
+        : ""
       const computedLifecycleStatus = getComputedInventoryStatus({
         status: formData.status,
         purchase_price: parseFloat(formData.purchase_price) || 0,
@@ -197,13 +302,13 @@ export default function EditProductPage() {
         grade: formData.grade || null,
         imei: formData.imei || null,
         serial_number: formData.serial_number || null,
-        catalog_id: catalogId,
-        notes: productName.trim() || notes || formData.condition_notes || null,
+        catalog_id: nextCatalogId,
+        notes: mode === "manual" ? (trimmedProductName || notes || formData.condition_notes || null) : (customCatalogName || null),
         condition_notes: formData.condition_notes || null,
       })
 
-      const trimmedProductName = productName.trim()
       const updateData: Record<string, any> = {
+        catalog_id: nextCatalogId,
         imei: formData.imei || null,
         serial_number: formData.serial_number || null,
         grade: formData.grade || null,
@@ -217,7 +322,7 @@ export default function EditProductPage() {
         quantity: formData.type === "own" ? Math.max(1, parseInt(formData.quantity) || 1) : 1,
         type: formData.type,
         supplier_name: formData.type === "supplier" ? (formData.supplier_name || null) : null,
-        notes: catalogId ? (trimmedProductName ? `Nome: ${trimmedProductName}` : null) : (trimmedProductName || null),
+        notes: mode === "manual" ? (trimmedProductName || null) : (customCatalogName ? `Nome: ${customCatalogName}` : null),
       }
 
       const { error } = await (supabase.from("inventory") as any)
@@ -256,7 +361,7 @@ export default function EditProductPage() {
             <ArrowLeft className="w-5 h-5" />
           </Button>
           <div className="min-w-0">
-            <h2 className="font-display text-xl font-bold text-navy-900 sm:text-2xl">{catalogName || "Editar produto"}</h2>
+            <h2 className="font-display text-xl font-bold text-navy-900 sm:text-2xl">{generatedCatalogName || catalogName || "Editar produto"}</h2>
             <p className="text-sm text-gray-500">Atualize os dados comerciais, técnicos e de rastreabilidade.</p>
             <div className="mt-3 flex flex-wrap gap-2">
               <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
@@ -284,6 +389,91 @@ export default function EditProductPage() {
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-5">
           <SectionCard
+            title="Catálogo e especificações"
+            description="Atualize categoria, modelo, armazenamento ou tamanho e cor usando a base do catálogo."
+            icon={Smartphone}
+          >
+            <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setMode("catalog")}
+                className={`rounded-xl border p-4 text-left transition-all ${mode === "catalog" ? "border-royal-500 bg-royal-100/30" : "border-gray-100 hover:border-gray-200"}`}
+              >
+                <p className="font-semibold text-navy-900">Produto do catálogo</p>
+                <p className="mt-1 text-xs text-gray-500">iPhone, iPad, Watch, AirPods, MacBook ou Garmin.</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode("manual")}
+                className={`rounded-xl border p-4 text-left transition-all ${mode === "manual" ? "border-royal-500 bg-royal-100/30" : "border-gray-100 hover:border-gray-200"}`}
+              >
+                <p className="font-semibold text-navy-900">Produto manual</p>
+                <p className="mt-1 text-xs text-gray-500">Acessórios, itens avulsos ou produtos fora da base.</p>
+              </button>
+            </div>
+
+            {mode === "catalog" ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                  <Select label="Categoria" value={category} onChange={(e) => handleCategoryChange(e.target.value)} options={categoryOptions} />
+                  <Select
+                    label="Modelo"
+                    value={modelIdx.toString()}
+                    onChange={(e) => {
+                      setModelIdx(Number(e.target.value))
+                      setFormData((prev) => ({ ...prev, storage: "", color: "", colorHex: "" }))
+                    }}
+                    options={models.map((model: any, index) => ({ label: model.name, value: index.toString() }))}
+                  />
+                  {storageOptions.length > 0 ? (
+                    <Select
+                      label="Armazenamento / tamanho"
+                      value={formData.storage}
+                      onChange={(e) => updateField("storage", e.target.value)}
+                      placeholder="Selecione"
+                      options={storageOptions.map((value) => ({ label: value, value }))}
+                    />
+                  ) : (
+                    <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                      <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Armazenamento</p>
+                      <p className="mt-1 text-sm font-semibold text-gray-500">Não se aplica</p>
+                    </div>
+                  )}
+                </div>
+
+                {colorOptions.length > 0 ? (
+                  <div>
+                    <label className="mb-2 block text-sm font-semibold text-navy-900">Cor</label>
+                    <div className="flex flex-wrap gap-2">
+                      {colorOptions.map((color) => (
+                        <button
+                          key={color.name}
+                          type="button"
+                          onClick={() => setFormData((prev) => ({ ...prev, color: color.name, colorHex: color.hex }))}
+                          className={`flex min-h-[44px] items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition-all ${formData.color === color.name ? "border-royal-500 ring-2 ring-royal-500/20" : "border-gray-200 hover:border-gray-300"}`}
+                        >
+                          <span className="h-5 w-5 rounded-full border border-gray-300" style={{ backgroundColor: color.hex }} />
+                          {color.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="rounded-2xl border border-royal-100 bg-royal-50/50 p-4">
+                  <p className="text-xs font-bold uppercase tracking-wider text-royal-600">Nome gerado pelo catálogo</p>
+                  <p className="mt-1 text-lg font-bold text-navy-900">{generatedCatalogName || "Selecione as especificações"}</p>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Modo manual</p>
+                <p className="mt-1 text-sm text-gray-500">Use o campo de nome abaixo para definir como este item aparece no estoque e na venda.</p>
+              </div>
+            )}
+          </SectionCard>
+
+          <SectionCard
             title="Identificação"
             description={isAccessory ? "Nome e status do item manual." : "IMEI, número de série e status operacional do aparelho."}
             icon={Hash}
@@ -291,14 +481,14 @@ export default function EditProductPage() {
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
               <div className="lg:col-span-3">
                 <Input
-                  label="Nome do produto"
+                  label={mode === "catalog" ? "Nome personalizado (opcional)" : "Nome do produto"}
                   value={productName}
                   onChange={(e) => setProductName(e.target.value)}
-                  placeholder="Ex: iPhone 17 Pro Max 256GB Cosmic Orange"
+                  placeholder={mode === "catalog" ? generatedCatalogName || "Deixe em branco para usar o catálogo" : "Ex: Capa para iPad 10ª geração"}
                 />
                 {catalogId ? (
                   <p className="mt-1.5 text-xs text-gray-500">
-                    Este nome vale apenas para este item do estoque e não altera o catálogo padrão.
+                    O nome personalizado vale apenas para este item; modelo, armazenamento e cor são salvos no catálogo.
                   </p>
                 ) : null}
               </div>

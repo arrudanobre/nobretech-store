@@ -79,6 +79,7 @@ export function normalizePaymentFeePct(method: string, feePct?: number | null): 
   const legacyFee = LEGACY_SIDEPAY_FEE_PCTS[method]
 
   if (sidepayFee === undefined || legacyFee === undefined) return value
+  if (value === 0) return 0
 
   // Older database rows used two decimal places. Treat those as the Sidepay default
   // so existing installs get exact calculations without manual edits.
@@ -172,6 +173,26 @@ export function todayISO(): string {
   const month = String(today.getMonth() + 1).padStart(2, '0')
   const day = String(today.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+export function currentMonthKey(): string {
+  return todayISO().slice(0, 7)
+}
+
+export function monthRangeISO(month: string): { start: string; end: string; endOfDay: string } {
+  const [rawYear, rawMonth] = month.split('-').map(Number)
+  const now = new Date()
+  const year = Number.isFinite(rawYear) ? rawYear : now.getFullYear()
+  const monthNumber = Number.isFinite(rawMonth) && rawMonth >= 1 && rawMonth <= 12 ? rawMonth : now.getMonth() + 1
+  const monthKey = `${year}-${String(monthNumber).padStart(2, '0')}`
+  const lastDay = new Date(year, monthNumber, 0).getDate()
+  const end = `${monthKey}-${String(lastDay).padStart(2, '0')}`
+
+  return {
+    start: `${monthKey}-01`,
+    end,
+    endOfDay: `${end}T23:59:59.999Z`,
+  }
 }
 
 export function addMonthsISO(dateStr?: string | null, months = 0): string | null {
