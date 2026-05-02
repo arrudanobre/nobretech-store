@@ -13,6 +13,8 @@ import { calculateSaleEconomics, estimateRiskReserve } from "@/lib/sale-economic
 import { useToast } from "@/components/ui/toaster"
 import { supabase } from "@/lib/supabase"
 import { generateReceiptPDF, generateWarrantyPDF, type SaleDocumentData } from "@/lib/sale-documents"
+import { upsertSaleReceivable } from "@/lib/finance/sale-receivable-client"
+import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 import {
   Search,
   ShoppingCart,
@@ -66,6 +68,12 @@ type MarketingCampaignOption = {
   status: string
 }
 
+type FinanceAccountOption = {
+  id: string
+  name: string
+  institution?: string | null
+}
+
 const SALE_ORIGINS = [
   { value: "whatsapp", label: "WhatsApp" },
   { value: "instagram", label: "Instagram" },
@@ -74,6 +82,14 @@ const SALE_ORIGINS = [
   { value: "loja", label: "Loja física" },
   { value: "recorrente", label: "Cliente recorrente" },
   { value: "outro", label: "Outro" },
+]
+
+const PACKAGING_OPTIONS = [
+  { value: "", label: "Não informado" },
+  { value: "original_box", label: "Caixa original" },
+  { value: "nobretech_box", label: "Caixa Nobretech" },
+  { value: "no_box", label: "Sem caixa" },
+  { value: "other", label: "Outro" },
 ]
 
 const EMPTY_TRADE_IN: TradeInState = {
@@ -566,12 +582,16 @@ function NewSaleContent() {
   const [paymentMethod, setPaymentMethod] = useState("")
   const [isReservation, setIsReservation] = useState(false)
   const [paymentDueDate, setPaymentDueDate] = useState("")
+  const [receiptAccountId, setReceiptAccountId] = useState("")
   const [warrantyMonths, setWarrantyMonths] = useState("3")
   const [hasTradeIn, setHasTradeIn] = useState(false)
   const [tradeIn, setTradeIn] = useState({ category: "", modelIdx: 0, storage: "", color: "", imei: "", grade: "", batteryHealth: "", value: "" })
   const [saleNotes, setSaleNotes] = useState("")
+  const [packagingType, setPackagingType] = useState("")
+  const [packagingNotes, setPackagingNotes] = useState("")
   const [saleOrigin, setSaleOrigin] = useState("whatsapp")
   const [marketingCampaignId, setMarketingCampaignId] = useState("")
+  const [marketingLeadId, setMarketingLeadId] = useState("")
   const [leadNotes, setLeadNotes] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -592,6 +612,7 @@ function NewSaleContent() {
   const [inventoryProducts, setInventoryProducts] = useState<any[]>([])
   const [loadingInventory, setLoadingInventory] = useState(true)
   const [marketingCampaigns, setMarketingCampaigns] = useState<MarketingCampaignOption[]>([])
+  const [financeAccounts, setFinanceAccounts] = useState<FinanceAccountOption[]>([])
   const defaultFees: Record<string, number> = { ...SIDEPAY_FEE_PCTS }
   const [fees, setFees] = useState<Partial<Record<string, number>>>(defaultFees)
 
@@ -600,6 +621,7 @@ function NewSaleContent() {
   const searchParams = useSearchParams()
   const preselectId = searchParams.get("product")
   const tradeinParam = searchParams.get("tradein")
+  const leadParam = searchParams.get("lead")
 
   const handleTradeInChange = useCallback((partial: Partial<TradeInState>) => {
     setTradeIn((prev) => ({ ...prev, ...partial }))
@@ -638,6 +660,27 @@ function NewSaleContent() {
       console.error("Erro ao ler avaliação:", tradeinParam)
     }
   }, [tradeinParam])
+
+  useEffect(() => {
+    if (!leadParam) return
+    try {
+      const lead = JSON.parse(atob(decodeURIComponent(leadParam)))
+      setCustomer((prev) => ({
+        ...prev,
+        name: lead.name || prev.name,
+        phone: lead.phone || prev.phone,
+        email: lead.email || prev.email,
+      }))
+      setSaleOrigin(lead.sourceChannel || "trafego_pago")
+      setMarketingCampaignId(lead.campaignId || "")
+      setMarketingLeadId(lead.id || "")
+      setLeadNotes([lead.productInterest ? `Interesse: ${lead.productInterest}` : "", lead.notes || ""].filter(Boolean).join("\n"))
+      if (lead.productInterest) setSearchTerm(lead.productInterest)
+      toast({ title: "Lead importado", description: "Os dados comerciais foram carregados para a venda.", type: "success" })
+    } catch {
+      console.error("Erro ao ler lead:", leadParam)
+    }
+  }, [leadParam, toast])
 
   // Fetch inventory — only products that are in stock (not sold)
   useEffect(() => {
@@ -786,6 +829,26 @@ function NewSaleContent() {
     }
 
     fetchMarketingCampaigns()
+  }, [])
+
+  useEffect(() => {
+    const fetchFinanceAccounts = async () => {
+      try {
+        const { data, error } = await (supabase.from("finance_accounts") as any)
+          .select("id, name, institution")
+          .eq("is_active", true)
+          .order("created_at", { ascending: true })
+
+        if (error) throw error
+        const accounts = data || []
+        setFinanceAccounts(accounts)
+        if (accounts[0]?.id) setReceiptAccountId((current) => current || accounts[0].id)
+      } catch (error) {
+        console.error("Erro ao carregar contas financeiras:", error)
+      }
+    }
+
+    fetchFinanceAccounts()
   }, [])
 
   const filteredProducts = useMemo(() => {
@@ -1182,6 +1245,11 @@ function NewSaleContent() {
         }
       }
 
+      const isCreditSale = paymentMethod.startsWith("credit_")
+      const creditDueDate = addDaysISO(today, 1) || today
+      const receivableDueDate = isReservation ? paymentDueDate : isCreditSale ? creditDueDate : today
+      const receivableStatus = isReservation || isCreditSale ? "pending" : "reconciled"
+
       // 2. Register the sale (sale_price = total including quantity)
       const { data: sale, error: saleError } = await (supabase
         .from("sales") as any)
@@ -1200,11 +1268,14 @@ function NewSaleContent() {
           supplier_name: selectedProduct?.type === "supplier" ? (selectedProduct.supplier_name || null) : null,
           supplier_cost: selectedProduct?.type === "supplier" ? (parseFloat(supplierCostInput) || 0) : null,
           sale_status: isReservation ? "reserved" : "completed",
-          payment_due_date: isReservation ? paymentDueDate : null,
+          payment_due_date: isReservation || isCreditSale ? receivableDueDate : null,
           sale_date: today,
           sale_origin: saleOrigin || "unknown",
           marketing_campaign_id: saleOrigin === "trafego_pago" && marketingCampaignId ? marketingCampaignId : null,
+          marketing_lead_id: marketingLeadId || null,
           lead_notes: leadNotes || null,
+          packaging_type: packagingType || null,
+          packaging_notes: packagingType === "other" ? packagingNotes.trim() || null : null,
           notes: quantity > 1 ? `[${quantity}x ${selectedProduct!.name}]` + (saleNotes ? `\n${saleNotes}` : "") : saleNotes || null,
           // O banco exige trade_in_id quando has_trade_in=true. Como o trade-in
           // só existe depois que a venda é criada, ligamos essa flag no vínculo.
@@ -1216,6 +1287,16 @@ function NewSaleContent() {
       if (saleError) {
         console.error("Erro ao registrar venda:", saleError)
         throw new Error(saleError.message)
+      }
+
+      if (marketingLeadId) {
+        await (supabase.from("marketing_leads") as any)
+          .update({
+            status: "sold",
+            sale_id: sale.id,
+            campaign_id: marketingCampaignId || null,
+          })
+          .eq("id", marketingLeadId)
       }
 
       if (selectedProduct?.type !== "supplier") {
@@ -1337,20 +1418,23 @@ function NewSaleContent() {
         })
       }
 
-      if (isReservation && amountAfterTradeIn > 0) {
-        await (supabase.from("transactions") as any).insert({
-          company_id: companyId,
-          type: "income",
-          category: "Venda de produtos",
-          description: `Reserva · ${selectedProduct!.name}`,
+      if (saleEconomics.storeCashReceives > 0) {
+        const transactionId = await upsertSaleReceivable({
+          supabase,
+          companyId,
+          saleId: sale.id,
+          accountId: isReservation ? null : receiptAccountId,
           amount: saleEconomics.storeCashReceives,
-          date: today,
-          due_date: paymentDueDate,
-          payment_method: paymentMethod,
-          status: "pending",
-          source_type: "sale",
-          source_id: sale.id,
+          saleDate: today,
+          dueDate: receivableDueDate,
+          paymentMethod,
+          description: `${isReservation ? "Reserva" : "Venda"} · ${selectedProduct!.name}`,
+          status: receivableStatus,
         })
+
+        if (receivableStatus === "reconciled" && transactionId) {
+          await requestSyncTransactionMovement(transactionId, { createdBy: user.id })
+        }
       }
 
       toast({
@@ -1500,6 +1584,7 @@ function NewSaleContent() {
     salePrice &&
     (paymentMethod || customerAmountDue === 0) &&
     (!isReservation || paymentDueDate) &&
+    (isReservation || saleEconomics.storeCashReceives <= 0 || receiptAccountId) &&
     (selectedProduct?.type !== "supplier" || supplierCostInput)
   )
 
@@ -1880,6 +1965,28 @@ function NewSaleContent() {
                     className="mt-3"
                   />
                 )}
+                {!isReservation && saleEconomics.storeCashReceives > 0 && (
+                  <label className="mt-3 block text-sm font-semibold text-gray-600">
+                    {isCreditPayment ? "Conta prevista de recebimento" : "Conta de recebimento"}
+                    <select
+                      value={receiptAccountId}
+                      onChange={(event) => setReceiptAccountId(event.target.value)}
+                      className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                    >
+                      <option value="">Selecione a conta</option>
+                      {financeAccounts.map((account) => (
+                        <option key={account.id} value={account.id}>
+                          {account.institution ? `${account.name} · ${account.institution}` : account.name}
+                        </option>
+                      ))}
+                    </select>
+                    {isCreditPayment && (
+                      <span className="mt-1 block text-xs font-medium text-gray-500">
+                        Crédito fica pendente e só entra no extrato quando for recebido.
+                      </span>
+                    )}
+                  </label>
+                )}
               </div>
 
               <div className="rounded-2xl border border-gray-100 bg-surface p-4">
@@ -2108,6 +2215,46 @@ function NewSaleContent() {
                 value={saleNotes}
                 onChange={(event) => setSaleNotes(event.target.value)}
               />
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-gray-100 bg-white p-4">
+              <div className="mb-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-royal-600">Entrega do aparelho</p>
+                <h3 className="text-base font-bold text-navy-900">Tipo de embalagem</h3>
+                <p className="text-sm text-gray-500">Essa informação aparece no pós-venda e na Compra Verificada do cliente.</p>
+              </div>
+              <div className="grid gap-3 md:grid-cols-[260px_1fr]">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-navy-900">Tipo de embalagem</label>
+                  <select
+                    value={packagingType}
+                    onChange={(event) => {
+                      setPackagingType(event.target.value)
+                      if (event.target.value !== "other") setPackagingNotes("")
+                    }}
+                    className="h-12 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                  >
+                    {PACKAGING_OPTIONS.map((option) => (
+                      <option key={option.value || "empty"} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {packagingType === "other" ? (
+                  <Textarea
+                    label="Observação da embalagem"
+                    placeholder="Ex: entregue em caixa personalizada da loja..."
+                    value={packagingNotes}
+                    onChange={(event) => setPackagingNotes(event.target.value)}
+                  />
+                ) : (
+                  <div className="rounded-xl border border-gray-100 bg-gray-50 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Observação</p>
+                    <p className="mt-1 text-sm text-gray-500">Use “Outro” quando precisar descrever uma embalagem fora do padrão.</p>
+                  </div>
+                )}
+              </div>
             </div>
           </SectionCard>
         </div>

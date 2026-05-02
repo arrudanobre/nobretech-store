@@ -9,12 +9,13 @@ import { supabase } from "@/lib/supabase"
 import { formatBRL, formatDate, getAdditionalItemDisplayName, getTradeInDisplayName, getTradeInSummaryStatus, getInventoryStatusMeta, isPendingInventoryStatus, getProductName } from "@/lib/helpers"
 import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
 import { calculateSaleEconomics, estimateRiskReserve } from "@/lib/sale-economics"
+import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 import { CHECKLIST_TEMPLATES } from "@/lib/constants"
 import { generateWarrantyPDF as generateWarrantyTermDocument, generateReceiptPDF, type SaleDocumentData, type ReceiptLineItem } from "@/lib/sale-documents"
 import jsPDF from "jspdf"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { ArrowLeft, ShieldCheck, FileText, CreditCard, User, ShoppingCart, AlertTriangle, Download, CheckCircle2, XCircle, MinusCircle, Loader2, Edit, Trash, Plus, Calendar, History, Trash2, Search, Megaphone } from "lucide-react"
+import { ArrowLeft, ShieldCheck, FileText, CreditCard, User, ShoppingCart, AlertTriangle, Download, CheckCircle2, XCircle, MinusCircle, Loader2, Edit, Trash, Plus, Calendar, History, Trash2, Search, Megaphone, QrCode, Copy, ExternalLink, KeyRound, RefreshCcw } from "lucide-react"
 
 const checklistLabels: Record<string, string> = {}
 for (const [cat, items] of Object.entries(CHECKLIST_TEMPLATES)) {
@@ -53,6 +54,23 @@ const saleOriginLabel = (origin?: string | null) => {
   return SALE_ORIGINS.find((item) => item.value === origin)?.label || origin || "Não informado"
 }
 
+const PACKAGING_OPTIONS = [
+  { value: "", label: "Não informado" },
+  { value: "original_box", label: "Caixa original" },
+  { value: "nobretech_box", label: "Caixa Nobretech" },
+  { value: "no_box", label: "Sem caixa" },
+  { value: "other", label: "Outro" },
+]
+
+const packagingLabel = (type?: string | null, notes?: string | null) => {
+  const note = notes?.trim()
+  if (type === "original_box") return "Caixa original"
+  if (type === "nobretech_box") return "Caixa Nobretech"
+  if (type === "no_box") return "Sem caixa"
+  if (type === "other") return note || "Outro"
+  return "Não informado"
+}
+
 const auditField = (data: unknown, key: string) => {
   if (!data || typeof data !== "object") return undefined
   return (data as Record<string, unknown>)[key]
@@ -77,10 +95,13 @@ export default function SaleDetailPage() {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [publicAccessLoading, setPublicAccessLoading] = useState<string | null>(null)
   const [editDate, setEditDate] = useState("")
   const [editSaleOrigin, setEditSaleOrigin] = useState("unknown")
   const [editMarketingCampaignId, setEditMarketingCampaignId] = useState("")
   const [editLeadNotes, setEditLeadNotes] = useState("")
+  const [editPackagingType, setEditPackagingType] = useState("")
+  const [editPackagingNotes, setEditPackagingNotes] = useState("")
   const [marketingCampaigns, setMarketingCampaigns] = useState<MarketingCampaignOption[]>([])
 
   const [inventoryItems, setInventoryItems] = useState<any[]>([])
@@ -112,6 +133,8 @@ export default function SaleDetailPage() {
           .single()
         if (error) throw error
         setSale(data)
+        setEditPackagingType(data?.packaging_type || "")
+        setEditPackagingNotes(data?.packaging_notes || "")
 
         if ((data as any)?.customer_id) {
           const { data: c } = await (supabase
@@ -252,6 +275,44 @@ export default function SaleDetailPage() {
     fallback: "Aparelho recebido",
   }) : ""
   const tradeInGrade = tradeInInventory?.grade || tradeInData?.grade || null
+  const isCompletedSale = (sale?.sale_status || "completed") === "completed"
+  const publicPurchaseUrl = typeof window !== "undefined" && sale?.public_access_token
+    ? `${window.location.origin}/compra-verificada/${sale.public_access_token}`
+    : ""
+
+  const copyToClipboard = async (value: string, label: string) => {
+    if (!value) return
+    await navigator.clipboard.writeText(value)
+    toast({ title: `${label} copiado`, type: "success" })
+  }
+
+  const refreshPublicAccess = async (action: "ensure" | "regenerate_pin") => {
+    setPublicAccessLoading(action)
+    try {
+      const response = await fetch(`/api/sales/${id}/verified-purchase`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      })
+      const payload = await response.json()
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error?.message || "Não foi possível atualizar o acesso público.")
+      }
+      setSale({ ...sale, ...payload.data })
+      toast({
+        title: action === "regenerate_pin" ? "PIN regenerado" : "Acesso da compra gerado",
+        type: "success",
+      })
+    } catch (error) {
+      toast({
+        title: "Erro na Compra Verificada",
+        description: error instanceof Error ? error.message : "Tente novamente.",
+        type: "error",
+      })
+    } finally {
+      setPublicAccessLoading(null)
+    }
+  }
 
   const handleDownloadInspectionPDF = async () => {
     if (generatingPdf) return
@@ -798,7 +859,7 @@ export default function SaleDetailPage() {
         lead_notes: sale.lead_notes,
       }
 
-      const { error } = await (supabase.from("sales") as any).update(payload).eq("id", id)
+      const { error } = await supabase.from("sales").update(payload).eq("id", id)
       if (error) throw error
 
       await logAudit("UPDATE_MARKETING_ATTRIBUTION", oldData, payload)
@@ -806,6 +867,31 @@ export default function SaleDetailPage() {
       toast({ title: "Origem do cliente atualizada", type: "success" })
     } catch (e) {
       toast({ title: "Erro ao atualizar origem", description: e instanceof Error ? e.message : "Não foi possível salvar a origem do cliente.", type: "error" })
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const handleUpdatePackaging = async () => {
+    setIsSubmitting(true)
+    try {
+      const payload = {
+        packaging_type: editPackagingType || null,
+        packaging_notes: editPackagingType === "other" ? editPackagingNotes.trim() || null : null,
+      }
+      const oldData = {
+        packaging_type: sale.packaging_type,
+        packaging_notes: sale.packaging_notes,
+      }
+
+      const { error } = await (supabase.from("sales") as any).update(payload).eq("id", id)
+      if (error) throw error
+
+      await logAudit("UPDATE_PACKAGING", oldData, payload)
+      setSale({ ...sale, ...payload })
+      toast({ title: "Tipo de embalagem atualizado", type: "success" })
+    } catch (e) {
+      toast({ title: "Erro ao atualizar embalagem", description: e instanceof Error ? e.message : "Não foi possível salvar o tipo de embalagem.", type: "error" })
     } finally {
       setIsSubmitting(false)
     }
@@ -892,34 +978,34 @@ export default function SaleDetailPage() {
   const handleDeleteSale = async () => {
     setIsSubmitting(true)
     try {
-      const tradeInInventoryId = tradeInData?.linked_inventory_id || null
+      const { data: { user } } = await supabase.auth.getUser()
+      const { data: saleTransactions, error: txError } = await (supabase.from("transactions") as any)
+        .select("id, status")
+        .eq("source_type", "sale")
+        .eq("source_id", id)
+        .neq("status", "cancelled")
+      if (txError) throw txError
+
+      if ((saleTransactions || []).length > 0) {
+        const { error } = await (supabase.from("transactions") as any)
+          .update({ status: "cancelled", account_id: null, reconciled_at: null })
+          .eq("source_type", "sale")
+          .eq("source_id", id)
+          .neq("status", "cancelled")
+        if (error) throw error
+      }
+
+      for (const transaction of saleTransactions || []) {
+        await requestSyncTransactionMovement(String(transaction.id), {
+          createdBy: user?.id ?? null,
+        })
+      }
 
       // Revert main product inventory
       if (sale.inventory_id) {
         const { error } = await (supabase.from("inventory") as any)
           .update({ status: "in_stock" })
           .eq("id", sale.inventory_id)
-        if (error) throw error
-      }
-
-      // Break the sale -> trade-in link before deleting trade-in records.
-      if (tradeInData?.id) {
-        const { error: unlinkError } = await (supabase.from("sales") as any)
-          .update({ has_trade_in: false, trade_in_id: null })
-          .eq("id", id)
-        if (unlinkError) throw unlinkError
-
-        const { error } = await (supabase.from("trade_ins") as any)
-          .delete()
-          .eq("id", tradeInData.id)
-        if (error) throw error
-      }
-
-      // Remove the inventory item created from the trade-in after its FK is gone.
-      if (tradeInInventoryId) {
-        const { error } = await (supabase.from("inventory") as any)
-          .delete()
-          .eq("id", tradeInInventoryId)
         if (error) throw error
       }
 
@@ -933,59 +1019,17 @@ export default function SaleDetailPage() {
         }
       }
 
-      // Delete additional items
-      {
-        const { error } = await (supabase.from("sales_additional_items") as any)
-          .delete()
-          .eq("sale_id", id)
-        if (error) throw error
-      }
+      const { error: saleError } = await (supabase.from("sales") as any)
+        .update({ sale_status: "cancelled" })
+        .eq("id", id)
+      if (saleError) throw saleError
 
-      // Delete sale-derived finance and support records before deleting the sale itself.
-      {
-        const { error } = await (supabase.from("transactions") as any)
-          .delete()
-          .eq("source_type", "sale")
-          .eq("source_id", id)
-        if (error) throw error
-      }
+      await logAudit("updated", { sale_status: sale.sale_status || "completed" }, { sale_status: "cancelled" })
 
-      {
-        const { error } = await (supabase.from("warranties") as any)
-          .delete()
-          .eq("sale_id", id)
-        if (error) throw error
-      }
-
-      {
-        const { error } = await (supabase.from("problems") as any)
-          .delete()
-          .eq("sale_id", id)
-        if (error) throw error
-      }
-
-      // Delete audit logs
-      {
-        const { error } = await (supabase.from("audit_logs") as any)
-          .delete()
-          .eq("record_id", id)
-        if (error) throw error
-      }
-
-      // Delete sale
-      {
-        const { data, error } = await (supabase.from("sales") as any)
-          .delete()
-          .eq("id", id)
-          .select("id")
-        if (error) throw error
-        if (!data?.length) throw new Error("Nenhuma venda foi removida. Atualize a página e tente novamente.")
-      }
-
-      toast({ title: "Venda excluída com sucesso", type: "success" })
+      toast({ title: "Venda cancelada com segurança", description: "Histórico preservado e recebimentos conciliados estornados quando necessário.", type: "success" })
       router.replace("/vendas")
     } catch (e: any) {
-      toast({ title: "Erro ao excluir venda", description: e?.message || "Não foi possível remover os vínculos da venda.", type: "error" })
+      toast({ title: "Erro ao cancelar venda", description: e?.message || "Não foi possível cancelar a venda com segurança.", type: "error" })
       setIsSubmitting(false)
     }
   }
@@ -997,6 +1041,21 @@ export default function SaleDetailPage() {
   const fullModel = `${catalog.model || "—"}${catalog.variant ? " " + catalog.variant : ""} ${catalog.storage || ""} ${catalog.color || ""}`.trim()
   const okCount = checklist.filter((i: any) => i.status === "ok").length
   const failCount = checklist.filter((i: any) => i.status === "fail").length
+  const labelCustomerName = (customer?.full_name || "Cliente").split(/\s+/)[0]
+  const labelData = {
+    store: "Nobretech Store",
+    saleNumber: `Compra NT-${String(sale?.id || id).slice(0, 8).toUpperCase()}`,
+    customer: labelCustomerName,
+    product: fullModel || "Aparelho",
+    color: catalog?.color || "Não informado",
+    grade: product?.grade || "Não informado",
+    batteryHealth: product?.battery_health ? `${product.battery_health}%` : "Não informado",
+    packaging: packagingLabel(sale?.packaging_type, sale?.packaging_notes),
+    date: sale?.sale_date ? formatDate(sale.sale_date) : "Não informado",
+    pin: sale?.public_access_pin || "------",
+    url: publicPurchaseUrl || "Gerar acesso para criar URL",
+    warning: "Não compartilhe sua senha",
+  }
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -1114,6 +1173,118 @@ export default function SaleDetailPage() {
         )}
       </div>
 
+      {isCompletedSale && (
+        <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-royal-100 text-royal-600">
+                <QrCode className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="font-display font-bold text-navy-900 font-syne">Compra Verificada</h3>
+                  <Badge variant={sale?.public_access_enabled === false ? "gray" : "green"} dot>
+                    {sale?.public_access_enabled === false ? "Inativo" : "Ativo"}
+                  </Badge>
+                </div>
+                <p className="mt-1 max-w-2xl text-sm text-gray-500">
+                  Link exclusivo para o cliente consultar os dados desta compra, garantia e acompanhamento técnico.
+                </p>
+              </div>
+            </div>
+
+            {!sale?.public_access_token || !sale?.public_access_pin ? (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => refreshPublicAccess("ensure")}
+                isLoading={publicAccessLoading === "ensure"}
+                className="shrink-0"
+              >
+                <ShieldCheck className="h-4 w-4" />
+                Gerar acesso da compra
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => window.open(publicPurchaseUrl, "_blank", "noopener,noreferrer")}
+                className="shrink-0"
+              >
+                <ExternalLink className="h-4 w-4" />
+                Abrir portal
+              </Button>
+            )}
+          </div>
+
+          {sale?.public_access_token && sale?.public_access_pin && (
+            <>
+              <div className="mt-5 grid grid-cols-1 gap-3 lg:grid-cols-[1.5fr_0.6fr_0.9fr]">
+                <div className="rounded-xl bg-surface p-4">
+                  <p className="mb-1 text-xs uppercase tracking-wider text-gray-400">URL pública</p>
+                  <div className="flex min-w-0 items-center gap-2">
+                    <p className="min-w-0 flex-1 truncate font-mono text-sm font-semibold text-navy-900">{publicPurchaseUrl}</p>
+                    <Button variant="ghost" size="icon" title="Copiar URL" onClick={() => copyToClipboard(publicPurchaseUrl, "URL")}>
+                      <Copy className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+                <div className="rounded-xl bg-royal-50 p-4">
+                  <p className="mb-1 text-xs uppercase tracking-wider text-royal-500">PIN do cliente</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-mono text-2xl font-bold tracking-[0.24em] text-navy-900">{sale.public_access_pin}</p>
+                    <Button variant="ghost" size="icon" title="Copiar PIN" onClick={() => copyToClipboard(sale.public_access_pin, "PIN")}>
+                      <Copy className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+                <div className="rounded-xl bg-surface p-4">
+                  <p className="mb-1 text-xs uppercase tracking-wider text-gray-400">Último acesso</p>
+                  <p className="text-sm font-semibold text-navy-900">
+                    {sale.public_access_last_viewed_at ? formatDate(sale.public_access_last_viewed_at) : "Ainda não acessado"}
+                  </p>
+                  {Number(sale.public_access_failed_attempts || 0) > 0 && (
+                    <p className="mt-1 text-xs text-amber-700">{sale.public_access_failed_attempts} tentativa(s) incorreta(s)</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto] lg:items-start">
+                <div className="rounded-xl border border-dashed border-royal-200 bg-white p-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <KeyRound className="h-4 w-4 text-royal-600" />
+                    <p className="text-sm font-bold text-navy-900">Dados preparados para etiqueta térmica</p>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 text-sm text-gray-600 sm:grid-cols-2">
+                    <p><span className="font-semibold text-navy-900">Loja:</span> {labelData.store}</p>
+                    <p><span className="font-semibold text-navy-900">Compra:</span> {labelData.saleNumber}</p>
+                    <p><span className="font-semibold text-navy-900">Cliente:</span> {labelData.customer}</p>
+                    <p><span className="font-semibold text-navy-900">Produto:</span> {labelData.product}</p>
+                    <p><span className="font-semibold text-navy-900">Cor:</span> {labelData.color}</p>
+                    <p><span className="font-semibold text-navy-900">Estado:</span> {labelData.grade}</p>
+                    <p><span className="font-semibold text-navy-900">Saúde:</span> {labelData.batteryHealth}</p>
+                    <p><span className="font-semibold text-navy-900">Embalagem:</span> {labelData.packaging}</p>
+                    <p><span className="font-semibold text-navy-900">Data:</span> {labelData.date}</p>
+                  </div>
+                  <p className="mt-3 text-xs font-medium text-gray-500">Entregue este código apenas ao cliente da compra. {labelData.warning}.</p>
+                </div>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => refreshPublicAccess("regenerate_pin")}
+                  isLoading={publicAccessLoading === "regenerate_pin"}
+                  className="shrink-0"
+                >
+                  <RefreshCcw className="h-4 w-4" />
+                  Regenerar PIN
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {/* ── Aparelho Principal ── */}
       <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
         <div className="flex items-center gap-2 mb-4">
@@ -1146,6 +1317,56 @@ export default function SaleDetailPage() {
               <p className="text-xs text-gray-500">{sale?.supplier_name ? `Forn.: ${sale.supplier_name}` : "Fornecedor"}</p>
             )}
           </div>
+        </div>
+
+        <div className="mt-4 rounded-2xl border border-gray-100 bg-white p-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Pós-venda</p>
+              <h4 className="text-sm font-bold text-navy-900">Tipo de embalagem entregue</h4>
+              <p className="mt-1 text-xs text-gray-500">
+                Aparece no portal público e nos dados preparados para etiqueta.
+              </p>
+            </div>
+            <div className="grid w-full gap-3 lg:w-auto lg:min-w-[520px] lg:grid-cols-[210px_1fr_auto] lg:items-end">
+              <div>
+                <label className="mb-2 block text-sm font-medium text-navy-900">Tipo</label>
+                <select
+                  value={editPackagingType}
+                  onChange={(event) => {
+                    setEditPackagingType(event.target.value)
+                    if (event.target.value !== "other") setEditPackagingNotes("")
+                  }}
+                  className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                >
+                  {PACKAGING_OPTIONS.map((option) => (
+                    <option key={option.value || "empty"} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <Input
+                label="Observação"
+                placeholder={editPackagingType === "other" ? "Descreva a embalagem entregue" : "Disponível para Outro"}
+                value={editPackagingNotes}
+                onChange={(event) => setEditPackagingNotes(event.target.value)}
+                disabled={editPackagingType !== "other"}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleUpdatePackaging}
+                isLoading={isSubmitting}
+                className="h-11"
+              >
+                Salvar
+              </Button>
+            </div>
+          </div>
+          <p className="mt-3 text-sm text-gray-600">
+            Atual: <span className="font-semibold text-navy-900">{packagingLabel(sale?.packaging_type, sale?.packaging_notes)}</span>
+          </p>
         </div>
       </div>
 
@@ -1930,11 +2151,11 @@ export default function SaleDetailPage() {
             <div className="w-12 h-12 rounded-full bg-danger-100 flex items-center justify-center mx-auto mb-4">
               <AlertTriangle className="w-6 h-6 text-danger-500" />
             </div>
-            <h2 className="text-xl font-bold text-navy-900 mb-2">Excluir Venda?</h2>
-            <p className="text-sm text-gray-500 mb-6">Esta ação é irreversível. O aparelho principal, itens adicionais do estoque e trade-ins voltarão ao status "Em estoque" ou serão desfeitos. Todos os logs também serão perdidos.</p>
+            <h2 className="text-xl font-bold text-navy-900 mb-2">Cancelar venda?</h2>
+            <p className="text-sm text-gray-500 mb-6">A venda será marcada como cancelada, o estoque será liberado e recebimentos já conciliados serão estornados no extrato. O histórico financeiro e os registros da venda serão preservados.</p>
             <div className="flex gap-3">
               <Button variant="outline" className="flex-1" onClick={() => setIsDeleteModalOpen(false)}>Cancelar</Button>
-              <Button variant="primary" className="flex-1 bg-danger-500 border-danger-500 hover:bg-danger-600" onClick={handleDeleteSale} isLoading={isSubmitting}>Excluir</Button>
+              <Button variant="primary" className="flex-1 bg-danger-500 border-danger-500 hover:bg-danger-600" onClick={handleDeleteSale} isLoading={isSubmitting}>Cancelar venda</Button>
             </div>
           </div>
         </div>

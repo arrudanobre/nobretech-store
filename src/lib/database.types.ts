@@ -393,6 +393,71 @@ export interface Database {
           updated_at?: string | null;
         };
       };
+      marketing_leads: {
+        Row: {
+          id: string;
+          company_id: string;
+          campaign_id: string | null;
+          customer_id: string | null;
+          sale_id: string | null;
+          product_id: string | null;
+          name: string;
+          phone: string | null;
+          email: string | null;
+          source: string | null;
+          origin: string | null;
+          status: string;
+          product_interest: string | null;
+          notes: string | null;
+          next_action: string | null;
+          next_action_at: string | null;
+          lost_reason: string | null;
+          created_at: string | null;
+          updated_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          company_id?: string;
+          campaign_id?: string | null;
+          customer_id?: string | null;
+          sale_id?: string | null;
+          product_id?: string | null;
+          name: string;
+          phone?: string | null;
+          email?: string | null;
+          source?: string | null;
+          origin?: string | null;
+          status?: string;
+          product_interest?: string | null;
+          notes?: string | null;
+          next_action?: string | null;
+          next_action_at?: string | null;
+          lost_reason?: string | null;
+          created_at?: string | null;
+          updated_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          company_id?: string;
+          campaign_id?: string | null;
+          customer_id?: string | null;
+          sale_id?: string | null;
+          product_id?: string | null;
+          name?: string;
+          phone?: string | null;
+          email?: string | null;
+          source?: string | null;
+          origin?: string | null;
+          status?: string;
+          product_interest?: string | null;
+          notes?: string | null;
+          next_action?: string | null;
+          next_action_at?: string | null;
+          lost_reason?: string | null;
+          created_at?: string | null;
+          updated_at?: string | null;
+        };
+      };
       sales: {
         Row: {
           id: string;
@@ -412,7 +477,10 @@ export interface Database {
           source_type: string | null;
           sale_origin: string | null;
           marketing_campaign_id: string | null;
+          marketing_lead_id: string | null;
           lead_notes: string | null;
+          packaging_type: string | null;
+          packaging_notes: string | null;
           supplier_name: string | null;
           supplier_cost: number | null;
           sale_date: string;
@@ -437,7 +505,10 @@ export interface Database {
           source_type?: string | null;
           sale_origin?: string | null;
           marketing_campaign_id?: string | null;
+          marketing_lead_id?: string | null;
           lead_notes?: string | null;
+          packaging_type?: string | null;
+          packaging_notes?: string | null;
           supplier_name?: string | null;
           supplier_cost?: number | null;
           sale_date?: string;
@@ -462,7 +533,10 @@ export interface Database {
           source_type?: string | null;
           sale_origin?: string | null;
           marketing_campaign_id?: string | null;
+          marketing_lead_id?: string | null;
           lead_notes?: string | null;
+          packaging_type?: string | null;
+          packaging_notes?: string | null;
           supplier_name?: string | null;
           supplier_cost?: number | null;
           sale_date?: string;
@@ -766,6 +840,8 @@ export interface Database {
           name: string;
           cost_price: number;
           sale_price: number | null;
+          packaging_type: string | null;
+          packaging_notes: string | null;
           profit: number;
           created_at: string | null;
         };
@@ -778,6 +854,8 @@ export interface Database {
           name: string;
           cost_price: number;
           sale_price?: number | null;
+          packaging_type?: string | null;
+          packaging_notes?: string | null;
           created_at?: string | null;
         };
         Update: {
@@ -789,6 +867,8 @@ export interface Database {
           name?: string;
           cost_price?: number;
           sale_price?: number | null;
+          packaging_type?: string | null;
+          packaging_notes?: string | null;
           created_at?: string | null;
         };
       };

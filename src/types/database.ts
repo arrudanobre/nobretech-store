@@ -36,6 +36,7 @@ export type InventoryStatus =
   | 'pending'
   | 'active'
   | 'in_stock'
+  | 'reserved'
   | 'sold'
   | 'returned'
   | 'under_repair'
@@ -137,6 +138,17 @@ export interface Sale {
   source_type?: 'own' | 'supplier'
   supplier_name?: string
   supplier_cost?: number
+  sale_status?: 'reserved' | 'completed' | 'cancelled'
+  payment_due_date?: string
+  public_access_token?: string
+  public_access_pin?: string
+  public_access_enabled?: boolean
+  public_access_created_at?: string
+  public_access_last_viewed_at?: string
+  public_access_failed_attempts?: number
+  public_access_locked_until?: string
+  packaging_type?: 'original_box' | 'nobretech_box' | 'no_box' | 'other' | null
+  packaging_notes?: string | null
   sale_date: string
   notes?: string
   created_at: string
