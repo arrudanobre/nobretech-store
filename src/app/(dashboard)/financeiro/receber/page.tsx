@@ -12,6 +12,7 @@ import { supabase } from "@/lib/supabase"
 import { formatBRL, formatDate, todayISO } from "@/lib/helpers"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/toaster"
+import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 
 type FinanceAccount = { id: string; name: string; institution?: string | null }
 type ChartAccount = { id: string; name: string; cash_flow_type: string; financial_type: string; statement_section: string; level?: number | null; affects_dre?: boolean | null; sort_order?: number | null }
@@ -90,6 +91,7 @@ export default function ContasReceberPage() {
   const [quickDueDate, setQuickDueDate] = useState(todayISO())
   const [quickPayment, setQuickPayment] = useState("Pix")
   const [filter, setFilter] = useState<"open" | "today" | "week" | "received">("open")
+  const [receiptDate, setReceiptDate] = useState(todayISO())
   const { toast } = useToast()
 
   useEffect(() => {
@@ -303,7 +305,7 @@ export default function ContasReceberPage() {
           category: "Venda de produtos",
           description: item.description,
           amount: item.amount,
-          date: todayISO(),
+          date: receiptDate,
           due_date: item.due_date || item.date,
           payment_method: item.payment_method,
           status: "reconciled",
@@ -311,16 +313,23 @@ export default function ContasReceberPage() {
           source_type: "sale",
           source_id: item.id,
         }
-        const { error } = existingReceivable?.id
-          ? await (supabase.from("transactions") as any).update(receivablePayload).eq("id", existingReceivable.id)
-          : await (supabase.from("transactions") as any).insert(receivablePayload)
+        const { data: receivableRow, error } = existingReceivable?.id
+          ? await (supabase.from("transactions") as any).update(receivablePayload).eq("id", existingReceivable.id).select("id").single()
+          : await (supabase.from("transactions") as any).insert(receivablePayload).select("id").single()
         if (error) throw error
         await completeReservedSale(item.id)
+        const receivableTransactionId = receivableRow?.id || existingReceivable?.id
+        if (receivableTransactionId) {
+          const { data: { user } } = await supabase.auth.getUser()
+          await requestSyncTransactionMovement(String(receivableTransactionId), { createdBy: user?.id ?? null })
+        }
       } else {
         const { error } = await (supabase.from("transactions") as any)
-          .update({ account_id: selectedAccountId, date: todayISO(), status: "reconciled", reconciled_at: new Date().toISOString() })
+          .update({ account_id: selectedAccountId, date: receiptDate, status: "reconciled", reconciled_at: new Date().toISOString() })
           .eq("id", item.id)
         if (error) throw error
+        const { data: { user } } = await supabase.auth.getUser()
+        await requestSyncTransactionMovement(item.id, { createdBy: user?.id ?? null })
       }
       toast({ title: "Recebimento confirmado", type: "success" })
       fetchData()
@@ -382,7 +391,16 @@ export default function ContasReceberPage() {
           <h2 className="font-display font-bold text-2xl text-navy-900 font-syne">Contas a Receber</h2>
           <p className="text-sm text-gray-500">Vendas e receitas pendentes de entrada na conta da empresa.</p>
         </div>
-        <div className="flex flex-col gap-2 sm:flex-row">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+          <label className="flex flex-col gap-1 text-xs font-semibold text-gray-500">
+            Data do recebimento
+            <input
+              type="date"
+              value={receiptDate}
+              onChange={(event) => setReceiptDate(event.target.value)}
+              className="h-11 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-navy-900 shadow-sm outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+            />
+          </label>
           <select value={selectedAccountId} onChange={(event) => setSelectedAccountId(event.target.value)} className="h-11 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-navy-900 shadow-sm outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10">
             <option value="">Selecione uma conta</option>
             {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.institution ? ` · ${account.institution}` : ""}</option>)}

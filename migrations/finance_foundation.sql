@@ -37,7 +37,9 @@ UPDATE transactions SET status = 'pending' WHERE status IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions (account_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions (status);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_unique_source
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_unique_active_source
   ON transactions (company_id, source_type, source_id)
-  WHERE source_type IS NOT NULL AND source_id IS NOT NULL;
+  WHERE source_type IS NOT NULL
+    AND source_id IS NOT NULL
+    AND COALESCE(status, 'pending') <> 'cancelled';
 CREATE INDEX IF NOT EXISTS idx_finance_accounts_company ON finance_accounts (company_id);

@@ -46,7 +46,13 @@ type Sale = {
   notes?: string | null
   sale_status?: "reserved" | "completed" | "cancelled" | null
   inventory?: { id?: string | null; purchase_price?: number | null; suggested_price?: number | null; catalog?: { category?: string | null } | null } | null
-  sales_additional_items?: { type?: string | null; sale_price?: number | null; cost_price: number }[]
+  sales_additional_items?: {
+    type?: string | null
+    name?: string | null
+    sale_price?: number | null
+    cost_price: number
+    inventory?: { catalog?: { category?: string | null } | null } | null
+  }[]
 }
 
 type PurchaseItemCost = {
@@ -89,10 +95,6 @@ function addTo(values: number[], index: number, amount: number) {
   if (index >= 0 && index < 12) values[index] += amount
 }
 
-function saleNetRevenue(sale: Sale) {
-  return Number(sale.sale_price ?? sale.net_amount ?? 0)
-}
-
 function saleTotals(sale: Sale) {
   return calcSaleTotals({
     salePrice: sale.sale_price,
@@ -101,6 +103,7 @@ function saleTotals(sale: Sale) {
     additionalItems: (sale.sales_additional_items || []).map((item) => ({
       ...item,
       type: item.type || "upsell",
+      name: item.name || undefined,
       sale_price: item.sale_price ?? null,
     })),
     supplierCost: sale.supplier_cost ?? null,
@@ -113,26 +116,34 @@ function saleDiscount(sale: Sale) {
   return Math.max(0, suggestedMain - saleTotals(sale).valorPrincipal)
 }
 
-function saleCost(sale: Sale) {
-  const baseCost = Number(sale.supplier_cost ?? sale.inventory?.purchase_price ?? 0)
-  const additionalCost = (sale.sales_additional_items || []).reduce((sum, item) => sum + Number(item.cost_price || 0), 0)
-  return baseCost + additionalCost
+function isAccessoryCategory(categoryOrName: string) {
+  return /acess[oó]rio|accessor|accessories|airpods?|cabo|fonte|carregador|fone|pel[ií]cula|capa|pencil|caneta/i.test(categoryOrName)
 }
 
-function saleRevenueAccountName(sale: Sale) {
-  const category = String(sale.inventory?.catalog?.category || "").toLowerCase()
+function revenueAccountNameForCategory(categoryOrName?: string | null) {
+  const category = String(categoryOrName || "").toLowerCase()
   if (category.includes("iphone")) return "Venda de iPhones"
   if (category.includes("ipad")) return "Venda de iPads"
-  if (category.includes("acessor") || category.includes("airpods") || category.includes("cabo") || category.includes("fonte") || category.includes("pelicula") || category.includes("película")) return "Venda de acessórios"
+  if (isAccessoryCategory(category)) return "Venda de acessórios"
   return "Receitas diversas"
 }
 
-function saleCostAccountName(sale: Sale) {
-  const category = String(sale.inventory?.catalog?.category || "").toLowerCase()
-  if (category.includes("acessor") || category.includes("airpods") || category.includes("cabo") || category.includes("fonte") || category.includes("pelicula") || category.includes("película")) {
-    return "Custo de acessórios vendidos"
-  }
+function costAccountNameForCategory(categoryOrName?: string | null) {
+  const category = String(categoryOrName || "").toLowerCase()
+  if (isAccessoryCategory(category)) return "Custo de acessórios vendidos"
   return "Custo de compra de iPhones/iPads"
+}
+
+function saleRevenueAccountName(sale: Sale) {
+  return revenueAccountNameForCategory(sale.inventory?.catalog?.category)
+}
+
+function saleCostAccountName(sale: Sale) {
+  return costAccountNameForCategory(sale.inventory?.catalog?.category)
+}
+
+function additionalItemCategory(item: NonNullable<Sale["sales_additional_items"]>[number]) {
+  return item.inventory?.catalog?.category || item.name || null
 }
 
 function emptyMonths() {
@@ -274,15 +285,32 @@ export default function DrePage() {
       const index = monthIndex(sale.sale_date)
       const purchaseItem = sale.inventory?.id ? purchaseItemByInventoryId.get(sale.inventory.id) : null
       const baseCost = Number(sale.supplier_cost ?? purchaseItem?.unit_cost ?? sale.inventory?.purchase_price ?? 0)
-      const additionalCost = (sale.sales_additional_items || []).reduce((sum, item) => sum + Number(item.cost_price || 0), 0)
       const otherAllocated = Number(purchaseItem?.other_cost_allocated || 0)
       const freightAllocated = Number(purchaseItem?.freight_allocated || 0)
       const discount = saleDiscount(sale)
-      addAccountValue(chartAccountByName.get(saleRevenueAccountName(sale)) || chartAccounts.find((account) => account.code === "1.90"), index, saleNetRevenue(sale) + discount)
+      const totals = saleTotals(sale)
+
+      addAccountValue(chartAccountByName.get(saleRevenueAccountName(sale)) || chartAccounts.find((account) => account.code === "1.90"), index, totals.valorPrincipal + discount)
+      for (const item of sale.sales_additional_items || []) {
+        if (item.type === "upsell") {
+          addAccountValue(
+            chartAccountByName.get(revenueAccountNameForCategory(additionalItemCategory(item))) || chartAccounts.find((account) => account.code === "1.90"),
+            index,
+            Number(item.sale_price || 0)
+          )
+        }
+      }
       if (discount > 0) {
         addAccountValue(chartAccountByName.get("Descontos concedidos") || chartAccounts.find((account) => account.code === "2.01"), index, discount)
       }
-      addAccountValue(chartAccountByName.get(saleCostAccountName(sale)) || chartAccounts.find((account) => account.code === "3.01"), index, baseCost + additionalCost + otherAllocated)
+      addAccountValue(chartAccountByName.get(saleCostAccountName(sale)) || chartAccounts.find((account) => account.code === "3.01"), index, baseCost + otherAllocated)
+      for (const item of sale.sales_additional_items || []) {
+        addAccountValue(
+          chartAccountByName.get(costAccountNameForCategory(additionalItemCategory(item))) || chartAccounts.find((account) => account.code === "3.01"),
+          index,
+          Number(item.cost_price || 0)
+        )
+      }
       if (freightAllocated > 0) {
         addAccountValue(chartAccountByName.get("Frete de compra") || chartAccounts.find((account) => account.code === "3.03"), index, freightAllocated)
       }
@@ -385,7 +413,7 @@ export default function DrePage() {
         result: sumValues(result),
       },
     }
-  }, [chartAccounts, chartAccountByName, sales, transactions])
+  }, [chartAccounts, chartAccountByName, purchaseItemByInventoryId, sales, transactions])
 
   return (
     <div className="space-y-5 animate-fade-in">

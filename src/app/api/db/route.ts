@@ -21,11 +21,13 @@ const TABLES_WITH_COMPANY = new Set([
   "finance_accounts",
   "finance_credit_cards",
   "marketing_campaigns",
+  "marketing_leads",
   "finance_chart_accounts",
   "supplier_prices",
   "sales_additional_items",
   "audit_logs",
   "transactions",
+  "financial_account_movements",
 ])
 
 const JSON_COLUMNS: Record<string, Set<string>> = {
@@ -85,6 +87,11 @@ const NUMERIC_COLUMNS = new Set([
   "margin_pct",
   "budget_amount",
   "actual_spend",
+  "amount",
+  "balance_after",
+  "previous_balance",
+  "target_balance",
+  "difference_amount",
 ])
 
 function ident(value: string) {

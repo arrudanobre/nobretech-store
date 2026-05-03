@@ -9,6 +9,7 @@ import { Select } from "@/components/ui/select"
 import { useToast } from "@/components/ui/toaster"
 import { supabase } from "@/lib/supabase"
 import { CATEGORIES, GRADES, PRODUCT_CATALOG } from "@/lib/constants"
+import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 import {
   ArrowLeft,
   BadgeDollarSign,
@@ -40,6 +41,20 @@ const STATUS_OPTIONS = [
 ]
 const categoryOptions = CATEGORIES.map((category) => ({ label: category.label, value: category.value }))
 type ProductMode = "catalog" | "manual"
+
+type LinkedSaleInfo = {
+  id: string
+  sale_date: string
+  payment_due_date?: string | null
+  sale_status?: string | null
+  linkType: "principal" | "adicional"
+}
+
+type LinkedPurchaseInfo = {
+  id: string
+  purchase_date: string
+  transaction_id?: string | null
+}
 
 type SectionCardProps = {
   title: string
@@ -94,6 +109,10 @@ export default function EditProductPage() {
   const [productName, setProductName] = useState("")
   const [mode, setMode] = useState<ProductMode>("catalog")
   const [catalogId, setCatalogId] = useState<string | null>(null)
+  const [linkedSale, setLinkedSale] = useState<LinkedSaleInfo | null>(null)
+  const [linkedPurchase, setLinkedPurchase] = useState<LinkedPurchaseInfo | null>(null)
+  const [saleDate, setSaleDate] = useState("")
+  const [adjustFinancialDate, setAdjustFinancialDate] = useState(false)
   const [notes, setNotes] = useState("")
   const [category, setCategory] = useState("iphone")
   const [modelIdx, setModelIdx] = useState(0)
@@ -177,6 +196,10 @@ export default function EditProductPage() {
 
       setCatalogId(item.catalog_id || null)
       setNotes(item.notes || "")
+      setLinkedSale(null)
+      setLinkedPurchase(null)
+      setSaleDate("")
+      setAdjustFinancialDate(false)
 
       setFormData({
         storage: "",
@@ -233,6 +256,54 @@ export default function EditProductPage() {
         const fallbackName = item.notes || item.condition_notes?.replace(/^Acessório:\s*/, "") || "Produto manual"
         setCatalogName(hasDeviceSignals ? getProductName({ model: (PRODUCT_CATALOG[selection.categoryValue as keyof typeof PRODUCT_CATALOG]?.models[selection.modelIndex] as any)?.name, storage: selection.storage, color: selection.color }) : fallbackName)
         setProductName(hasDeviceSignals ? "" : fallbackName)
+      }
+
+      const { data: directSales, error: directSaleError } = await (supabase.from("sales") as any)
+        .select("id, sale_date, payment_due_date, sale_status")
+        .eq("inventory_id", productId)
+        .order("sale_date", { ascending: false })
+        .limit(1)
+      if (directSaleError) throw directSaleError
+
+      let sale = directSales?.[0] ? { ...directSales[0], linkType: "principal" as const } : null
+      if (!sale) {
+        const { data: additionalItems, error: additionalError } = await (supabase.from("sales_additional_items") as any)
+          .select("sale_id")
+          .eq("product_id", productId)
+          .limit(1)
+        if (additionalError) throw additionalError
+        const saleId = additionalItems?.[0]?.sale_id
+        if (saleId) {
+          const { data: additionalSales, error: additionalSaleError } = await (supabase.from("sales") as any)
+            .select("id, sale_date, payment_due_date, sale_status")
+            .eq("id", saleId)
+            .limit(1)
+          if (additionalSaleError) throw additionalSaleError
+          sale = additionalSales?.[0] ? { ...additionalSales[0], linkType: "adicional" as const } : null
+        }
+      }
+
+      if (sale) {
+        setLinkedSale(sale)
+        setSaleDate(toDateInputValue(sale.sale_date))
+      }
+
+      const { data: purchaseItems, error: purchaseItemError } = await (supabase.from("inventory_purchase_items") as any)
+        .select("purchase_id")
+        .eq("inventory_id", productId)
+        .limit(1)
+      if (purchaseItemError) throw purchaseItemError
+      const purchaseId = purchaseItems?.[0]?.purchase_id
+      if (purchaseId) {
+        const { data: purchases, error: purchaseError } = await (supabase.from("inventory_purchases") as any)
+          .select("id, purchase_date, transaction_id")
+          .eq("id", purchaseId)
+          .limit(1)
+        if (purchaseError) throw purchaseError
+        if (purchases?.[0]) {
+          setLinkedPurchase(purchases[0])
+          setFormData((prev) => ({ ...prev, purchase_date: toDateInputValue(purchases[0].purchase_date) || prev.purchase_date }))
+        }
       }
     } catch (err) {
       toast({ title: "Erro ao carregar produto", type: "error" })
@@ -330,6 +401,44 @@ export default function EditProductPage() {
         .eq("id", productId)
 
       if (error) throw error
+
+      if (linkedPurchase?.id && formData.purchase_date && formData.purchase_date !== toDateInputValue(linkedPurchase.purchase_date)) {
+        const { error: purchaseError } = await (supabase.from("inventory_purchases") as any)
+          .update({ purchase_date: formData.purchase_date })
+          .eq("id", linkedPurchase.id)
+        if (purchaseError) throw purchaseError
+
+        if (adjustFinancialDate && linkedPurchase.transaction_id) {
+          const { error: txError } = await (supabase.from("transactions") as any)
+            .update({ date: formData.purchase_date })
+            .eq("id", linkedPurchase.transaction_id)
+          if (txError) throw txError
+          await requestSyncTransactionMovement(linkedPurchase.transaction_id)
+        }
+      }
+
+      if (linkedSale?.id && saleDate && saleDate !== toDateInputValue(linkedSale.sale_date)) {
+        const { error: saleError } = await (supabase.from("sales") as any)
+          .update({ sale_date: saleDate })
+          .eq("id", linkedSale.id)
+        if (saleError) throw saleError
+
+        if (adjustFinancialDate) {
+          const { data: saleTransactions, error: txFindError } = await (supabase.from("transactions") as any)
+            .select("id")
+            .eq("source_type", "sale")
+            .eq("source_id", linkedSale.id)
+          if (txFindError) throw txFindError
+
+          for (const transaction of saleTransactions || []) {
+            const { error: txError } = await (supabase.from("transactions") as any)
+              .update({ date: saleDate })
+              .eq("id", transaction.id)
+            if (txError) throw txError
+            await requestSyncTransactionMovement(transaction.id)
+          }
+        }
+      }
 
       toast({ title: "Produto atualizado!", type: "success" })
       router.push(`/estoque/${productId}`)
@@ -575,12 +684,45 @@ export default function EditProductPage() {
                 />
               )}
               <Input
-                label="Data da compra"
+                label="Data de aquisição"
                 type="date"
                 value={formData.purchase_date}
                 onChange={(e) => updateField("purchase_date", e.target.value)}
               />
             </div>
+            <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+              <Input
+                label="Data de venda"
+                type="date"
+                value={saleDate}
+                disabled={!linkedSale}
+                onChange={(e) => setSaleDate(e.target.value)}
+              />
+              <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 text-sm lg:col-span-2">
+                <p className="font-semibold text-navy-900">
+                  {linkedSale ? `Venda ${linkedSale.linkType === "principal" ? "principal" : "como item adicional"}` : "Sem venda vinculada"}
+                </p>
+                <p className="mt-1 text-gray-500">
+                  {linkedSale
+                    ? "Ao salvar, a data operacional da venda será atualizada. A data financeira só muda se a opção abaixo estiver marcada."
+                    : "A data de venda aparece aqui quando o item já possui uma venda registrada."}
+                </p>
+              </div>
+            </div>
+            <label className="mt-4 flex items-start gap-3 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-900">
+              <input
+                type="checkbox"
+                checked={adjustFinancialDate}
+                onChange={(event) => setAdjustFinancialDate(event.target.checked)}
+                className="mt-0.5 h-5 w-5 shrink-0 accent-royal-500"
+              />
+              <span>
+                <span className="block font-semibold">Também ajustar a data financeira/extrato</span>
+                <span className="mt-1 block text-amber-800/80">
+                  Use apenas quando a entrada ou saída real do caixa também aconteceu nessa data. Desmarcado, o sistema preserva a data de conciliação em `transactions.date`.
+                </span>
+              </span>
+            </label>
           </SectionCard>
 
           <SectionCard
@@ -726,8 +868,13 @@ export default function EditProductPage() {
                 </div>
                 <div className="rounded-2xl bg-gray-50 p-3">
                   <CalendarDays className="mb-2 h-4 w-4 text-royal-600" />
-                  <p className="text-xs text-gray-500">Compra</p>
+                  <p className="text-xs text-gray-500">Aquisição</p>
                   <p className="font-bold text-navy-900">{formatDateBR(formData.purchase_date)}</p>
+                </div>
+                <div className="rounded-2xl bg-gray-50 p-3">
+                  <CalendarDays className="mb-2 h-4 w-4 text-royal-600" />
+                  <p className="text-xs text-gray-500">Venda</p>
+                  <p className="font-bold text-navy-900">{formatDateBR(saleDate)}</p>
                 </div>
                 <div className="rounded-2xl bg-gray-50 p-3">
                   <WalletCards className="mb-2 h-4 w-4 text-royal-600" />

@@ -5,8 +5,10 @@ import { useParams, useRouter } from "next/navigation"
 import { useToast } from "@/components/ui/toaster"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { LabelPreviewModal, VerifiedPurchaseCustomerLabel } from "@/components/labels/label-preview-modal"
 import { supabase } from "@/lib/supabase"
 import { formatBRL, formatDate, getAdditionalItemDisplayName, getTradeInDisplayName, getTradeInSummaryStatus, getInventoryStatusMeta, isPendingInventoryStatus, getProductName } from "@/lib/helpers"
+import { buildPublicPurchaseUrl, buildPurchaseCode, getFirstName, normalizePin, verifiedPurchaseLabelText, type VerifiedPurchaseCustomerLabelData } from "@/lib/label-utils"
 import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
 import { calculateSaleEconomics, estimateRiskReserve } from "@/lib/sale-economics"
 import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
@@ -15,7 +17,7 @@ import { generateWarrantyPDF as generateWarrantyTermDocument, generateReceiptPDF
 import jsPDF from "jspdf"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { ArrowLeft, ShieldCheck, FileText, CreditCard, User, ShoppingCart, AlertTriangle, Download, CheckCircle2, XCircle, MinusCircle, Loader2, Edit, Trash, Plus, Calendar, History, Trash2, Search, Megaphone, QrCode, Copy, ExternalLink, KeyRound, RefreshCcw } from "lucide-react"
+import { ArrowLeft, ShieldCheck, FileText, CreditCard, User, ShoppingCart, AlertTriangle, Download, CheckCircle2, XCircle, MinusCircle, Loader2, Edit, Trash, Plus, Calendar, History, Trash2, Search, Megaphone, QrCode, Copy, ExternalLink, RefreshCcw } from "lucide-react"
 
 const checklistLabels: Record<string, string> = {}
 for (const [cat, items] of Object.entries(CHECKLIST_TEMPLATES)) {
@@ -94,6 +96,7 @@ export default function SaleDetailPage() {
   const [auditLogs, setAuditLogs] = useState<any[]>([])
   const [isEditModalOpen, setIsEditModalOpen] = useState(false)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
+  const [isCustomerLabelOpen, setIsCustomerLabelOpen] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [publicAccessLoading, setPublicAccessLoading] = useState<string | null>(null)
   const [editDate, setEditDate] = useState("")
@@ -276,8 +279,8 @@ export default function SaleDetailPage() {
   }) : ""
   const tradeInGrade = tradeInInventory?.grade || tradeInData?.grade || null
   const isCompletedSale = (sale?.sale_status || "completed") === "completed"
-  const publicPurchaseUrl = typeof window !== "undefined" && sale?.public_access_token
-    ? `${window.location.origin}/compra-verificada/${sale.public_access_token}`
+  const publicPurchaseUrl = sale?.public_access_token
+    ? buildPublicPurchaseUrl(sale.public_access_token)
     : ""
 
   const copyToClipboard = async (value: string, label: string) => {
@@ -1041,21 +1044,14 @@ export default function SaleDetailPage() {
   const fullModel = `${catalog.model || "—"}${catalog.variant ? " " + catalog.variant : ""} ${catalog.storage || ""} ${catalog.color || ""}`.trim()
   const okCount = checklist.filter((i: any) => i.status === "ok").length
   const failCount = checklist.filter((i: any) => i.status === "fail").length
-  const labelCustomerName = (customer?.full_name || "Cliente").split(/\s+/)[0]
-  const labelData = {
-    store: "Nobretech Store",
-    saleNumber: `Compra NT-${String(sale?.id || id).slice(0, 8).toUpperCase()}`,
-    customer: labelCustomerName,
-    product: fullModel || "Aparelho",
-    color: catalog?.color || "Não informado",
-    grade: product?.grade || "Não informado",
-    batteryHealth: product?.battery_health ? `${product.battery_health}%` : "Não informado",
-    packaging: packagingLabel(sale?.packaging_type, sale?.packaging_notes),
-    date: sale?.sale_date ? formatDate(sale.sale_date) : "Não informado",
-    pin: sale?.public_access_pin || "------",
-    url: publicPurchaseUrl || "Gerar acesso para criar URL",
-    warning: "Não compartilhe sua senha",
+  const customerLabelData: VerifiedPurchaseCustomerLabelData = {
+    publicUrl: publicPurchaseUrl,
+    customerFirstName: getFirstName(customer?.full_name),
+    purchaseCode: buildPurchaseCode(sale?.id || id),
+    pin: normalizePin(sale?.public_access_pin),
+    warrantyEnd: sale?.warranty_end || null,
   }
+  const customerLabelFileName = `etiqueta-compra-${customerLabelData.purchaseCode.toLowerCase()}.png`
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -1205,22 +1201,33 @@ export default function SaleDetailPage() {
                 Gerar acesso da compra
               </Button>
             ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => window.open(publicPurchaseUrl, "_blank", "noopener,noreferrer")}
-                className="shrink-0"
-              >
-                <ExternalLink className="h-4 w-4" />
-                Abrir portal
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => setIsCustomerLabelOpen(true)}
+                  className="shrink-0"
+                >
+                  <Download className="h-4 w-4" />
+                  Gerar etiqueta do cliente
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => window.open(publicPurchaseUrl, "_blank", "noopener,noreferrer")}
+                  className="shrink-0"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  Abrir portal
+                </Button>
+              </div>
             )}
           </div>
 
           {sale?.public_access_token && sale?.public_access_pin && (
             <>
-              <div className="mt-5 grid grid-cols-1 gap-3 lg:grid-cols-[1.5fr_0.6fr_0.9fr]">
-                <div className="rounded-xl bg-surface p-4">
+              <div className="mt-5 grid min-w-0 grid-cols-1 gap-3">
+                <div className="min-w-0 rounded-xl bg-surface p-4">
                   <p className="mb-1 text-xs uppercase tracking-wider text-gray-400">URL pública</p>
                   <div className="flex min-w-0 items-center gap-2">
                     <p className="min-w-0 flex-1 truncate font-mono text-sm font-semibold text-navy-900">{publicPurchaseUrl}</p>
@@ -1229,56 +1236,39 @@ export default function SaleDetailPage() {
                     </Button>
                   </div>
                 </div>
-                <div className="rounded-xl bg-royal-50 p-4">
-                  <p className="mb-1 text-xs uppercase tracking-wider text-royal-500">PIN do cliente</p>
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="font-mono text-2xl font-bold tracking-[0.24em] text-navy-900">{sale.public_access_pin}</p>
-                    <Button variant="ghost" size="icon" title="Copiar PIN" onClick={() => copyToClipboard(sale.public_access_pin, "PIN")}>
-                      <Copy className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-                <div className="rounded-xl bg-surface p-4">
-                  <p className="mb-1 text-xs uppercase tracking-wider text-gray-400">Último acesso</p>
-                  <p className="text-sm font-semibold text-navy-900">
-                    {sale.public_access_last_viewed_at ? formatDate(sale.public_access_last_viewed_at) : "Ainda não acessado"}
-                  </p>
-                  {Number(sale.public_access_failed_attempts || 0) > 0 && (
-                    <p className="mt-1 text-xs text-amber-700">{sale.public_access_failed_attempts} tentativa(s) incorreta(s)</p>
-                  )}
-                </div>
-              </div>
 
-              <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto] lg:items-start">
-                <div className="rounded-xl border border-dashed border-royal-200 bg-white p-4">
-                  <div className="mb-3 flex items-center gap-2">
-                    <KeyRound className="h-4 w-4 text-royal-600" />
-                    <p className="text-sm font-bold text-navy-900">Dados preparados para etiqueta térmica</p>
+                <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)_auto] md:items-stretch">
+                  <div className="min-w-0 rounded-xl bg-royal-50 p-4">
+                    <p className="mb-1 text-xs uppercase tracking-wider text-royal-500">PIN do cliente</p>
+                    <div className="flex min-w-0 items-center justify-between gap-2">
+                      <p className="min-w-0 truncate font-mono text-2xl font-bold tracking-[0.18em] text-navy-900">{sale.public_access_pin}</p>
+                      <Button variant="ghost" size="icon" title="Copiar PIN" onClick={() => copyToClipboard(sale.public_access_pin, "PIN")}>
+                        <Copy className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
-                  <div className="grid grid-cols-1 gap-2 text-sm text-gray-600 sm:grid-cols-2">
-                    <p><span className="font-semibold text-navy-900">Loja:</span> {labelData.store}</p>
-                    <p><span className="font-semibold text-navy-900">Compra:</span> {labelData.saleNumber}</p>
-                    <p><span className="font-semibold text-navy-900">Cliente:</span> {labelData.customer}</p>
-                    <p><span className="font-semibold text-navy-900">Produto:</span> {labelData.product}</p>
-                    <p><span className="font-semibold text-navy-900">Cor:</span> {labelData.color}</p>
-                    <p><span className="font-semibold text-navy-900">Estado:</span> {labelData.grade}</p>
-                    <p><span className="font-semibold text-navy-900">Saúde:</span> {labelData.batteryHealth}</p>
-                    <p><span className="font-semibold text-navy-900">Embalagem:</span> {labelData.packaging}</p>
-                    <p><span className="font-semibold text-navy-900">Data:</span> {labelData.date}</p>
-                  </div>
-                  <p className="mt-3 text-xs font-medium text-gray-500">Entregue este código apenas ao cliente da compra. {labelData.warning}.</p>
-                </div>
 
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => refreshPublicAccess("regenerate_pin")}
-                  isLoading={publicAccessLoading === "regenerate_pin"}
-                  className="shrink-0"
-                >
-                  <RefreshCcw className="h-4 w-4" />
-                  Regenerar PIN
-                </Button>
+                  <div className="min-w-0 rounded-xl bg-surface p-4">
+                    <p className="mb-1 text-xs uppercase tracking-wider text-gray-400">Último acesso</p>
+                    <p className="text-sm font-semibold text-navy-900">
+                      {sale.public_access_last_viewed_at ? formatDate(sale.public_access_last_viewed_at) : "Ainda não acessado"}
+                    </p>
+                    {Number(sale.public_access_failed_attempts || 0) > 0 && (
+                      <p className="mt-1 text-xs text-amber-700">{sale.public_access_failed_attempts} tentativa(s) incorreta(s)</p>
+                    )}
+                  </div>
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => refreshPublicAccess("regenerate_pin")}
+                    isLoading={publicAccessLoading === "regenerate_pin"}
+                    className="h-full min-h-16 shrink-0 px-4"
+                  >
+                    <RefreshCcw className="h-4 w-4" />
+                    Regenerar PIN
+                  </Button>
+                </div>
               </div>
             </>
           )}
@@ -1410,6 +1400,17 @@ export default function SaleDetailPage() {
           </div>
         )
       })()}
+
+      {isCustomerLabelOpen && sale?.public_access_token && sale?.public_access_pin && (
+        <LabelPreviewModal
+          title="Etiqueta do cliente"
+          fileName={customerLabelFileName}
+          copyText={verifiedPurchaseLabelText(customerLabelData)}
+          onClose={() => setIsCustomerLabelOpen(false)}
+        >
+          {(onReady) => <VerifiedPurchaseCustomerLabel data={customerLabelData} onReady={onReady} />}
+        </LabelPreviewModal>
+      )}
 
       {/* ── Itens da Venda (principal + adicionais unificados) ── */}
       {additionalItems.length > 0 && (

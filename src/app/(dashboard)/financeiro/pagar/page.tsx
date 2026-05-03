@@ -11,6 +11,7 @@ import { supabase } from "@/lib/supabase"
 import { formatBRL, formatDate, formatPaymentMethod, todayISO } from "@/lib/helpers"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/toaster"
+import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 
 type FinanceAccount = { id: string; name: string; institution?: string | null }
 type ChartAccount = { id: string; name: string; cash_flow_type: string; financial_type: string; statement_section: string; level?: number | null; affects_dre?: boolean | null; sort_order?: number | null }
@@ -93,6 +94,7 @@ export default function ContasPagarPage() {
   const [quickPayment, setQuickPayment] = useState("Pix")
   const [search, setSearch] = useState("")
   const [filter, setFilter] = useState<"open" | "overdue" | "week" | "paid">("open")
+  const [paymentDate, setPaymentDate] = useState(todayISO())
   const { toast } = useToast()
 
   useEffect(() => {
@@ -317,12 +319,15 @@ export default function ContasPagarPage() {
       const { error } = await (supabase.from("transactions") as any)
         .update({
           account_id: selectedAccountId,
-          date: todayISO(),
+          date: paymentDate,
           status: "reconciled",
           reconciled_at: new Date().toISOString(),
         })
         .eq("id", item.id)
       if (error) throw error
+
+      const { data: { user } } = await supabase.auth.getUser()
+      await requestSyncTransactionMovement(item.id, { createdBy: user?.id ?? null })
 
       toast({ title: "Conta paga", type: "success" })
       fetchData()
@@ -380,7 +385,16 @@ export default function ContasPagarPage() {
           <h2 className="font-display font-bold text-2xl text-navy-900 font-syne">Contas a Pagar</h2>
           <p className="text-sm text-gray-500">Despesas pendentes, vencimentos e baixa por conta da empresa.</p>
         </div>
-        <div className="flex flex-col gap-2 sm:flex-row">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+          <label className="flex flex-col gap-1 text-xs font-semibold text-gray-500">
+            Data do pagamento
+            <input
+              type="date"
+              value={paymentDate}
+              onChange={(event) => setPaymentDate(event.target.value)}
+              className="h-11 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-navy-900 shadow-sm outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+            />
+          </label>
           <select
             value={selectedAccountId}
             onChange={(event) => setSelectedAccountId(event.target.value)}

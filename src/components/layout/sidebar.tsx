@@ -54,11 +54,13 @@ const staticNavItems: (Omit<NavItem, "badge"> & { badge?: { count?: number; defa
     items: [
       { label: "Painel Financeiro", href: "/financeiro" },
       { label: "Entradas e Saídas", href: "/financeiro/transacoes" },
+      { label: "Extrato da Conta", href: "/financeiro/extrato" },
       { label: "Contas a Receber", href: "/financeiro/receber" },
       { label: "Contas a Pagar", href: "/financeiro/pagar" },
       { label: "Cartões", href: "/financeiro/cartoes" },
       { label: "Gastos Mensais", href: "/financeiro/gastos" },
       { label: "ROI de Marketing", href: "/financeiro/marketing" },
+      { label: "CRM de Leads", href: "/financeiro/marketing/leads" },
       { label: "Taxas da Maquininha", href: "/financeiro/taxas" },
       { label: "DRE", href: "/financeiro/dre" },
       { label: "Plano de DRE", href: "/financeiro/plano-dre" },

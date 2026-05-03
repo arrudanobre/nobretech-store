@@ -10,6 +10,7 @@ import { supabase } from "@/lib/supabase"
 import { addMonthsISO, currentMonthKey, formatBRL, formatDate, formatPaymentMethod, monthRangeISO, todayISO } from "@/lib/helpers"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/toaster"
+import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 
 const ENTRADAS_CATEGORIES = ["Venda", "Reembolso", "Aporte do proprietário", "Outros"]
 
@@ -73,10 +74,15 @@ type UnifiedTransaction = {
   description: string
   amount: number
   date: string
+  operational_date?: string | null
+  operational_label?: string | null
+  financial_date?: string | null
   due_date?: string | null
   payment_method: string
   status: MovementStatus
   source: "sale" | "manual"
+  source_type?: string | null
+  source_id?: string | null
   notes?: string | null
 }
 
@@ -145,6 +151,22 @@ function resolveCardInvoice(card: CreditCardAccount, purchaseDate: string, force
 
 function movementDate(item: Pick<UnifiedTransaction, "date" | "due_date" | "status">) {
   return item.status === "reconciled" ? item.date : item.due_date || item.date
+}
+
+function financialDate(item: Pick<UnifiedTransaction, "date" | "due_date" | "status" | "financial_date">) {
+  return item.financial_date || movementDate(item)
+}
+
+function operationalDate(item: Pick<UnifiedTransaction, "operational_date" | "date">) {
+  return item.operational_date || item.date
+}
+
+function isLinkedOrigin(item: Pick<UnifiedTransaction, "source" | "source_type">) {
+  return item.source === "sale" || item.source_type === "inventory_purchase"
+}
+
+function dateOnly(value?: string | null) {
+  return String(value || "").slice(0, 10)
 }
 
 function isInMonth(date: string, start: string, end: string) {
@@ -250,7 +272,8 @@ export default function TransacoesPage() {
           .eq("is_active", true)
           .order("sort_order", { ascending: true }),
         (supabase.from("sales") as any)
-          .select("id, sale_date, payment_due_date, sale_price, net_amount, payment_method, inventory:inventory_id(catalog:catalog_id(model))")
+          .select("id, sale_date, payment_due_date, sale_status, sale_price, net_amount, payment_method, inventory:inventory_id(catalog:catalog_id(model))")
+          .neq("sale_status", "cancelled")
           .or(`and(sale_date.gte.${start},sale_date.lte.${endOfDay}),and(payment_due_date.gte.${start},payment_due_date.lte.${end})`)
           .order("sale_date", { ascending: false }),
         (supabase.from("transactions") as any)
@@ -279,10 +302,84 @@ export default function TransacoesPage() {
       ]))
       const chartAccountsData = chartAccountsRes.data || []
       setChartAccounts(chartAccountsData)
-      const transactions = transRes.data || []
+      let transactions = transRes.data || []
+      const operationalPurchasesRes = await (supabase.from("inventory_purchases") as any)
+        .select("id, purchase_date, transaction_id")
+        .gte("purchase_date", start)
+        .lte("purchase_date", end)
+      if (operationalPurchasesRes.error) throw new Error(operationalPurchasesRes.error.message)
+      const operationalPurchases = operationalPurchasesRes.data || []
+      const transactionIdsFromOperationalPurchases = operationalPurchases
+        .map((purchase: any) => purchase.transaction_id)
+        .filter(Boolean)
+        .map(String)
+      if (transactionIdsFromOperationalPurchases.length > 0) {
+        const existingTransactionIds = new Set(transactions.map((transaction: any) => String(transaction.id)))
+        const missingTransactionIds = transactionIdsFromOperationalPurchases.filter((id: string) => !existingTransactionIds.has(id))
+        if (missingTransactionIds.length > 0) {
+          const linkedPurchaseTransactionsRes = await (supabase.from("transactions") as any)
+            .select("*")
+            .in("id", missingTransactionIds)
+          if (linkedPurchaseTransactionsRes.error) throw new Error(linkedPurchaseTransactionsRes.error.message)
+          transactions = [...transactions, ...(linkedPurchaseTransactionsRes.data || [])]
+        }
+      }
+      const salesData = [...(salesRes.data || [])]
+      const salesById = new Map(salesData.map((sale: any) => [String(sale.id), sale]))
+      const saleIdsFromFinancialMonth = transactions
+        .filter((t: any) => t.source_type === "sale" && t.source_id)
+        .map((t: any) => String(t.source_id))
+        .filter((id: string) => !salesById.has(id))
+      if (saleIdsFromFinancialMonth.length > 0) {
+        const linkedSalesRes = await (supabase.from("sales") as any)
+          .select("id, sale_date, payment_due_date, sale_status, sale_price, net_amount, payment_method, inventory:inventory_id(catalog:catalog_id(model))")
+          .neq("sale_status", "cancelled")
+          .in("id", saleIdsFromFinancialMonth)
+        if (linkedSalesRes.error) throw new Error(linkedSalesRes.error.message)
+        for (const sale of linkedSalesRes.data || []) {
+          if (!salesById.has(String(sale.id))) {
+            salesById.set(String(sale.id), sale)
+            salesData.push(sale)
+          }
+        }
+      }
+
+      const saleIds = salesData.map((sale: any) => String(sale.id))
+      let saleTransactions = transactions.filter((t: any) => t.source_type === "sale" && t.source_id)
+      if (saleIds.length > 0) {
+        const saleTransactionsRes = await (supabase.from("transactions") as any)
+          .select("*")
+          .eq("source_type", "sale")
+          .in("source_id", saleIds)
+        if (saleTransactionsRes.error) throw new Error(saleTransactionsRes.error.message)
+        const saleTxById = new Map<string, any>()
+        for (const tx of [...saleTransactions, ...(saleTransactionsRes.data || [])]) {
+          saleTxById.set(String(tx.id), tx)
+        }
+        saleTransactions = Array.from(saleTxById.values())
+      }
+
+      const purchaseIds = transactions
+        .filter((t: any) => t.source_type === "inventory_purchase" && t.source_id)
+        .map((t: any) => String(t.source_id))
+      const purchaseDateById = new Map<string, string>()
+      for (const purchase of operationalPurchases) {
+        purchaseDateById.set(String(purchase.id), purchase.purchase_date)
+      }
+      if (purchaseIds.length > 0) {
+        const purchasesRes = await (supabase.from("inventory_purchases") as any)
+          .select("id, purchase_date")
+          .in("id", purchaseIds)
+        if (purchasesRes.error) throw new Error(purchasesRes.error.message)
+        for (const purchase of purchasesRes.data || []) {
+          purchaseDateById.set(String(purchase.id), purchase.purchase_date)
+        }
+      }
       const saleTransactionById = new Map<string, any>(
-        transactions
-          .filter((t: any) => t.source_type === "sale" && t.source_id)
+        saleTransactions
+          .filter((t: any) => t.source_id)
+          .filter((t: any) => t.status !== "cancelled")
+          .sort((a: any, b: any) => String(a.date || "").localeCompare(String(b.date || "")))
           .map((t: any) => [String(t.source_id), t])
       )
 
@@ -291,7 +388,7 @@ export default function TransacoesPage() {
         .map((t: any) => ({
           id: t.id,
           account_id: t.account_id,
-          account_name: t.account_id ? accountNameById.get(t.account_id) || "Conta não encontrada" : null,
+          account_name: t.account_id ? String(accountNameById.get(t.account_id) || "Conta não encontrada") : null,
           chart_account_id: t.chart_account_id,
           credit_card_id: t.credit_card_id,
           type: t.type,
@@ -299,37 +396,47 @@ export default function TransacoesPage() {
           description: t.description || t.category,
           amount: Number(t.amount),
           date: t.date,
+          operational_date: t.source_type === "inventory_purchase" && t.source_id ? purchaseDateById.get(String(t.source_id)) || t.date : null,
+          operational_label: t.source_type === "inventory_purchase" ? "Data de aquisição" : null,
+          financial_date: t.date,
           due_date: t.due_date,
           payment_method: t.payment_method || "-",
           status: t.status || "pending",
           source: "manual",
+          source_type: t.source_type || null,
+          source_id: t.source_id || null,
           notes: t.notes,
         }))
 
-      const sales: UnifiedTransaction[] = (salesRes.data || []).map((s: any) => {
+      const sales: UnifiedTransaction[] = salesData.map((s: any) => {
         const modelName = s.inventory?.catalog?.model || "Produto"
         const saleTransaction = saleTransactionById.get(String(s.id))
         const status = saleTransaction?.status === "reconciled" ? "reconciled" : "pending"
         return {
           id: s.id,
           account_id: saleTransaction?.account_id || null,
-          account_name: saleTransaction?.account_id ? accountNameById.get(saleTransaction.account_id) || "Conta não encontrada" : null,
+          account_name: saleTransaction?.account_id ? String(accountNameById.get(saleTransaction.account_id) || "Conta não encontrada") : null,
           type: "income",
           category: "Venda",
           description: `Venda · ${modelName}`,
           amount: Number(s.net_amount ?? s.sale_price ?? 0),
           date: saleTransaction?.date || s.sale_date,
+          operational_date: s.sale_date,
+          operational_label: "Data da venda",
+          financial_date: saleTransaction?.date || null,
           due_date: s.payment_due_date || null,
           payment_method: s.payment_method || "Não informado",
           status,
           source: "sale",
+          source_type: "sale",
+          source_id: s.id,
         }
       })
 
       setData(
         [...manual, ...sales]
-          .filter((item) => isInMonth(movementDate(item), start, end))
-          .sort((a, b) => new Date(movementDate(b)).getTime() - new Date(movementDate(a)).getTime())
+          .filter((item) => isInMonth(financialDate(item), start, end) || (isLinkedOrigin(item) && isInMonth(operationalDate(item), start, end)))
+          .sort((a, b) => new Date(financialDate(b)).getTime() - new Date(financialDate(a)).getTime())
       )
     } catch (error: any) {
       toast({ title: "Erro ao carregar movimentações", description: error.message, type: "error" })
@@ -465,14 +572,16 @@ export default function TransacoesPage() {
       }
 
       let error: any = null
+      const syncIds: string[] = []
       if (editingItem) {
         const result = await (supabase.from("transactions") as any).update({
           ...basePayload,
           amount,
           due_date: baseDueDate || null,
           notes: formNotes.trim() || null,
-        }).eq("id", editingItem.id)
+        }).eq("id", editingItem.id).select("id")
         error = result.error
+        if (!error) syncIds.push(String(editingItem.id))
       } else if (isMultiExpense) {
         const installmentAmount = repeatMode === "installments" ? Math.round((amount / totalRepeats) * 100) / 100 : amount
         const installmentRemainder = repeatMode === "installments" ? Math.round((amount - installmentAmount * (totalRepeats - 1)) * 100) / 100 : amount
@@ -489,19 +598,26 @@ export default function TransacoesPage() {
             notes: [formNotes.trim(), `${kindLabel}: ${suffix}`].filter(Boolean).join(" · ") || null,
           }
         })
-        const result = await (supabase.from("transactions") as any).insert(rows)
+        const result = await (supabase.from("transactions") as any).insert(rows).select("id")
         error = result.error
+        if (!error) syncIds.push(...(result.data || []).map((row: { id: string }) => String(row.id)))
       } else {
         const result = await (supabase.from("transactions") as any).insert({
           ...basePayload,
           amount,
           due_date: baseDueDate || null,
           notes: formNotes.trim() || null,
-        })
+        }).select("id")
         error = result.error
+        if (!error && result.data?.[0]?.id) syncIds.push(String(result.data[0].id))
       }
 
       if (error) throw error
+
+      const { data: { user } } = await supabase.auth.getUser()
+      for (const id of syncIds) {
+        await requestSyncTransactionMovement(id, { createdBy: user?.id ?? null })
+      }
 
       closeModal()
       const nextAccount = findFallbackChartAccount(formType, formType === "income" ? "Receitas diversas" : "Outras despesas operacionais")
@@ -557,7 +673,7 @@ export default function TransacoesPage() {
       if (filterStatus !== "all" && item.status !== filterStatus) return false
       if (filterScope === "sales" && item.source !== "sale") return false
       if (filterScope === "manual" && item.source !== "manual") return false
-      if (filterScope === "stock" && item.category !== "Estoque (Peças/Acessórios)") return false
+      if (filterScope === "stock" && item.source_type !== "inventory_purchase" && item.category !== "Estoque (Peças/Acessórios)") return false
       if (filterScope === "owners" && !["Retirada de Lucro", "Aporte do proprietário"].includes(item.category)) return false
       if (!query) return true
       return [
@@ -596,7 +712,7 @@ export default function TransacoesPage() {
     all: data.length,
     sales: data.filter((item) => item.source === "sale").length,
     manual: data.filter((item) => item.source === "manual").length,
-    stock: data.filter((item) => item.category === "Estoque (Peças/Acessórios)").length,
+    stock: data.filter((item) => item.source_type === "inventory_purchase" || item.category === "Estoque (Peças/Acessórios)").length,
     owners: data.filter((item) => ["Retirada de Lucro", "Aporte do proprietário"].includes(item.category)).length,
   }), [data])
 
@@ -721,7 +837,7 @@ export default function TransacoesPage() {
                   <tr className="border-b border-gray-100 bg-gray-50/80">
                     <th className="px-5 py-3 text-xs font-bold uppercase tracking-wider text-gray-400">Movimento</th>
                     <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-gray-400">Categoria</th>
-                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-gray-400">Data</th>
+                    <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-gray-400">Datas</th>
                     <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-gray-400">Conta</th>
                     <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-gray-400">Pagamento</th>
                     <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider text-gray-400">Status</th>
@@ -1119,7 +1235,6 @@ function MovementRow({
   deletingId: string | null
 }) {
   const canManage = item.source === "manual"
-  const displayDate = movementDate(item)
   return (
     <tr className="transition-colors hover:bg-gray-50/70">
       <td className="px-5 py-4">
@@ -1127,12 +1242,12 @@ function MovementRow({
           <MovementIcon item={item} />
           <div>
             <p className="font-semibold text-navy-900">{item.description}</p>
-            <p className="text-xs text-gray-500">{item.source === "sale" ? "Venda do sistema" : "Lançamento manual"}</p>
+            <p className="text-xs text-gray-500">{movementSourceLabel(item)}</p>
           </div>
         </div>
       </td>
       <td className="px-4 py-4 text-sm text-gray-600">{item.category}</td>
-      <td className="px-4 py-4 text-sm text-gray-600">{formatDate(displayDate)}</td>
+      <td className="px-4 py-4 text-sm text-gray-600"><MovementDates item={item} /></td>
       <td className="px-4 py-4 text-sm text-gray-600">
         <AccountLabel item={item} />
       </td>
@@ -1169,7 +1284,6 @@ function MovementCard({
   deletingId: string | null
 }) {
   const canManage = item.source === "manual"
-  const displayDate = movementDate(item)
   return (
     <div className="p-4">
       <div className="flex items-start justify-between gap-3">
@@ -1177,7 +1291,8 @@ function MovementCard({
           <MovementIcon item={item} />
           <div className="min-w-0">
             <p className="truncate font-semibold text-navy-900">{item.description}</p>
-            <p className="text-xs text-gray-500">{item.category} · {formatDate(displayDate)}</p>
+            <p className="text-xs text-gray-500">{item.category}</p>
+            <div className="mt-1"><MovementDates item={item} compact /></div>
             <p className="mt-1 text-xs text-gray-400"><AccountLabel item={item} /></p>
             <div className="mt-2"><StatusBadge status={item.status} /></div>
           </div>
@@ -1254,6 +1369,39 @@ function AccountLabel({ item }: { item: UnifiedTransaction }) {
   if (item.account_name) return <span>{item.account_name}</span>
   if (item.status === "reconciled") return <span className="text-red-500">Conta não vinculada</span>
   return <span className="text-gray-400">{item.type === "income" ? "A receber" : "A pagar"}</span>
+}
+
+function movementSourceLabel(item: UnifiedTransaction) {
+  if (item.source === "sale") return "Venda do sistema"
+  if (item.source_type === "inventory_purchase") return "Compra de estoque"
+  return "Lançamento manual"
+}
+
+function MovementDates({ item, compact = false }: { item: UnifiedTransaction; compact?: boolean }) {
+  const opDate = operationalDate(item)
+  const finDate = financialDate(item)
+  const hasLinkedOrigin = isLinkedOrigin(item)
+  const datesDiffer = dateOnly(opDate) !== dateOnly(finDate)
+  const operationLabel = item.operational_label || "Data"
+
+  if (!hasLinkedOrigin) {
+    return <span>{formatDate(finDate)}</span>
+  }
+
+  return (
+    <div className={cn("space-y-1", compact && "text-xs")}>
+      <div>
+        <span className="block text-[11px] font-semibold uppercase tracking-wide text-gray-400">{operationLabel}</span>
+        <span className="font-medium text-gray-700">{formatDate(opDate)}</span>
+      </div>
+      {datesDiffer ? (
+        <div>
+          <span className="block text-[11px] font-semibold uppercase tracking-wide text-royal-400">Data financeira</span>
+          <span className="font-medium text-royal-700">{formatDate(finDate)}</span>
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 function MovementIcon({ item }: { item: UnifiedTransaction }) {

@@ -5,7 +5,9 @@ import { useRouter, useParams } from "next/navigation"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { InventoryStockLabel, LabelPreviewModal } from "@/components/labels/label-preview-modal"
 import { formatBRL, daysBetween, buildPriceTable, getInventoryStatusMeta, getComputedInventoryStatus, getProductName, getTradeInOriginLabel, isPendingInventoryStatus } from "@/lib/helpers"
+import { buildInventoryStockCode, inventoryLabelText, type InventoryStockLabelData } from "@/lib/label-utils"
 import { CATEGORIES, GRADES, CHECKLIST_TEMPLATES, SIDEPAY_FEE_PCTS } from "@/lib/constants"
 import { calculateSaleEconomics, estimateRiskReserve } from "@/lib/sale-economics"
 import { supabase } from "@/lib/supabase"
@@ -54,6 +56,7 @@ export default function ProductDetailPage() {
   const [settings, setSettings] = useState<any>(null)
   const [saleData, setSaleData] = useState<any>(null)
   const [showAllPayments, setShowAllPayments] = useState(false)
+  const [isStockLabelOpen, setIsStockLabelOpen] = useState(false)
 
   const fetchProduct = useCallback(async () => {
     if (!productId) return
@@ -286,6 +289,18 @@ export default function ProductDetailPage() {
   const stockMessage = days > 45 ? "girar estoque" : days > 20 ? "monitorar" : "saudável"
   const keyPayments = priceTable.filter((row: any) => ["cash", "pix", "debit", "credit_12x", "credit_18x"].includes(row.method))
   const visiblePayments = showAllPayments ? priceTable : keyPayments
+  const stockLabelData: InventoryStockLabelData = {
+    stockCode: buildInventoryStockCode(product.id),
+    model: product.catalog?.model || catalogName,
+    storage: product.catalog?.storage || null,
+    color: product.catalog?.color || null,
+    grade: product.grade || null,
+    batteryHealth: product.battery_health || null,
+    imei: product.imei || null,
+    serial: product.serial_number || null,
+    packaging: null,
+  }
+  const stockLabelFileName = `etiqueta-estoque-${stockLabelData.stockCode.toLowerCase()}.png`
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -303,6 +318,9 @@ export default function ProductDetailPage() {
           </div>
         </div>
         <div className="flex gap-2 sm:ml-auto">
+          <Button variant="outline" size="sm" onClick={() => setIsStockLabelOpen(true)}>
+            <Download className="w-4 h-4" /> Gerar etiqueta de estoque
+          </Button>
           <Link href={`/estoque/${productId}/editar`}>
             <Button variant="outline" size="sm">
               <Edit3 className="w-4 h-4" /> Editar
@@ -557,6 +575,17 @@ export default function ProductDetailPage() {
           <h3 className="font-display font-bold text-navy-900 font-syne mb-2">Observações</h3>
           <p className="text-sm text-gray-600 leading-relaxed">{product.condition_notes}</p>
         </div>
+      )}
+
+      {isStockLabelOpen && (
+        <LabelPreviewModal
+          title="Etiqueta de estoque"
+          fileName={stockLabelFileName}
+          copyText={inventoryLabelText(stockLabelData)}
+          onClose={() => setIsStockLabelOpen(false)}
+        >
+          {(onReady) => <InventoryStockLabel data={stockLabelData} onReady={onReady} />}
+        </LabelPreviewModal>
       )}
 
       {/* Hidden PDF content — for html2canvas rendering */}

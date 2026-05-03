@@ -8,6 +8,7 @@ import { supabase } from "@/lib/supabase"
 import { addMonthsISO, formatBRL, formatDate, todayISO } from "@/lib/helpers"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/toaster"
+import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 
 const METHODS = ["Dinheiro", "Pix", "Cartão de Crédito", "Cartão de Débito", "Transferência"]
 
@@ -308,6 +309,7 @@ export function FinanceTransactionModal({
       }
 
       let error: any = null
+      const syncIds: string[] = []
       if (isMultiExpense) {
         const installmentAmount = repeatMode === "installments" ? Math.round((amount / totalRepeats) * 100) / 100 : amount
         const installmentRemainder = repeatMode === "installments" ? Math.round((amount - installmentAmount * (totalRepeats - 1)) * 100) / 100 : amount
@@ -324,19 +326,26 @@ export function FinanceTransactionModal({
             notes: [formNotes.trim(), `${kindLabel}: ${suffix}`].filter(Boolean).join(" · ") || null,
           }
         })
-        const result = await (supabase.from("transactions") as any).insert(rows)
+        const result = await (supabase.from("transactions") as any).insert(rows).select("id")
         error = result.error
+        if (!error) syncIds.push(...(result.data || []).map((row: { id: string }) => String(row.id)))
       } else {
         const result = await (supabase.from("transactions") as any).insert({
           ...basePayload,
           amount,
           due_date: baseDueDate || null,
           notes: formNotes.trim() || null,
-        })
+        }).select("id")
         error = result.error
+        if (!error && result.data?.[0]?.id) syncIds.push(String(result.data[0].id))
       }
 
       if (error) throw error
+
+      const { data: { user } } = await supabase.auth.getUser()
+      for (const id of syncIds) {
+        await requestSyncTransactionMovement(id, { createdBy: user?.id ?? null })
+      }
       toast({ title: repeatMode === "single" ? "Lançamento registrado" : "Lançamentos gerados", type: "success" })
       onClose()
       onSaved?.()

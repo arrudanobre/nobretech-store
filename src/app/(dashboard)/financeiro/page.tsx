@@ -12,6 +12,8 @@ import { supabase } from "@/lib/supabase"
 import { currentMonthKey, formatBRL, formatDate, getProductName, monthRangeISO, todayISO } from "@/lib/helpers"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/toaster"
+import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
+import { upsertSaleReceivable } from "@/lib/finance/sale-receivable-client"
 
 type FinanceAccount = {
   id: string
@@ -19,7 +21,6 @@ type FinanceAccount = {
   institution?: string | null
   account_type?: string | null
   opening_balance?: number
-  current_balance?: number | null
   color?: string | null
   is_active?: boolean
 }
@@ -39,6 +40,15 @@ type Transaction = {
   source_id?: string | null
   due_date?: string | null
   credit_card_id?: string | null
+}
+
+type FinancialAccountMovement = {
+  id: string
+  account_id?: string | null
+  amount: number
+  movement_date: string
+  is_canceled?: boolean | null
+  reversal_of_id?: string | null
 }
 
 type ChartAccount = {
@@ -148,7 +158,7 @@ export default function FinanceiroPage() {
   const [accounts, setAccounts] = useState<FinanceAccount[]>([])
   const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
-  const [balanceTransactions, setBalanceTransactions] = useState<Transaction[]>([])
+  const [accountMovements, setAccountMovements] = useState<FinancialAccountMovement[]>([])
   const [projectionTransactions, setProjectionTransactions] = useState<Transaction[]>([])
   const [projectionSales, setProjectionSales] = useState<Sale[]>([])
   const [sales, setSales] = useState<Sale[]>([])
@@ -162,9 +172,6 @@ export default function FinanceiroPage() {
   const [selectedAccountId, setSelectedAccountId] = useState("")
   const [reconcilingId, setReconcilingId] = useState<string | null>(null)
   const [undoConfirmId, setUndoConfirmId] = useState<string | null>(null)
-  const [editingBalanceId, setEditingBalanceId] = useState<string | null>(null)
-  const [accountBalanceInput, setAccountBalanceInput] = useState("R$ 0,00")
-  const [savingBalanceId, setSavingBalanceId] = useState<string | null>(null)
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null)
   const [editAccountName, setEditAccountName] = useState("")
   const [editAccountInstitution, setEditAccountInstitution] = useState("")
@@ -181,11 +188,11 @@ export default function FinanceiroPage() {
     setLoading(true)
     try {
       const { start, end, endOfDay } = monthRangeISO(month)
-      const [accountsRes, chartAccountsRes, transactionsRes, balanceTransactionsRes, projectionTransactionsRes, projectionSalesRes, salesRes, inventoryRes] = await Promise.all([
+      const [accountsRes, chartAccountsRes, transactionsRes, accountMovementsRes, projectionTransactionsRes, projectionSalesRes, salesRes, inventoryRes] = await Promise.all([
         (supabase.from("finance_accounts") as any).select("*").eq("is_active", true).order("created_at", { ascending: true }),
         (supabase.from("finance_chart_accounts") as any).select("*").eq("is_active", true).order("sort_order", { ascending: true }),
         (supabase.from("transactions") as any).select("*").gte("date", start).lte("date", end).order("date", { ascending: false }),
-        (supabase.from("transactions") as any).select("*").eq("status", "reconciled").order("date", { ascending: true }),
+        (supabase.from("financial_account_movements") as any).select("id, account_id, amount, movement_date, is_canceled, reversal_of_id").order("movement_date", { ascending: true }),
         (supabase.from("transactions") as any).select("*").or("status.is.null,status.neq.cancelled").order("due_date", { ascending: true }),
         (supabase.from("sales") as any)
           .select("id, sale_date, payment_due_date, sale_status, sale_price, net_amount, payment_method, inventory:inventory_id(catalog:catalog_id(model))")
@@ -204,7 +211,7 @@ export default function FinanceiroPage() {
       if (accountsRes.error) throw new Error(accountsRes.error.message)
       if (chartAccountsRes.error) throw new Error(chartAccountsRes.error.message)
       if (transactionsRes.error) throw new Error(transactionsRes.error.message)
-      if (balanceTransactionsRes.error) throw new Error(balanceTransactionsRes.error.message)
+      if (accountMovementsRes.error) throw new Error(accountMovementsRes.error.message)
       if (projectionTransactionsRes.error) throw new Error(projectionTransactionsRes.error.message)
       if (projectionSalesRes.error) throw new Error(projectionSalesRes.error.message)
       if (salesRes.error) throw new Error(salesRes.error.message)
@@ -220,7 +227,11 @@ export default function FinanceiroPage() {
       setAccounts(accountsRes.data || [])
       setChartAccounts(chartAccountsRes.data || [])
       setTransactions((transactionsRes.data || []).map((item: any) => ({ ...item, amount: Number(item.amount || 0) })))
-      setBalanceTransactions((balanceTransactionsRes.data || []).map((item: any) => ({ ...item, amount: Number(item.amount || 0) })))
+      setAccountMovements((accountMovementsRes.data || []).map((item: any) => ({
+        ...item,
+        movement_date: toDateOnly(item.movement_date),
+        amount: Number(item.amount || 0),
+      })))
       setProjectionTransactions((projectionTransactionsRes.data || [])
         .filter((item: any) => item.source_type !== "sale" || validProjectionSaleIds.has(String(item.source_id)))
         .map((item: any) => ({ ...item, amount: Number(item.amount || 0) })))
@@ -245,14 +256,18 @@ export default function FinanceiroPage() {
 
   const accountBalances = useMemo(() => {
     return accounts.map((account) => {
-      const ledger = balanceTransactions
-        .filter((t) => t.account_id === account.id && t.status === "reconciled")
-        .reduce((sum, t) => sum + (t.type === "income" ? Number(t.amount) : -Number(t.amount)), 0)
-      const baseBalance = Number(account.current_balance ?? account.opening_balance ?? 0)
-      const balance = baseBalance + ledger
+      const balance = accountMovements
+        .filter((movement) => movement.account_id === account.id)
+        .reduce((sum, movement) => sum + Number(movement.amount || 0), 0)
+      const baseBalance = 0
+      const ledger = balance
       return { ...account, baseBalance, ledger, balance }
     })
-  }, [accounts, balanceTransactions])
+  }, [accountMovements, accounts])
+
+  const statementBalance = useMemo(() => {
+    return accountMovements.reduce((sum, movement) => sum + Number(movement.amount || 0), 0)
+  }, [accountMovements])
 
   useEffect(() => {
     if (accountBalances.length === 0) {
@@ -334,7 +349,7 @@ export default function FinanceiroPage() {
     const breakEvenProgress = breakEvenRevenue > 0 ? Math.min(100, Math.round((salesRevenue / breakEvenRevenue) * 100)) : 0
     const averageTicket = completedSales.length > 0 ? salesRevenue / completedSales.length : 0
     const salesNeeded = averageTicket > 0 ? Math.ceil(breakEvenGap / averageTicket) : 0
-    const accountTotal = accountBalances.reduce((sum, account) => sum + account.balance, 0)
+    const accountTotal = statementBalance
     const pendingSales = sales.filter((sale) => (sale.sale_status || "completed") !== "cancelled" && !reconciledSaleIds.has(sale.id))
     const pendingTransactions = transactions.filter((t) => t.source_type !== "sale" && t.status !== "reconciled" && t.status !== "cancelled")
     const pendingAmount =
@@ -374,7 +389,7 @@ export default function FinanceiroPage() {
       pendingTransactions,
       pendingAmount,
     }
-  }, [accountBalances, chartAccountById, chartAccountByName, reconciledSaleIds, sales, transactions])
+  }, [chartAccountById, chartAccountByName, reconciledSaleIds, sales, statementBalance, transactions])
 
   const cashProjection = useMemo(() => {
     const today = todayISO()
@@ -514,21 +529,26 @@ export default function FinanceiroPage() {
 
   const flowChart = useMemo(() => {
     const days = new Map<string, { date: string; entradas: number; saidas: number; saldo: number }>()
-    for (const t of transactions) {
-      if (t.status !== "reconciled") continue
-      const row = days.get(t.date) || { date: t.date, entradas: 0, saidas: 0, saldo: 0 }
-      if (t.type === "income") row.entradas += Number(t.amount)
-      else row.saidas += Number(t.amount)
-      days.set(t.date, row)
+    const { start, end } = monthRangeISO(month)
+    let running = accountMovements
+      .filter((movement) => movement.movement_date < start)
+      .reduce((sum, movement) => sum + Number(movement.amount || 0), 0)
+
+    for (const movement of accountMovements) {
+      if (movement.movement_date < start || movement.movement_date > end) continue
+      const row = days.get(movement.movement_date) || { date: movement.movement_date, entradas: 0, saidas: 0, saldo: 0 }
+      if (movement.amount >= 0) row.entradas += Number(movement.amount)
+      else row.saidas += Math.abs(Number(movement.amount))
+      days.set(movement.movement_date, row)
     }
-    let running = accountBalances.reduce((sum, account) => sum + account.baseBalance, 0)
+
     return Array.from(days.values())
       .sort((a, b) => a.date.localeCompare(b.date))
       .map((row) => {
         running += row.entradas - row.saidas
         return { ...row, dia: row.date.slice(8, 10), saldo: running }
       })
-  }, [accountBalances, transactions])
+  }, [accountMovements, month])
 
   const expensesByCategory = useMemo(() => {
     const grouped = new Map<string, number>()
@@ -606,32 +626,31 @@ export default function FinanceiroPage() {
     setReconcilingId(movement.id)
     try {
       if (movement.kind === "sale") {
-        if (reconciledSaleIds.has(movement.id)) {
-          toast({ title: "Venda já conciliada", type: "success" })
-          return
-        }
         const sale = sales.find((item) => item.id === movement.id)
         if (!sale) return
-        const { error } = await (supabase.from("transactions") as any).insert({
-          account_id: defaultAccount.id,
-          chart_account_id: salesRevenueAccount?.id || null,
-          type: "income",
-          category: salesRevenueAccount?.name || "Venda",
-          description: movement.description,
+        const { data: { user } } = await supabase.auth.getUser()
+        const transactionId = await upsertSaleReceivable({
+          supabase,
+          saleId: sale.id,
+          accountId: defaultAccount.id,
+          chartAccountId: salesRevenueAccount?.id || null,
           amount: saleNetRevenue(sale),
-          date: sale.sale_date,
-          payment_method: sale.payment_method || null,
+          saleDate: todayISO(),
+          dueDate: sale.payment_due_date || sale.sale_date,
+          paymentMethod: sale.payment_method || null,
+          description: movement.description,
           status: "reconciled",
-          reconciled_at: new Date().toISOString(),
-          source_type: "sale",
-          source_id: sale.id,
         })
-        if (error) throw error
+        if (transactionId) {
+          await requestSyncTransactionMovement(transactionId, { createdBy: user?.id ?? null })
+        }
       } else {
         const { error } = await (supabase.from("transactions") as any)
           .update({ account_id: defaultAccount.id, status: "reconciled", reconciled_at: new Date().toISOString() })
           .eq("id", movement.id)
         if (error) throw error
+        const { data: { user } } = await supabase.auth.getUser()
+        await requestSyncTransactionMovement(movement.id, { createdBy: user?.id ?? null })
       }
       toast({ title: "Movimento conciliado", type: "success" })
       fetchFinance()
@@ -646,16 +665,28 @@ export default function FinanceiroPage() {
     setReconcilingId(movement.id)
     try {
       if (movement.kind === "sale") {
-        const { error } = await (supabase.from("transactions") as any)
-          .delete()
+        const { data: saleTx } = await (supabase.from("transactions") as any)
+          .select("id")
           .eq("source_type", "sale")
           .eq("source_id", movement.id)
-        if (error) throw error
+          .neq("status", "cancelled")
+          .limit(1)
+          .maybeSingle()
+        if (saleTx?.id) {
+          const { error } = await (supabase.from("transactions") as any)
+            .update({ account_id: null, status: "pending", reconciled_at: null })
+            .eq("id", saleTx.id)
+          if (error) throw error
+          const { data: { user } } = await supabase.auth.getUser()
+          await requestSyncTransactionMovement(String(saleTx.id), { createdBy: user?.id ?? null })
+        }
       } else {
         const { error } = await (supabase.from("transactions") as any)
           .update({ account_id: null, status: "pending", reconciled_at: null })
           .eq("id", movement.id)
         if (error) throw error
+        const { data: { user } } = await supabase.auth.getUser()
+        await requestSyncTransactionMovement(movement.id, { createdBy: user?.id ?? null })
       }
       setUndoConfirmId(null)
       toast({ title: "Conciliação desfeita", type: "success" })
@@ -665,11 +696,6 @@ export default function FinanceiroPage() {
     } finally {
       setReconcilingId(null)
     }
-  }
-
-  const startEditingBalance = (account: (typeof accountBalances)[number]) => {
-    setEditingBalanceId(account.id)
-    setAccountBalanceInput(formatBRL(account.balance))
   }
 
   const startEditingAccount = (account: (typeof accountBalances)[number]) => {
@@ -718,25 +744,6 @@ export default function FinanceiroPage() {
       toast({ title: "Erro ao arquivar conta", description: error.message, type: "error" })
     } finally {
       setSavingAccountId(null)
-    }
-  }
-
-  const saveAccountBalance = async (account: (typeof accountBalances)[number]) => {
-    const desiredBalance = parseCurrencyInput(accountBalanceInput)
-    const baseBalance = desiredBalance - account.ledger
-    setSavingBalanceId(account.id)
-    try {
-      const { error } = await (supabase.from("finance_accounts") as any)
-        .update({ current_balance: baseBalance })
-        .eq("id", account.id)
-      if (error) throw error
-      setEditingBalanceId(null)
-      toast({ title: "Saldo ajustado", description: `Novo saldo: ${formatBRL(desiredBalance)}`, type: "success" })
-      fetchFinance()
-    } catch (error: any) {
-      toast({ title: "Erro ao ajustar saldo", description: error.message, type: "error" })
-    } finally {
-      setSavingBalanceId(null)
     }
   }
 
@@ -790,7 +797,7 @@ export default function FinanceiroPage() {
       )}
 
       <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
-        <MetricCard title="Saldo em contas" value={formatBRL(metrics.accountTotal)} icon={Wallet} tone="navy" hint={`${accountBalances.length} conta(s) cadastrada(s)`} />
+        <MetricCard title="Saldo em contas" value={formatBRL(metrics.accountTotal)} icon={Wallet} tone="navy" hint={`Fonte: extrato · ${accountBalances.length} conta(s)`} />
         <MetricCard title="Entradas conciliadas" value={formatBRL(metrics.cashInflows)} icon={ArrowUpRight} tone="green" hint={`Receita do mês: ${formatBRL(metrics.netRevenue)}`} />
         <MetricCard title="Saídas de caixa" value={formatBRL(metrics.cashOutflows)} icon={ArrowDownRight} tone="red" hint={`Estoque ${formatBRL(metrics.reconciledInventoryPurchases)} · retiradas ${formatBRL(metrics.reconciledOwnerWithdrawals)}`} />
         <MetricCard title="Resultado líquido" value={formatBRL(metrics.netProfit)} icon={LineChart} tone={metrics.netProfit >= 0 ? "green" : "red"} hint="Lucro bruto menos despesas operacionais" />
@@ -971,12 +978,12 @@ export default function FinanceiroPage() {
                   <CartesianGrid stroke="#eef2f7" vertical={false} />
                   <XAxis dataKey="dia" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
                   <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11 }} tickFormatter={(value) => compactCurrency(Number(value))} />
-                  <Tooltip formatter={(value) => formatBRL(Number(value || 0))} labelFormatter={(label) => `Saldo conciliado no dia ${label}`} />
+                  <Tooltip formatter={(value) => formatBRL(Number(value || 0))} labelFormatter={(label) => `Saldo do extrato no dia ${label}`} />
                   <Area type="monotone" dataKey="saldo" stroke="#2563eb" strokeWidth={2} fill="url(#saldoColor)" />
                 </AreaChart>
               </ResponsiveContainer>
             ) : (
-              <EmptyState icon={LineChart} title="Sem saldo conciliado no mês" text="Concilie vendas ou lançamentos para acompanhar a curva real do caixa." />
+              <EmptyState icon={LineChart} title="Sem movimentos no extrato" text="Lance ou concilie movimentos no extrato para acompanhar a curva real do caixa." />
             )}
           </div>
         </Card>
@@ -985,7 +992,7 @@ export default function FinanceiroPage() {
           <div className="mb-5 flex items-center justify-between">
             <div>
               <h3 className="font-display font-bold text-navy-900 font-syne">Contas da empresa</h3>
-              <p className="text-sm text-gray-500">Saldo atual da conta mais movimentos conciliados.</p>
+              <p className="text-sm text-gray-500">Valores vindos dos movimentos do extrato vinculados a cada conta.</p>
             </div>
             <Building2 className="h-5 w-5 text-royal-500" />
           </div>
@@ -1011,7 +1018,7 @@ export default function FinanceiroPage() {
                       <div className="mt-1 flex flex-wrap justify-end gap-2 text-xs font-semibold">
                         <button type="button" onClick={() => setSelectedAccountId(account.id)} className="text-royal-500 hover:text-royal-700">Usar</button>
                         <button type="button" onClick={() => startEditingAccount(account)} className="text-gray-400 hover:text-navy-900">Editar</button>
-                        <button type="button" onClick={() => startEditingBalance(account)} className="text-gray-400 hover:text-navy-900">Saldo</button>
+                        <Link href="/financeiro/extrato" className="text-gray-400 hover:text-navy-900">Corrigir saldo</Link>
                         <button type="button" onClick={() => archiveAccount(account)} className="text-gray-400 hover:text-red-600">
                           {archiveConfirmId === account.id ? "Confirmar" : "Arquivar"}
                         </button>
@@ -1025,20 +1032,6 @@ export default function FinanceiroPage() {
                       <div className="flex gap-2">
                         <Button size="sm" onClick={() => saveAccountDetails(account)} isLoading={savingAccountId === account.id}>Salvar</Button>
                         <Button size="sm" variant="ghost" onClick={() => setEditingAccountId(null)}>Cancelar</Button>
-                      </div>
-                    </div>
-                  )}
-                  {editingBalanceId === account.id && (
-                    <div className="mt-3 flex flex-col gap-2 border-t border-gray-100 pt-3 sm:flex-row sm:items-end">
-                      <Input
-                        label="Saldo atual no banco"
-                        inputMode="numeric"
-                        value={accountBalanceInput}
-                        onChange={(event) => setAccountBalanceInput(formatCurrencyInput(event.target.value))}
-                      />
-                      <div className="flex gap-2">
-                        <Button size="sm" onClick={() => saveAccountBalance(account)} isLoading={savingBalanceId === account.id}>Salvar</Button>
-                        <Button size="sm" variant="ghost" onClick={() => setEditingBalanceId(null)}>Cancelar</Button>
                       </div>
                     </div>
                   )}

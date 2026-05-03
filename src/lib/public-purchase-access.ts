@@ -1,6 +1,6 @@
 import { randomBytes, randomInt } from "crypto"
 import { pool } from "@/lib/db"
-import { formatPaymentMethod } from "@/lib/helpers"
+import { formatPaymentMethod, getAdditionalItemDisplayName } from "@/lib/helpers"
 
 const TOKEN_PREFIX = "ntcv_"
 const TOKEN_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
@@ -52,8 +52,11 @@ export type PublicPurchaseDetails = {
     imei: string | null
     serial: string | null
   }
+  purchaseItems: PublicPurchaseItem[]
   assistance: Array<{
     id: string
+    itemId: string | null
+    itemName: string | null
     status: string
     statusLabel: string
     type: string | null
@@ -63,6 +66,35 @@ export type PublicPurchaseDetails = {
     publicNote: string | null
     timeline: Array<{ label: string; date: string | null; active: boolean }>
   }>
+}
+
+export type PublicPurchaseIssue = {
+  id: string
+  status: string
+  statusLabel: string
+  type: string | null
+  description: string
+  openedAt: string | null
+  expectedAt: string | null
+  publicNote: string | null
+  timeline: Array<{ label: string; date: string | null; active: boolean }>
+}
+
+export type PublicPurchaseItem = {
+  id: string
+  type: "principal" | "upsell" | "free" | "additional"
+  label: string
+  model: string
+  storage: string | null
+  color: string | null
+  grade: string | null
+  batteryHealth: number | null
+  boxType: string
+  imei: string | null
+  serial: string | null
+  warrantyStart: string | null
+  warrantyEnd: string | null
+  issues: PublicPurchaseIssue[]
 }
 
 type SaleAccessRow = {
@@ -109,6 +141,7 @@ type SaleAccessRow = {
 
 type PublicProblemRow = {
   id: string
+  inventory_id: string | null
   type: string | null
   description: string
   reported_date: string | Date | null
@@ -116,6 +149,23 @@ type PublicProblemRow = {
   resolution_notes: string | null
   status: string | null
   resolved_date: string | Date | null
+}
+
+type AdditionalSaleItemRow = {
+  id: string
+  product_id: string | null
+  type: string | null
+  name: string | null
+  packaging_type: string | null
+  packaging_notes: string | null
+  model: string | null
+  variant: string | null
+  storage: string | null
+  color: string | null
+  grade: string | null
+  battery_health: number | null
+  imei: string | null
+  serial_number: string | null
 }
 
 function randomTokenSuffix(length = 32) {
@@ -229,6 +279,18 @@ function problemStatusLabel(status?: string | null) {
   return labels[String(status || "")] || "Em acompanhamento"
 }
 
+function publicItemLabel(type?: string | null) {
+  if (type === "principal") return "Principal"
+  if (type === "upsell") return "Upsell"
+  if (type === "free") return "Brinde"
+  return "Adicional"
+}
+
+function normalizePublicItemType(type?: string | null): PublicPurchaseItem["type"] {
+  if (type === "upsell" || type === "free") return type
+  return "additional"
+}
+
 function assistanceTimeline(status?: string | null, openedAt?: string | null, resolvedAt?: string | null) {
   const order = ["open", "in_progress", "resolved", "closed"]
   const currentIndex = Math.max(0, order.indexOf(String(status || "open")))
@@ -242,6 +304,74 @@ function assistanceTimeline(status?: string | null, openedAt?: string | null, re
     date: index === 0 ? openedAt || null : index >= 2 ? resolvedAt || null : null,
     active: index <= currentIndex,
   }))
+}
+
+function toPublicIssue(problem: PublicProblemRow): PublicPurchaseIssue {
+  return {
+    id: problem.id,
+    status: problem.status || "open",
+    statusLabel: problemStatusLabel(problem.status),
+    type: problem.type,
+    description: problem.description,
+    openedAt: dateOnly(problem.reported_date),
+    expectedAt: dateOnly(problem.action_deadline),
+    publicNote: problem.resolution_notes || null,
+    timeline: assistanceTimeline(problem.status, dateOnly(problem.reported_date), dateOnly(problem.resolved_date)),
+  }
+}
+
+async function getAdditionalItemsForSale(saleId: string) {
+  const result = await pool.query<AdditionalSaleItemRow>(
+    `
+      SELECT
+        sai.id,
+        sai.product_id,
+        sai.type,
+        sai.name,
+        sai.packaging_type,
+        sai.packaging_notes,
+        pc.model,
+        pc.variant,
+        pc.storage,
+        pc.color,
+        i.grade,
+        i.battery_health,
+        i.imei,
+        i.serial_number
+      FROM sales_additional_items sai
+      LEFT JOIN inventory i ON i.id = sai.product_id
+      LEFT JOIN product_catalog pc ON pc.id = i.catalog_id
+      WHERE sai.sale_id = $1
+      ORDER BY sai.created_at ASC, sai.id ASC
+    `,
+    [saleId]
+  )
+
+  return result.rows
+}
+
+async function getProblemsByInventoryId(saleId: string, inventoryIds: string[]) {
+  if (inventoryIds.length === 0) return new Map<string, PublicPurchaseIssue[]>()
+
+  const result = await pool.query<PublicProblemRow>(
+    `
+      SELECT id, inventory_id, type, description, reported_date, action_deadline, resolution_notes, status, resolved_date
+      FROM problems
+      WHERE sale_id = $1
+        AND inventory_id = ANY($2::uuid[])
+      ORDER BY reported_date DESC, created_at DESC
+    `,
+    [saleId, inventoryIds]
+  )
+
+  const byInventoryId = new Map<string, PublicPurchaseIssue[]>()
+  for (const problem of result.rows) {
+    if (!problem.inventory_id) continue
+    const list = byInventoryId.get(problem.inventory_id) || []
+    list.push(toPublicIssue(problem))
+    byInventoryId.set(problem.inventory_id, list)
+  }
+  return byInventoryId
 }
 
 async function getSaleByToken(token: string) {
@@ -390,19 +520,12 @@ export async function verifyPublicPurchasePin(token: string, pin: string) {
 }
 
 async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPurchaseDetails> {
-  const problems = row.inventory_id
-    ? await pool.query<PublicProblemRow>(
-        `
-          SELECT id, type, description, reported_date, action_deadline, resolution_notes, status, resolved_date
-          FROM problems
-          WHERE sale_id = $1
-            AND inventory_id = $2
-          ORDER BY reported_date DESC, created_at DESC
-        `,
-        [row.id, row.inventory_id]
-      )
-    : { rows: [] as PublicProblemRow[] }
-
+  const additionalItems = await getAdditionalItemsForSale(row.id)
+  const inventoryIds = [
+    row.inventory_id,
+    ...additionalItems.map((item) => item.product_id),
+  ].filter((id): id is string => Boolean(id))
+  const problemsByInventoryId = await getProblemsByInventoryId(row.id, inventoryIds)
   const deviceName = uniqueDeviceName(row.model, row.variant, row.storage)
   const saleDate = dateOnly(row.sale_date)
   const warrantyStart = dateOnly(row.warranty_start) || (row.warranty_end || row.warranty_months ? saleDate : null)
@@ -426,6 +549,54 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
       }
     : null
   const paymentMethod = formatPaymentMethod(row.payment_method)
+  const principalIssues = row.inventory_id ? problemsByInventoryId.get(row.inventory_id) || [] : []
+  const principalItem: PublicPurchaseItem = {
+    id: "principal",
+    type: "principal",
+    label: publicItemLabel("principal"),
+    model: deviceName,
+    storage: row.storage || null,
+    color: row.color || null,
+    grade: row.grade || null,
+    batteryHealth: row.battery_health === null || row.battery_health === undefined ? null : Number(row.battery_health),
+    boxType: packagingLabel(row.packaging_type, row.packaging_notes),
+    imei: maskTrailing(row.imei),
+    serial: maskTrailing(row.serial_number),
+    warrantyStart,
+    warrantyEnd,
+    issues: principalIssues,
+  }
+
+  const purchaseItems: PublicPurchaseItem[] = [
+    principalItem,
+    ...additionalItems.map((item, index) => {
+      const itemType = normalizePublicItemType(item.type)
+      const issues = item.product_id ? problemsByInventoryId.get(item.product_id) || [] : []
+      return {
+        id: `item_${index + 1}`,
+        type: itemType,
+        label: publicItemLabel(itemType),
+        model: uniqueDeviceName(getAdditionalItemDisplayName(item.name), item.model, item.variant, item.storage),
+        storage: item.storage || null,
+        color: item.color || null,
+        grade: item.grade || null,
+        batteryHealth: item.battery_health === null || item.battery_health === undefined ? null : Number(item.battery_health),
+        boxType: packagingLabel(item.packaging_type, item.packaging_notes),
+        imei: maskTrailing(item.imei),
+        serial: maskTrailing(item.serial_number),
+        warrantyStart: null,
+        warrantyEnd: null,
+        issues,
+      }
+    }),
+  ]
+  const assistance = purchaseItems.flatMap((item) =>
+    item.issues.map((issue) => ({
+      ...issue,
+      itemId: item.id,
+      itemName: item.model,
+    }))
+  )
 
   return {
     customerName: firstName(row.customer_name) || "cliente",
@@ -446,26 +617,17 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
       warrantyStatus: warrantyStatus(warrantyEnd),
     },
     device: {
-      model: deviceName,
-      storage: row.storage || null,
-      color: row.color || null,
-      grade: row.grade || null,
-      batteryHealth: row.battery_health === null || row.battery_health === undefined ? null : Number(row.battery_health),
-      boxType: packagingLabel(row.packaging_type, row.packaging_notes),
-      imei: maskTrailing(row.imei),
-      serial: maskTrailing(row.serial_number),
+      model: principalItem.model,
+      storage: principalItem.storage,
+      color: principalItem.color,
+      grade: principalItem.grade,
+      batteryHealth: principalItem.batteryHealth,
+      boxType: principalItem.boxType,
+      imei: principalItem.imei,
+      serial: principalItem.serial,
     },
-    assistance: problems.rows.map((problem) => ({
-      id: problem.id,
-      status: problem.status || "open",
-      statusLabel: problemStatusLabel(problem.status),
-      type: problem.type,
-      description: problem.description,
-      openedAt: dateOnly(problem.reported_date),
-      expectedAt: dateOnly(problem.action_deadline),
-      publicNote: problem.resolution_notes || null,
-      timeline: assistanceTimeline(problem.status, dateOnly(problem.reported_date), dateOnly(problem.resolved_date)),
-    })),
+    purchaseItems,
+    assistance,
   }
 }
 

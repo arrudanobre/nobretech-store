@@ -9,6 +9,7 @@ import { supabase } from "@/lib/supabase"
 import { formatBRL, formatDate, todayISO } from "@/lib/helpers"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/toaster"
+import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 
 type CreditCardAccount = {
   id: string
@@ -241,7 +242,7 @@ export default function CartoesPage() {
     const invoice = getCurrentInvoice(payModalCard)
     setPaying(true)
     try {
-      const { error: transError } = await (supabase.from("transactions") as any)
+      const { data: paidRows, error: transError } = await (supabase.from("transactions") as any)
         .update({
           account_id: payAccountId,
           date: todayISO(),
@@ -251,7 +252,12 @@ export default function CartoesPage() {
         .eq("credit_card_id", payModalCard.id)
         .eq("due_date", invoice.dueDate)
         .eq("status", "pending")
+        .select("id")
       if (transError) throw transError
+      const { data: { user } } = await supabase.auth.getUser()
+      for (const row of paidRows || []) {
+        if (row?.id) await requestSyncTransactionMovement(String(row.id), { createdBy: user?.id ?? null })
+      }
 
       const { error: cardError } = await (supabase.from("finance_credit_cards") as any)
         .update({

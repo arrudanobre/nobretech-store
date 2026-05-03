@@ -69,7 +69,35 @@ type Purchase = {
     imei: string | null
     serial: string | null
   }
+  purchaseItems: Array<PurchaseItem>
   assistance: Array<{
+    id: string
+    itemId: string | null
+    itemName: string | null
+    statusLabel: string
+    description: string
+    openedAt: string | null
+    expectedAt: string | null
+    publicNote: string | null
+    timeline: Array<{ label: string; date: string | null; active: boolean }>
+  }>
+}
+
+type PurchaseItem = {
+  id: string
+  type: "principal" | "upsell" | "free" | "additional"
+  label: string
+  model: string
+  storage: string | null
+  color: string | null
+  grade: string | null
+  batteryHealth: number | null
+  boxType: string
+  imei: string | null
+  serial: string | null
+  warrantyStart: string | null
+  warrantyEnd: string | null
+  issues: Array<{
     id: string
     statusLabel: string
     description: string
@@ -442,41 +470,90 @@ function VerifiedPurchaseSummaryCard({ purchase }: { purchase: Purchase }) {
   )
 }
 
-function VerifiedPurchaseDeviceCard({ purchase }: { purchase: Purchase }) {
-  const identityItems = [
-    { label: "IMEI", value: purchase.device.imei },
-    { label: "Serial", value: purchase.device.serial },
-  ].filter((item) => item.value)
+function itemTone(type: PurchaseItem["type"]) {
+  if (type === "principal") return "blue"
+  if (type === "upsell") return "green"
+  if (type === "free") return "amber"
+  return "neutral"
+}
+
+function VerifiedPurchaseItemsCard({ purchase }: { purchase: Purchase }) {
+  const items = purchase.purchaseItems?.length ? purchase.purchaseItems : [{
+    id: "principal",
+    type: "principal" as const,
+    label: "Principal",
+    model: purchase.device.model,
+    storage: purchase.device.storage,
+    color: purchase.device.color,
+    grade: purchase.device.grade,
+    batteryHealth: purchase.device.batteryHealth,
+    boxType: purchase.device.boxType,
+    imei: purchase.device.imei,
+    serial: purchase.device.serial,
+    warrantyStart: purchase.sale.warrantyStart,
+    warrantyEnd: purchase.sale.warrantyEnd,
+    issues: [],
+  }]
+  const hasMultipleItems = items.length > 1
+  const title = hasMultipleItems ? "Itens da sua compra" : "Seu aparelho"
+  const subtitle = hasMultipleItems ? "Produtos vinculados a esta venda." : "Dados básicos do produto entregue."
 
   return (
     <PortalCard>
-      <SectionTitle icon={Smartphone} title="Seu aparelho" subtitle="Dados básicos do produto entregue." />
-      <div className="rounded-[1.2rem] bg-gradient-to-br from-slate-50 to-blue-50/60 p-4">
-        <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Modelo</p>
-        <p className="mt-1 text-xl font-extrabold leading-snug text-navy-900">{fallback(purchase.device.model)}</p>
-      </div>
-      <div className="mt-3">
-        <InfoRows rows={[
-          { icon: PackageCheck, label: "Armazenamento", value: fallback(purchase.device.storage) },
-          { icon: Palette, label: "Cor", value: fallback(purchase.device.color), tone: "orange" },
-          { icon: Sparkles, label: "Classificação", value: fallback(purchase.device.grade) },
-          { icon: BatteryCharging, label: "Saúde da bateria", value: purchase.device.batteryHealth === null ? notInformed : `${purchase.device.batteryHealth}%`, tone: "green" },
-          { icon: PackageCheck, label: "Caixa/entrega", value: fallback(purchase.device.boxType) },
-        ]} />
-      </div>
-      {identityItems.length > 0 && (
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-          <p className="text-xs font-bold uppercase tracking-wide text-slate-400">Identificação protegida</p>
-          <div className="mt-3 space-y-2">
-            {identityItems.map((item) => (
-              <div key={item.label} className="flex items-center justify-between gap-4 text-sm">
-                <span className="font-medium text-slate-500">{item.label}</span>
-                <span className="font-mono font-bold text-slate-900">{item.value}</span>
+      <SectionTitle icon={Smartphone} title={title} subtitle={subtitle} />
+      <div className="space-y-4">
+        {items.map((item, index) => {
+          const identityItems = [
+            { label: "IMEI", value: item.imei },
+            { label: "Serial", value: item.serial },
+          ].filter((identity) => identity.value)
+          const tone = itemTone(item.type)
+          const warrantyDiffers = Boolean(item.warrantyEnd && item.warrantyEnd !== purchase.sale.warrantyEnd)
+
+          return (
+            <div key={item.id || `${item.type}-${index}`} className="overflow-hidden rounded-[1.2rem] border border-slate-200 bg-white">
+              <div className="bg-gradient-to-br from-slate-50 to-blue-50/60 p-4">
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                  <StatusPill tone={tone as "blue" | "green" | "neutral" | "amber"}>{item.label}</StatusPill>
+                  {item.issues.length > 0 && (
+                    <StatusPill tone="amber">
+                      <Wrench className="h-3.5 w-3.5" />
+                      Assistência vinculada
+                    </StatusPill>
+                  )}
+                </div>
+                <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Produto</p>
+                <p className="mt-1 text-xl font-extrabold leading-snug text-navy-900">{fallback(item.model)}</p>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
+
+              <div className="p-3">
+                <InfoRows rows={[
+                  { icon: PackageCheck, label: "Armazenamento", value: fallback(item.storage) },
+                  { icon: Palette, label: "Cor", value: fallback(item.color), tone: "orange" },
+                  { icon: Sparkles, label: "Classificação", value: fallback(item.grade) },
+                  { icon: BatteryCharging, label: "Saúde da bateria", value: item.batteryHealth === null ? notInformed : `${item.batteryHealth}%`, tone: "green" },
+                  { icon: PackageCheck, label: "Caixa/entrega", value: fallback(item.boxType) },
+                  ...(warrantyDiffers ? [{ icon: ShieldCheck, label: "Garantia até", value: formatPublicDate(item.warrantyEnd) }] : []),
+                ]} />
+
+                {identityItems.length > 0 && (
+                  <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-400">Identificação protegida</p>
+                    <div className="mt-3 space-y-2">
+                      {identityItems.map((identity) => (
+                        <div key={identity.label} className="flex items-center justify-between gap-4 text-sm">
+                          <span className="font-medium text-slate-500">{identity.label}</span>
+                          <span className="font-mono font-bold text-slate-900">{identity.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
     </PortalCard>
   )
 }
@@ -557,7 +634,7 @@ function VerifiedPurchaseIssueCard({ purchase }: { purchase: Purchase }) {
 
   return (
     <PortalCard>
-      <SectionTitle icon={Wrench} title="Assistência técnica" subtitle="Aparece somente quando existe atendimento vinculado a este aparelho." />
+      <SectionTitle icon={Wrench} title="Assistência técnica" subtitle="Aparece somente quando existe atendimento vinculado a um item desta compra." />
       <div className="space-y-4">
         {purchase.assistance.map((item) => (
           <div key={item.id} className="rounded-[1.2rem] border border-slate-200 bg-slate-50/70 p-4">
@@ -567,6 +644,9 @@ function VerifiedPurchaseIssueCard({ purchase }: { purchase: Purchase }) {
                   <Clock className="h-3.5 w-3.5" />
                   {item.statusLabel}
                 </StatusPill>
+                {item.itemName && (
+                  <p className="mt-3 text-xs font-black uppercase tracking-wide text-royal-600">{item.itemName}</p>
+                )}
                 <p className="mt-3 text-sm font-semibold leading-6 text-slate-800">{item.description}</p>
               </div>
               <p className="text-xs font-semibold text-slate-500">{item.openedAt ? formatPublicDate(item.openedAt) : "Aberto"}</p>
@@ -715,7 +795,7 @@ export default function VerifiedPurchasePage() {
     <PortalShell>
       <VerifiedPurchaseHero purchase={purchase} />
       <VerifiedPurchaseSummaryCard purchase={purchase} />
-      <VerifiedPurchaseDeviceCard purchase={purchase} />
+      <VerifiedPurchaseItemsCard purchase={purchase} />
       <VerifiedPurchaseWarrantyCard purchase={purchase} />
       <VerifiedPurchaseIssueCard purchase={purchase} />
       <VerifiedPurchaseSupportCard purchase={purchase} />
