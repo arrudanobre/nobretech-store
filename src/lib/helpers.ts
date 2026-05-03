@@ -55,6 +55,7 @@ export function formatPaymentMethod(method?: string | null): string {
     transfer: "Transferência",
     transferencia: "Transferência",
     "transferência": "Transferência",
+    trade_in_credit: "Crédito gerado no trade-in",
   }
   if (labels[normalized]) return labels[normalized]
 

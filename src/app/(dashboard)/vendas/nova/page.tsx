@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useMemo, useCallback, useEffect, Suspense } from "react"
+import Image from "next/image"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -16,15 +17,25 @@ import { generateReceiptPDF, generateWarrantyPDF, type SaleDocumentData } from "
 import { upsertSaleReceivable } from "@/lib/finance/sale-receivable-client"
 import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 import {
+  AlertTriangle,
+  Banknote,
+  Box,
+  CalendarDays,
   Search,
   ShoppingCart,
-  User,
   Check,
-  CalendarClock,
+  CheckCircle2,
+  ChevronUp,
+  Circle,
+  CreditCard,
+  Info,
   Gift,
+  Plus,
   Package,
+  ReceiptText,
+  ShieldCheck,
+  Smartphone,
   X,
-  Megaphone,
 } from "lucide-react"
 
 type InventoryProduct = {
@@ -74,9 +85,23 @@ type FinanceAccountOption = {
   institution?: string | null
 }
 
+type AdditionalSaleItem = {
+  itemId: string
+  name: string
+  cost: number
+  suggested: number
+  type: "upsell" | "free"
+  salePrice: string
+  qty: number
+  availableQty: number
+  imei?: string
+  serialNumber?: string
+}
+
 const SALE_ORIGINS = [
   { value: "whatsapp", label: "WhatsApp" },
   { value: "instagram", label: "Instagram" },
+  { value: "olx", label: "OLX" },
   { value: "trafego_pago", label: "Tráfego pago" },
   { value: "indicacao", label: "Indicação" },
   { value: "loja", label: "Loja física" },
@@ -132,6 +157,20 @@ const calculateTradeInValue = (
 }
 
 const sanitizeTradeInImei = (value: string): string => value.replace(/\D/g, "").slice(0, 15)
+
+const parseCurrencyInput = (value: string): number => {
+  const normalized = value
+    .replace(/[^\d,.-]/g, "")
+    .replace(/\./g, "")
+    .replace(",", ".")
+  const parsed = Number(normalized)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+const formatCurrencyInputValue = (value: string): string => {
+  const parsed = Number(value || 0)
+  return parsed > 0 ? formatBRL(parsed) : ""
+}
 
 const parseTradeInModelIndex = (value: string): number => {
   const parsed = parseInt(value)
@@ -267,188 +306,6 @@ const toggleTradeIn = (
   setHasTradeIn(!hasTradeIn)
 }
 
-const toggleAdditionalItem = (
-  hasAdditionalItem: boolean,
-  setHasAdditionalItem: React.Dispatch<React.SetStateAction<boolean>>,
-  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
-    itemId: string
-    name: string
-    cost: number
-    type: "upsell" | "free"
-    salePrice: string
-    qty: number
-  } | null>>
-) => {
-  setHasAdditionalItem(!hasAdditionalItem)
-  if (hasAdditionalItem) setAdditionalSelectedItem(null)
-}
-
-const selectAdditionalInventoryItem = (
-  inventoryProducts: any[],
-  value: string,
-  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
-    itemId: string
-    name: string
-    cost: number
-    type: "upsell" | "free"
-    salePrice: string
-    qty: number
-  } | null>>
-) => {
-  const inv = inventoryProducts.find(p => p.id === value)
-  if (!inv) return
-
-  setAdditionalSelectedItem({
-    itemId: inv.id,
-    name: inv.name,
-    cost: inv.cost,
-    type: "upsell",
-    salePrice: inv.suggested.toString(),
-    qty: 1,
-  })
-}
-
-const setAdditionalType = (
-  type: "upsell" | "free",
-  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
-    itemId: string
-    name: string
-    cost: number
-    type: "upsell" | "free"
-    salePrice: string
-    qty: number
-  } | null>>
-) => {
-  setAdditionalSelectedItem((p) => p ? { ...p, type } : p)
-}
-
-const setAdditionalSalePrice = (
-  salePrice: string,
-  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
-    itemId: string
-    name: string
-    cost: number
-    type: "upsell" | "free"
-    salePrice: string
-    qty: number
-  } | null>>
-) => {
-  setAdditionalSelectedItem((p) => p ? { ...p, salePrice } : p)
-}
-
-const setAdditionalQty = (
-  qty: number,
-  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
-    itemId: string
-    name: string
-    cost: number
-    type: "upsell" | "free"
-    salePrice: string
-    qty: number
-  } | null>>
-) => {
-  setAdditionalSelectedItem((p) => p ? { ...p, qty: Math.max(1, qty || 0) } : p)
-}
-
-const setAdditionalTypeWithState = (
-  type: "upsell" | "free",
-  additionalSelectedItem: {
-    itemId: string
-    name: string
-    cost: number
-    type: "upsell" | "free"
-    salePrice: string
-    qty: number
-  } | null,
-  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
-    itemId: string
-    name: string
-    cost: number
-    type: "upsell" | "free"
-    salePrice: string
-    qty: number
-  } | null>>
-) => {
-  if (!additionalSelectedItem) return
-  setAdditionalType(type, setAdditionalSelectedItem)
-}
-
-const setAdditionalQtyWithState = (
-  qty: number,
-  additionalSelectedItem: {
-    itemId: string
-    name: string
-    cost: number
-    type: "upsell" | "free"
-    salePrice: string
-    qty: number
-  } | null,
-  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
-    itemId: string
-    name: string
-    cost: number
-    type: "upsell" | "free"
-    salePrice: string
-    qty: number
-  } | null>>
-) => {
-  if (!additionalSelectedItem) return
-  setAdditionalQty(qty, setAdditionalSelectedItem)
-}
-
-const setAdditionalSalePriceWithState = (
-  salePrice: string,
-  additionalSelectedItem: {
-    itemId: string
-    name: string
-    cost: number
-    type: "upsell" | "free"
-    salePrice: string
-    qty: number
-  } | null,
-  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
-    itemId: string
-    name: string
-    cost: number
-    type: "upsell" | "free"
-    salePrice: string
-    qty: number
-  } | null>>
-) => {
-  if (!additionalSelectedItem) return
-  setAdditionalSalePrice(salePrice, setAdditionalSelectedItem)
-}
-
-const selectAdditionalInventoryItemWithState = (
-  inventoryProducts: any[],
-  value: string,
-  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
-    itemId: string
-    name: string
-    cost: number
-    type: "upsell" | "free"
-    salePrice: string
-    qty: number
-  } | null>>
-) => {
-  selectAdditionalInventoryItem(inventoryProducts, value, setAdditionalSelectedItem)
-}
-
-const toggleAdditionalItemWithState = (
-  hasAdditionalItem: boolean,
-  setHasAdditionalItem: React.Dispatch<React.SetStateAction<boolean>>,
-  setAdditionalSelectedItem: React.Dispatch<React.SetStateAction<{
-    itemId: string
-    name: string
-    cost: number
-    type: "upsell" | "free"
-    salePrice: string
-    qty: number
-  } | null>>
-) => {
-  toggleAdditionalItem(hasAdditionalItem, setHasAdditionalItem, setAdditionalSelectedItem)
-}
-
 const toggleTradeInWithState = (
   hasTradeIn: boolean,
   setHasTradeIn: React.Dispatch<React.SetStateAction<boolean>>
@@ -559,6 +416,229 @@ function ToggleSwitch({
   )
 }
 
+function SaleStepper({
+  steps,
+  currentStep,
+}: {
+  steps: Array<{ label: string; done: boolean }>
+  currentStep: number
+}) {
+  return (
+    <div className="overflow-x-auto px-4 py-4 sm:px-6">
+      <div className="mx-auto flex min-w-[720px] max-w-5xl items-center justify-between">
+        {steps.map((step, index) => {
+          const isCurrent = index === currentStep
+          const isDone = step.done && index < currentStep
+          const isComplete = step.done && currentStep === steps.length - 1
+          const active = isCurrent || isDone || isComplete
+
+          return (
+            <div key={step.label} className="flex flex-1 items-center">
+              <div className="flex items-center gap-2">
+                <span
+                  className={`flex h-6 w-6 items-center justify-center rounded-full border text-[11px] font-bold transition-all ${
+                    active
+                      ? "border-royal-500 bg-royal-500 text-white"
+                      : "border-gray-200 bg-gray-100 text-gray-400"
+                  }`}
+                >
+                  {isDone || isComplete ? <Check className="h-3.5 w-3.5" /> : isCurrent ? index + 1 : <X className="h-3 w-3" />}
+                </span>
+                <span className={`whitespace-nowrap text-xs font-bold ${active ? "text-royal-600" : "text-gray-400"}`}>
+                  {index + 1}. {step.label}
+                </span>
+              </div>
+              {index < steps.length - 1 && (
+                <span className={`mx-4 h-px flex-1 ${index < currentStep ? "bg-royal-400" : "bg-gray-200"}`} />
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function PaymentMethodCard({
+  icon: Icon,
+  label,
+  selected,
+  customerPays,
+  storeReceives,
+  onClick,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+  selected: boolean
+  customerPays: string
+  storeReceives: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`relative min-h-[168px] rounded-[20px] border p-4 text-left shadow-sm transition-all duration-200 ${
+        selected
+          ? "border-royal-500 bg-white shadow-[0_16px_45px_rgba(58,107,196,0.14)] ring-2 ring-royal-500/10"
+          : "border-gray-200 bg-white hover:border-royal-400 hover:shadow-[0_14px_34px_rgba(13,27,46,0.08)]"
+      }`}
+    >
+      {selected && (
+        <span className="absolute right-4 top-4 flex h-7 w-7 items-center justify-center rounded-full bg-royal-500 text-white">
+          <Check className="h-4 w-4" />
+        </span>
+      )}
+      <div className="flex items-center gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-success-100/60 text-success-500">
+          <Icon className="h-5 w-5" />
+        </span>
+        <p className="text-sm font-bold text-navy-900">{label}</p>
+      </div>
+      <div className="mt-6 grid gap-2 text-sm">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-gray-500">Cliente paga</span>
+          <span className="font-bold text-navy-900">{customerPays}</span>
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-gray-500">Loja recebe</span>
+          <span className="font-bold text-navy-900">{storeReceives}</span>
+        </div>
+      </div>
+    </button>
+  )
+}
+
+function DecisionButton({
+  active,
+  onClick,
+  children,
+  tone = "default",
+}: {
+  active: boolean
+  onClick: () => void
+  children: React.ReactNode
+  tone?: "default" | "danger"
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-xl border px-3 py-2 text-xs font-bold transition-all ${
+        active
+          ? tone === "danger"
+            ? "border-danger-500 bg-danger-100 text-red-800"
+            : "border-royal-500 bg-white text-royal-600 shadow-sm"
+          : "border-white/70 bg-white/70 text-gray-600 hover:border-royal-300 hover:text-navy-900"
+      }`}
+    >
+      {children}
+    </button>
+  )
+}
+
+function ItemTypeBadge({ type }: { type: "Principal" | "Upsell" | "Brinde" | "Acessório" }) {
+  const styles = {
+    Principal: "bg-royal-100 text-royal-600",
+    Upsell: "bg-purple-100 text-purple-700",
+    Brinde: "bg-success-100 text-green-800",
+    Acessório: "bg-sky-100 text-sky-700",
+  }
+
+  return (
+    <span className={`inline-flex rounded-lg px-2 py-1 text-xs font-bold ${styles[type]}`}>
+      {type}
+    </span>
+  )
+}
+
+function SummarySection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="space-y-3 px-5 py-4">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-xs font-bold uppercase tracking-wide text-royal-600">{title}</h3>
+        <ChevronUp className="h-4 w-4 text-gray-400" />
+      </div>
+      <div className="space-y-2">{children}</div>
+    </section>
+  )
+}
+
+function SummaryLine({
+  icon: Icon,
+  label,
+  value,
+  strong,
+  valueClassName = "text-navy-900",
+}: {
+  icon?: React.ComponentType<{ className?: string }>
+  label: string
+  value: string
+  strong?: boolean
+  valueClassName?: string
+}) {
+  return (
+    <div className={`flex items-center justify-between gap-3 text-sm ${strong ? "border-t border-gray-100 pt-3 font-bold" : ""}`}>
+      <span className="flex min-w-0 items-center gap-2 text-gray-600">
+        {Icon && <Icon className="h-4 w-4 shrink-0 text-navy-700" />}
+        <span className="truncate">{label}</span>
+      </span>
+      <span className={`shrink-0 font-bold ${valueClassName}`}>{value}</span>
+    </div>
+  )
+}
+
+function ImpactCard({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+  value: string
+}) {
+  return (
+    <div className="rounded-2xl border border-gray-100 bg-gray-50 p-3 text-center">
+      <Icon className="mx-auto h-4 w-4 text-navy-700" />
+      <p className="mt-1 text-xs font-bold text-navy-900">{label}</p>
+      <p className="mt-0.5 text-[11px] text-gray-500">{value}</p>
+    </div>
+  )
+}
+
+function PendingChecklist({ items }: { items: Array<{ label: string; done: boolean }> }) {
+  return (
+    <div className="space-y-2 rounded-2xl border border-gray-100 bg-gray-50 p-3">
+      <p className="text-xs font-bold uppercase tracking-wide text-gray-400">Pendências</p>
+      {items.map((item) => (
+        <div key={item.label} className="flex items-center gap-2 text-xs">
+          {item.done ? (
+            <CheckCircle2 className="h-4 w-4 text-success-500" />
+          ) : (
+            <Circle className="h-4 w-4 text-danger-500" />
+          )}
+          <span className={item.done ? "text-gray-500" : "font-semibold text-red-700"}>{item.label}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function PixBrandIcon({ className = "" }: { className?: string }) {
+  return (
+    <span className={`relative inline-flex shrink-0 overflow-hidden ${className}`} aria-hidden="true">
+      <Image
+        src="/brand/pix-logo.svg"
+        alt=""
+        width={64}
+        height={24}
+        unoptimized
+        className="absolute left-0 top-1/2 h-full w-auto max-w-none -translate-y-1/2"
+      />
+    </span>
+  )
+}
+
 const classifyAdditionalItem = (product: InventoryProduct | any) => {
   const text = `${product.name || ""} ${product.condition_notes || ""}`.toLowerCase()
   if (/(capa|pel[ií]cula|fone|airpods|cabo|fonte|carregador|pencil|caneta|case|adaptador|suporte)/i.test(text)) {
@@ -583,9 +663,11 @@ function NewSaleContent() {
   const [isReservation, setIsReservation] = useState(false)
   const [paymentDueDate, setPaymentDueDate] = useState("")
   const [receiptAccountId, setReceiptAccountId] = useState("")
+  const [showFeeTable, setShowFeeTable] = useState(false)
   const [warrantyMonths, setWarrantyMonths] = useState("3")
   const [hasTradeIn, setHasTradeIn] = useState(false)
   const [tradeIn, setTradeIn] = useState({ category: "", modelIdx: 0, storage: "", color: "", imei: "", grade: "", batteryHealth: "", value: "" })
+  const [tradeInOverageDecision, setTradeInOverageDecision] = useState<"" | "credit" | "change" | "block">("")
   const [saleNotes, setSaleNotes] = useState("")
   const [packagingType, setPackagingType] = useState("")
   const [packagingNotes, setPackagingNotes] = useState("")
@@ -597,17 +679,10 @@ function NewSaleContent() {
 
   // ── Additional item (upsell / brinde) — selecionado do estoque ──
   const [hasAdditionalItem, setHasAdditionalItem] = useState(false)
-  const [additionalSelectedItem, setAdditionalSelectedItem] = useState<{
-    itemId: string
-    name: string
-    cost: number
-    type: "upsell" | "free"
-    salePrice: string
-    qty: number
-    availableQty: number
-  } | null>(null)
+  const [additionalSaleItems, setAdditionalSaleItems] = useState<AdditionalSaleItem[]>([])
   const [additionalSearchTerm, setAdditionalSearchTerm] = useState("")
   const [additionalFilter, setAdditionalFilter] = useState<"all" | "accessory" | "device">("accessory")
+  const [tradeInValueInput, setTradeInValueInput] = useState("")
   const [tradeInModelSearch, setTradeInModelSearch] = useState("")
   const [inventoryProducts, setInventoryProducts] = useState<any[]>([])
   const [loadingInventory, setLoadingInventory] = useState(true)
@@ -872,9 +947,12 @@ function NewSaleContent() {
   const mainProductDiscount = hasMainProductDiscount ? originalTotalPrice - totalBasePrice : 0
 
   // Upsell price (brinde não entra no total pago pelo cliente)
-  const upsellTotal = additionalSelectedItem?.type === "upsell"
-    ? (parseFloat(additionalSelectedItem.salePrice) || 0) * (additionalSelectedItem.qty || 1)
-    : 0
+  const upsellTotal = useMemo(() => {
+    return additionalSaleItems.reduce((sum, item) => {
+      if (item.type !== "upsell") return sum
+      return sum + (parseFloat(item.salePrice) || 0) * (item.qty || 1)
+    }, 0)
+  }, [additionalSaleItems])
 
   // Total final da venda: produto principal + upsell
   const finalTotal = totalBasePrice + upsellTotal
@@ -894,12 +972,13 @@ function NewSaleContent() {
 
   // Lucro adicional (upsell ou brinde)
   const additionalProfit = useMemo(() => {
-    if (!additionalSelectedItem) return 0
-    if (additionalSelectedItem.type === "upsell") {
-      return (parseFloat(additionalSelectedItem.salePrice) || 0) * (additionalSelectedItem.qty || 1) - additionalSelectedItem.cost * (additionalSelectedItem.qty || 1)
-    }
-    return -additionalSelectedItem.cost * (additionalSelectedItem.qty || 1)
-  }, [additionalSelectedItem])
+    return additionalSaleItems.reduce((sum, item) => {
+      const qty = item.qty || 1
+      const cost = item.cost * qty
+      if (item.type === "upsell") return sum + (parseFloat(item.salePrice) || 0) * qty - cost
+      return sum - cost
+    }, 0)
+  }, [additionalSaleItems])
 
   // Lucro total: principal + adicionais
   const totalProfit = useMemo(() => {
@@ -919,6 +998,45 @@ function NewSaleContent() {
     return Math.max(1, Math.min(max, Number.isFinite(value) ? value : 1))
   }, [])
 
+  const addAdditionalSaleItem = useCallback((item: InventoryProduct) => {
+    setHasAdditionalItem(true)
+    setAdditionalSaleItems((previous) => {
+      if (previous.some((selected) => selected.itemId === item.id)) return previous
+      return [
+        ...previous,
+        {
+          itemId: item.id,
+          name: item.name,
+          cost: item.cost,
+          suggested: item.suggested,
+          type: "upsell",
+          salePrice: item.suggested.toString(),
+          qty: 1,
+          availableQty: getAvailableQty(item),
+          imei: item.imei || "",
+          serialNumber: item.serial_number || "",
+        },
+      ]
+    })
+  }, [getAvailableQty])
+
+  const updateAdditionalSaleItem = useCallback((itemId: string, partial: Partial<AdditionalSaleItem>) => {
+    setAdditionalSaleItems((previous) => previous.map((item) => (
+      item.itemId === itemId ? { ...item, ...partial } : item
+    )))
+  }, [])
+
+  const removeAdditionalSaleItem = useCallback((itemId: string) => {
+    setAdditionalSaleItems((previous) => previous.filter((item) => item.itemId !== itemId))
+  }, [])
+
+  const openAdditionalBuilder = useCallback(() => {
+    setHasAdditionalItem(true)
+    window.requestAnimationFrame(() => {
+      document.getElementById("additional-items-builder")?.scrollIntoView({ behavior: "smooth", block: "center" })
+    })
+  }, [])
+
   // Quantidade máxima disponível no item selecionado.
   const maxAvailableQty = useMemo(() => {
     return getAvailableQty(selectedProduct)
@@ -929,15 +1047,11 @@ function NewSaleContent() {
   }, [maxAvailableQty, clampQty])
 
   useEffect(() => {
-    if (!additionalSelectedItem) return
-    setAdditionalSelectedItem((previous) => {
-      if (!previous) return previous
-      return {
-        ...previous,
-        qty: clampQty(previous.qty, previous.availableQty),
-      }
-    })
-  }, [additionalSelectedItem?.availableQty, clampQty])
+    setAdditionalSaleItems((previous) => previous.map((item) => ({
+      ...item,
+      qty: clampQty(item.qty, item.availableQty),
+    })))
+  }, [clampQty])
 
   const updateInventoryStock = useCallback(async (productId: string, soldQty: number, finalStatus: "sold" | "reserved") => {
     const { data, error } = await (supabase.from("inventory") as any)
@@ -1002,7 +1116,7 @@ function NewSaleContent() {
     setSupplierCostInput("")
     setQuantity(1)
     setPaymentMethod("")
-    setAdditionalSelectedItem(null)
+    setAdditionalSaleItems([])
     setHasAdditionalItem(false)
   }
 
@@ -1075,11 +1189,6 @@ function NewSaleContent() {
       matchingPrices: tradeInSupplierMatches,
     })
   }, [hasTradeIn, tradeInModel, tradeIn.grade, tradeIn.batteryHealth, tradeIn.value, tradeInSupplierMatches])
-
-  const tradeInSuggestedDisplay = useMemo(() => {
-    if (!tradeInEvaluation) return formatBRL(0)
-    return formatTradeInSuggestedRange(tradeInEvaluation.roundedValue)
-  }, [tradeInEvaluation])
 
   useEffect(() => {
     if (!hasTradeIn || !tradeInEvaluation) return
@@ -1173,6 +1282,7 @@ function NewSaleContent() {
 
   const getPaymentMethodLabel = (method: string) => {
     if (method === "trade_in_return") return "Troco no trade-in"
+    if (method === "trade_in_credit") return "Crédito gerado no trade-in"
     return PAYMENT_METHODS.find((item) => item.value === method)?.label || method
   }
 
@@ -1249,6 +1359,17 @@ function NewSaleContent() {
       const creditDueDate = addDaysISO(today, 1) || today
       const receivableDueDate = isReservation ? paymentDueDate : isCreditSale ? creditDueDate : today
       const receivableStatus = isReservation || isCreditSale ? "pending" : "reconciled"
+      const tradeInOverageNote = storeAmountDue > 0
+        ? `Diferença do trade-in: ${tradeInOverageDecision === "credit" ? "gerar crédito operacional" : "registrar troco ao cliente"} (${formatBRL(storeAmountDue)}).`
+        : null
+      const saleOperationalNotes = [
+        quantity > 1 ? `[${quantity}x ${selectedProduct!.name}]` : null,
+        saleNotes || null,
+        tradeInOverageNote,
+      ].filter(Boolean).join("\n") || null
+      const resolvedPaymentMethod = paymentMethod || (storeAmountDue > 0
+        ? tradeInOverageDecision === "credit" ? "trade_in_credit" : "trade_in_return"
+        : null)
 
       // 2. Register the sale (sale_price = total including quantity)
       const { data: sale, error: saleError } = await (supabase
@@ -1260,7 +1381,7 @@ function NewSaleContent() {
           sale_price: finalTotal,
           net_amount: saleEconomics.storeCashReceives,
           card_fee_pct: saleEconomics.feePct || 0,
-          payment_method: paymentMethod || (storeAmountDue > 0 ? "trade_in_return" : null),
+          payment_method: resolvedPaymentMethod,
           warranty_months: parseInt(warrantyMonths),
           warranty_start: today,
           warranty_end: warrantyEnd,
@@ -1276,7 +1397,7 @@ function NewSaleContent() {
           lead_notes: leadNotes || null,
           packaging_type: packagingType || null,
           packaging_notes: packagingType === "other" ? packagingNotes.trim() || null : null,
-          notes: quantity > 1 ? `[${quantity}x ${selectedProduct!.name}]` + (saleNotes ? `\n${saleNotes}` : "") : saleNotes || null,
+          notes: saleOperationalNotes,
           // O banco exige trade_in_id quando has_trade_in=true. Como o trade-in
           // só existe depois que a venda é criada, ligamos essa flag no vínculo.
           has_trade_in: false,
@@ -1303,44 +1424,44 @@ function NewSaleContent() {
         await updateInventoryStock(selectedProduct!.id, quantity, isReservation ? "reserved" : "sold")
       }
 
-      // 2b. Save additional item (upsell / brinde) with quantity
-      if (additionalSelectedItem) {
-        const qty = additionalSelectedItem.qty || 1
-        const itemSalePrice = additionalSelectedItem.type === "upsell"
-          ? parseFloat(additionalSelectedItem.salePrice) * qty
+      // 2b. Save additional items (upsell / brinde). Prices/costs are expanded by quantity.
+      for (const additionalItem of additionalSaleItems) {
+        const qty = additionalItem.qty || 1
+        const itemSalePrice = additionalItem.type === "upsell"
+          ? parseFloat(additionalItem.salePrice) * qty
           : 0
 
-        await (supabase.from("sales_additional_items") as any).insert({
+        const { error: additionalItemError } = await (supabase.from("sales_additional_items") as any).insert({
           company_id: companyId,
           sale_id: sale.id,
-          product_id: additionalSelectedItem.itemId,
-          type: additionalSelectedItem.type,
-          name: additionalSelectedItem.name,
-          cost_price: additionalSelectedItem.cost * qty,
+          product_id: additionalItem.itemId,
+          type: additionalItem.type,
+          name: additionalItem.name,
+          cost_price: additionalItem.cost * qty,
           sale_price: itemSalePrice,
         })
 
-        // Update inventory status for additional item
+        if (additionalItemError) {
+          console.error("Erro ao registrar item adicional:", additionalItemError)
+          throw new Error(additionalItemError.message || "Erro ao registrar item adicional na venda")
+        }
+
         try {
-          // First verify the item is still in stock
           const { data: inventoryItem, error: checkError } = await (supabase
             .from("inventory") as any)
             .select("status")
-            .eq("id", additionalSelectedItem.itemId)
+            .eq("id", additionalItem.itemId)
             .single()
 
           if (checkError) {
             console.error("Erro ao verificar estoque do item adicional:", checkError)
           } else if (!["active", "in_stock"].includes(inventoryItem?.status)) {
-            console.warn(`Item adicional ${additionalSelectedItem.itemId} não está mais em estoque. Status: ${inventoryItem?.status}`)
-            // We still proceed, but log a warning
+            console.warn(`Item adicional ${additionalItem.itemId} não está mais em estoque. Status: ${inventoryItem?.status}`)
           }
 
-          await updateInventoryStock(additionalSelectedItem.itemId, qty, isReservation ? "reserved" : "sold")
+          await updateInventoryStock(additionalItem.itemId, qty, isReservation ? "reserved" : "sold")
         } catch (invError) {
           console.error("Erro ao atualizar estoque do item adicional:", invError)
-          // Não fazemos throw aqui para não quebrar o fluxo principal
-          // Mas registramos o erro para debug
         }
       }
 
@@ -1383,8 +1504,8 @@ function NewSaleContent() {
       }
 
       if (!isReservation) try {
-        const additionalItemsSummary = additionalSelectedItem
-          ? `${additionalSelectedItem.qty || 1}x ${getAdditionalItemDisplayName(additionalSelectedItem.name)}${additionalSelectedItem.type === "free" ? " (brinde)" : ""}`
+        const additionalItemsSummary = additionalSaleItems.length
+          ? additionalSaleItems.map((item) => `${item.qty || 1}x ${getAdditionalItemDisplayName(item.name)}${item.type === "free" ? " (brinde)" : ""}`).join(", ")
           : null
         const documentNotes = [selectedProduct?.condition_notes, saleNotes].filter(Boolean).join(". ")
         const documentData: SaleDocumentData = {
@@ -1393,7 +1514,7 @@ function NewSaleContent() {
           customerName: customer.name,
           customerCpf: customer.cpf || null,
           customerPhone: customer.phone || null,
-          paymentMethod: getPaymentMethodLabel(paymentMethod || (storeAmountDue > 0 ? "trade_in_return" : "")),
+          paymentMethod: getPaymentMethodLabel(resolvedPaymentMethod || ""),
           saleNotes: documentNotes || null,
           additionalItems: additionalItemsSummary,
           item: {
@@ -1427,7 +1548,7 @@ function NewSaleContent() {
           amount: saleEconomics.storeCashReceives,
           saleDate: today,
           dueDate: receivableDueDate,
-          paymentMethod,
+          paymentMethod: resolvedPaymentMethod,
           description: `${isReservation ? "Reserva" : "Venda"} · ${selectedProduct!.name}`,
           status: receivableStatus,
         })
@@ -1468,6 +1589,10 @@ function NewSaleContent() {
   const balanceAfterTradeIn = finalTotal - tradeInValue
   const customerAmountDue = Math.max(0, balanceAfterTradeIn)
   const storeAmountDue = Math.max(0, -balanceAfterTradeIn)
+  useEffect(() => {
+    if (!hasTradeIn || storeAmountDue <= 0) setTradeInOverageDecision("")
+  }, [hasTradeIn, storeAmountDue])
+
   const riskReserve = useMemo(() => {
     if (!selectedProduct) return 0
     return estimateRiskReserve({
@@ -1483,7 +1608,7 @@ function NewSaleContent() {
       saleRevenue: finalTotal,
       cashAmountDue: customerAmountDue,
       paymentMethod,
-      settings: fees as any,
+      settings: fees,
       costTotal: totalCost,
       riskReserve,
     })
@@ -1499,10 +1624,15 @@ function NewSaleContent() {
   const quickPaymentMethods = PAYMENT_METHODS.filter((item) => ["cash", "pix", "debit"].includes(item.value))
   const isCreditPayment = paymentMethod.startsWith("credit_")
   const amountAfterTradeIn = customerAmountDue
+  const creditPaymentMethod = isCreditPayment ? paymentMethod : "credit_12x"
+  const creditPayment = calculatePaymentPrice(amountAfterTradeIn, creditPaymentMethod, fees)
+
   const additionalCandidates = useMemo(() => {
     const term = additionalSearchTerm.trim().toLowerCase()
+    const selectedIds = new Set(additionalSaleItems.map((item) => item.itemId))
     return inventoryProducts
       .filter((item) => item.id !== selectedProduct?.id)
+      .filter((item) => !selectedIds.has(item.id))
       .filter((item) => additionalFilter === "all" || classifyAdditionalItem(item) === additionalFilter)
       .filter((item) => {
         if (!term) return true
@@ -1511,7 +1641,7 @@ function NewSaleContent() {
           .some((value) => String(value).toLowerCase().includes(term))
       })
       .slice(0, 10)
-  }, [inventoryProducts, selectedProduct?.id, additionalFilter, additionalSearchTerm])
+  }, [inventoryProducts, selectedProduct?.id, additionalFilter, additionalSearchTerm, additionalSaleItems])
   const tradeInModelOptions = useMemo(() => {
     const term = tradeInModelSearch.trim().toLowerCase()
     return Object.entries(PRODUCT_CATALOG)
@@ -1577,31 +1707,147 @@ function NewSaleContent() {
       badge: "green" as const,
     }
   }, [hasTradeIn, tradeInModel, tradeInEvaluation, tradeIn.value])
+  const tradeInDeviceName = tradeInModel?.name || tradeInModelSearch || "Aparelho recebido"
+  const hasValidTradeIn = !hasTradeIn || Boolean(tradeIn.category && tradeInModel && Number(tradeIn.value || 0) > 0)
+  const tradeInOverageNeedsDecision = hasTradeIn && storeAmountDue > 0
+  const canResolveTradeInOverage = !tradeInOverageNeedsDecision || Boolean(tradeInOverageDecision && tradeInOverageDecision !== "block")
+  const paidAdditionalCount = additionalSaleItems.reduce((sum, item) => item.type === "upsell" ? sum + (item.qty || 1) : sum, 0)
+  const giftCount = additionalSaleItems.reduce((sum, item) => item.type === "free" ? sum + (item.qty || 1) : sum, 0)
+  const giftRealTotal = additionalSaleItems.reduce((sum, item) => item.type === "free" ? sum + (Number(item.suggested || item.salePrice || 0) * (item.qty || 1)) : sum, 0)
+  const grossItemsTotal = (selectedProduct ? (originalTotalPrice || totalBasePrice) : 0) + upsellTotal
+  const discountTotal = Math.max(0, grossItemsTotal - finalTotal)
+  const warrantyIssueText = isReservation
+    ? "Garantia será emitida somente após recebimento"
+    : "Garantia será emitida ao concluir a venda"
+  const profitTitle = isReservation ? "Lucro previsto" : hasTradeIn && !hasValidTradeIn ? "Lucro estimado" : "Lucro real"
+  const profitCaption = `${saleEconomics.realMarginPct.toFixed(1)}% de margem`
+  const operationalStatus = isReservation ? "Reserva" : "Venda imediata"
+  const saleItems = useMemo(() => {
+    const rows: Array<{
+      id: string
+      name: string
+      identity: string
+      type: "Principal" | "Upsell" | "Brinde" | "Acessório"
+      quantity: number
+      unitPrice: number
+      chargedUnitPrice: number
+      total: number
+      realTotal: number
+      cost: number
+      marginPct: number | null
+      removable?: boolean
+    }> = []
+
+    if (selectedProduct) {
+      const cost = (selectedProduct.type === "supplier" ? parseFloat(supplierCostInput) || 0 : selectedProduct.cost) * quantity
+      rows.push({
+        id: selectedProduct.id,
+        name: selectedProduct.name,
+        identity: productIdentity || "Sem IMEI/serial informado",
+        type: "Principal",
+        quantity,
+        unitPrice,
+        chargedUnitPrice: unitPrice,
+        total: totalBasePrice,
+        realTotal: totalBasePrice,
+        cost,
+        marginPct: totalBasePrice > 0 ? ((totalBasePrice - cost) / totalBasePrice) * 100 : null,
+      })
+    }
+
+    additionalSaleItems.forEach((additionalItem) => {
+      const qty = additionalItem.qty || 1
+      const isFree = additionalItem.type === "free"
+      const realUnitPrice = Number(additionalItem.suggested || additionalItem.salePrice || 0)
+      const chargedUnitPrice = isFree ? 0 : parseFloat(additionalItem.salePrice) || 0
+      const total = chargedUnitPrice * qty
+      const realTotal = realUnitPrice * qty
+      const cost = additionalItem.cost * qty
+      const itemKind = isFree
+        ? "Brinde"
+        : classifyAdditionalItem(additionalItem) === "accessory"
+          ? "Acessório"
+          : "Upsell"
+      rows.push({
+        id: additionalItem.itemId,
+        name: getAdditionalItemDisplayName(additionalItem.name),
+        identity: [additionalItem.imei ? `IMEI ${additionalItem.imei}` : null, additionalItem.serialNumber ? `Serial ${additionalItem.serialNumber}` : null]
+          .filter(Boolean)
+          .join(" · ") || "Item vinculado à venda",
+        type: itemKind,
+        quantity: qty,
+        unitPrice: realUnitPrice,
+        chargedUnitPrice,
+        total,
+        realTotal,
+        cost,
+        marginPct: total > 0 ? ((total - cost) / total) * 100 : null,
+        removable: true,
+      })
+    })
+
+    return rows
+  }, [selectedProduct, supplierCostInput, quantity, productIdentity, unitPrice, totalBasePrice, additionalSaleItems])
+
+  const hasPaymentReady = Boolean(selectedProduct && (paymentMethod || customerAmountDue === 0))
+  const saleSteps = [
+    { label: "Produto", done: Boolean(selectedProduct) },
+    { label: "Cliente", done: Boolean(customer.name && validateCPF(customer.cpf)) },
+    { label: "Itens e adicionais", done: Boolean(selectedProduct) },
+    { label: "Pagamento", done: Boolean(hasPaymentReady && (!isReservation || paymentDueDate)) },
+    { label: "Revisão", done: false },
+  ]
+  const currentStepIndex = saleSteps.findIndex((step) => !step.done)
+  const normalizedCurrentStep = currentStepIndex === -1 ? saleSteps.length - 1 : currentStepIndex
+  const pendingChecklist = [
+    { label: "Selecionar produto principal", done: Boolean(selectedProduct) },
+    { label: "Informar cliente válido", done: Boolean(customer.name && validateCPF(customer.cpf)) },
+    { label: "Definir forma de pagamento", done: hasPaymentReady },
+    ...(isReservation ? [{ label: "Informar previsão de pagamento", done: Boolean(paymentDueDate) }] : []),
+    ...(selectedProduct?.type === "supplier" ? [{ label: "Informar custo do fornecedor", done: Boolean(supplierCostInput) }] : []),
+    ...(!isReservation && saleEconomics.storeCashReceives > 0 ? [{ label: "Selecionar conta de recebimento", done: Boolean(receiptAccountId) }] : []),
+    ...(hasTradeIn ? [{ label: "Preencher dados mínimos do trade-in", done: hasValidTradeIn }] : []),
+    ...(tradeInOverageNeedsDecision ? [{ label: "Decidir diferença do trade-in", done: canResolveTradeInOverage }] : []),
+  ]
+
   const canFinishSale = Boolean(
     selectedProduct &&
     customer.name &&
     validateCPF(customer.cpf) &&
     salePrice &&
-    (paymentMethod || customerAmountDue === 0) &&
+    hasPaymentReady &&
     (!isReservation || paymentDueDate) &&
     (isReservation || saleEconomics.storeCashReceives <= 0 || receiptAccountId) &&
-    (selectedProduct?.type !== "supplier" || supplierCostInput)
+    (selectedProduct?.type !== "supplier" || supplierCostInput) &&
+    hasValidTradeIn &&
+    canResolveTradeInOverage
   )
 
   return (
     <div className="animate-fade-in space-y-5 pb-8">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Nova venda</p>
-          <h1 className="text-2xl font-bold text-navy-900">Caixa de venda</h1>
-          <p className="text-sm text-gray-500">Busque o produto, monte o carrinho e feche a venda sem atravessar um formulário comprido.</p>
+      <div className="overflow-hidden rounded-[24px] border border-gray-100 bg-white shadow-[0_18px_50px_rgba(13,27,46,0.08)]">
+        <div className="flex flex-col gap-4 border-b border-gray-100 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-navy-900 text-white">
+              <ShoppingCart className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Nova venda</p>
+              <h1 className="font-display text-xl font-bold text-navy-900 font-syne">Caixa de venda</h1>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={isReservation ? "yellow" : "green"} dot>
+              {isReservation ? "Reserva" : "Venda imediata"}
+            </Badge>
+            {hasTradeIn && <Badge variant="blue" dot>Trade-in ativo</Badge>}
+            {!paymentMethod && customerAmountDue > 0 && <Badge variant="gray" dot>Pagamento pendente</Badge>}
+          </div>
         </div>
-        <Badge variant={isReservation ? "yellow" : "green"} dot>
-          {isReservation ? "Reserva / receber depois" : "Venda imediata"}
-        </Badge>
+        <SaleStepper steps={saleSteps} currentStep={normalizedCurrentStep} />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_390px]">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_400px] 2xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="space-y-5">
           <SectionCard eyebrow="1. Produto" title="Produto principal" description="Busque por nome, IMEI ou número de série.">
             <Input
@@ -1649,16 +1895,6 @@ function NewSaleContent() {
                     onBlur={commitSalePriceInput}
                     onKeyDown={handleSalePriceKeyDown}
                   />
-                  {hasMainProductDiscount && (
-                    <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Desconto aplicado</p>
-                      <p className="mt-1 text-sm text-gray-500">
-                        De <span className="line-through">{formatBRL(originalTotalPrice)}</span>
-                      </p>
-                      <p className="text-lg font-bold text-emerald-700">Por {formatBRL(totalBasePrice)}</p>
-                      <p className="text-xs text-emerald-700">Economia de {formatBRL(mainProductDiscount)}</p>
-                    </div>
-                  )}
                   <Input
                     label="Quantidade"
                     type="number"
@@ -1676,6 +1912,19 @@ function NewSaleContent() {
                     </div>
                   )}
                 </div>
+                {hasMainProductDiscount && (
+                  <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50 p-3">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Desconto aplicado</p>
+                        <p className="mt-1 text-sm text-gray-500">
+                          De <span className="line-through">{formatBRL(originalTotalPrice)}</span> para <span className="font-bold text-emerald-700">{formatBRL(totalBasePrice)}</span>
+                        </p>
+                      </div>
+                      <p className="text-sm font-bold text-emerald-700">Economia de {formatBRL(mainProductDiscount)}</p>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1751,19 +2000,16 @@ function NewSaleContent() {
             )}
           </SectionCard>
 
-          <SectionCard eyebrow="3. Carrinho" title="Adicionais e brindes" description="Inclua upsell sem percorrer uma lista gigante. Preço e quantidade do produto principal ficam no próprio produto.">
-            <div className="rounded-2xl border border-gray-100 bg-surface p-4">
+          <SectionCard eyebrow="3. Carrinho" title="Adicionais e brindes" description="Inclua quantos upsells, acessórios e brindes forem necessários na mesma venda.">
+            <div id="additional-items-builder" className="rounded-2xl border border-gray-100 bg-surface p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <p className="text-sm font-semibold text-navy-900">Adicionais</p>
-                  <p className="text-xs text-gray-500">Use para capa, película, cabo, brinde ou outro produto vendido junto.</p>
+                  <p className="text-sm font-semibold text-navy-900">Adicionar item à venda</p>
+                  <p className="text-xs text-gray-500">Cada item pode sair como upsell pago ou como brinde.</p>
                 </div>
                 <ToggleSwitch
                   checked={hasAdditionalItem}
-                  onChange={() => {
-                    setHasAdditionalItem(!hasAdditionalItem)
-                    if (hasAdditionalItem) setAdditionalSelectedItem(null)
-                  }}
+                  onChange={() => setHasAdditionalItem(!hasAdditionalItem)}
                 />
               </div>
 
@@ -1801,20 +2047,8 @@ function NewSaleContent() {
                       <button
                         key={item.id}
                         type="button"
-                        onClick={() => {
-                          setAdditionalSelectedItem({
-                            itemId: item.id,
-                            name: item.name,
-                            cost: item.cost,
-                            type: "upsell",
-                            salePrice: item.suggested.toString(),
-                            qty: 1,
-                            availableQty: getAvailableQty(item),
-                          })
-                        }}
-                        className={`rounded-xl border bg-white p-3 text-left transition-all hover:border-royal-500 ${
-                          additionalSelectedItem?.itemId === item.id ? "border-royal-500 ring-2 ring-royal-500/10" : "border-gray-100"
-                        }`}
+                        onClick={() => addAdditionalSaleItem(item)}
+                        className="rounded-xl border border-gray-100 bg-white p-3 text-left transition-all hover:border-royal-500 hover:ring-2 hover:ring-royal-500/10"
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
@@ -1829,53 +2063,70 @@ function NewSaleContent() {
                     ))}
                   </div>
 
-                  {additionalSelectedItem && (
-                    <div className="rounded-2xl border border-royal-500/20 bg-white p-4">
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                        <div>
-                          <p className="text-sm font-bold text-navy-900">{getAdditionalItemDisplayName(additionalSelectedItem.name)}</p>
-                          <p className="text-xs text-gray-500">
-                            Custo {formatBRL(additionalSelectedItem.cost)} · {additionalSelectedItem.availableQty} disponível(is)
-                          </p>
-                        </div>
-                        <button type="button" className="text-gray-400 hover:text-danger-500" onClick={() => setAdditionalSelectedItem(null)}>
-                          <X className="h-4 w-4" />
-                        </button>
-                      </div>
-                      <div className="mt-3 grid gap-3 md:grid-cols-3">
-                        <div className="flex rounded-xl bg-surface p-1">
-                          {[
-                            { value: "upsell", label: "Pago" },
-                            { value: "free", label: "Brinde" },
-                          ].map((option) => (
-                            <button
-                              key={option.value}
-                              type="button"
-                              onClick={() => setAdditionalSelectedItem((previous) => previous ? { ...previous, type: option.value as "upsell" | "free" } : previous)}
-                              className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${
-                                additionalSelectedItem.type === option.value ? "bg-navy-900 text-white" : "text-gray-500"
-                              }`}
-                            >
-                              {option.label}
-                            </button>
-                          ))}
-                        </div>
-                        <Input
-                          label="Preço"
-                          type="number"
-                          disabled={additionalSelectedItem.type === "free"}
-                          value={additionalSelectedItem.type === "free" ? "0" : additionalSelectedItem.salePrice}
-                          onChange={(event) => setAdditionalSelectedItem((previous) => previous ? { ...previous, salePrice: event.target.value } : previous)}
-                        />
-                        <Input
-                          label="Qtd."
-                          type="number"
-                          min={1}
-                          max={additionalSelectedItem.availableQty}
-                          value={additionalSelectedItem.qty}
-                          onChange={(event) => setAdditionalSelectedItem((previous) => previous ? { ...previous, qty: clampQty(parseInt(event.target.value) || 1, previous.availableQty) } : previous)}
-                        />
-                      </div>
+                  {additionalSaleItems.length > 0 && (
+                    <div className="space-y-3">
+                      {additionalSaleItems.map((item) => {
+                        const isFree = item.type === "free"
+                        return (
+                          <div key={item.itemId} className="rounded-2xl border border-royal-500/20 bg-white p-4">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <div>
+                                <p className="text-sm font-bold text-navy-900">{getAdditionalItemDisplayName(item.name)}</p>
+                                <p className="text-xs text-gray-500">
+                                  Preço real {formatBRL(Number(item.suggested || item.salePrice || 0))} · Custo {formatBRL(item.cost)} · {item.availableQty} disponível(is)
+                                </p>
+                              </div>
+                              <button type="button" className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-danger-100 hover:text-danger-500" onClick={() => removeAdditionalSaleItem(item.itemId)} aria-label="Remover item">
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
+                            <div className="mt-3 grid gap-3 md:grid-cols-[220px_1fr_140px]">
+                              <div className="flex rounded-xl bg-surface p-1">
+                                {[
+                                  { value: "upsell", label: "Upsell" },
+                                  { value: "free", label: "Brinde" },
+                                ].map((option) => (
+                                  <button
+                                    key={option.value}
+                                    type="button"
+                                    onClick={() => updateAdditionalSaleItem(item.itemId, { type: option.value as "upsell" | "free" })}
+                                    className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${
+                                      item.type === option.value ? "bg-navy-900 text-white" : "text-gray-500"
+                                    }`}
+                                  >
+                                    {option.label}
+                                  </button>
+                                ))}
+                              </div>
+                              <Input
+                                label={isFree ? "Preço real do brinde" : "Preço de venda"}
+                                type="number"
+                                disabled={isFree}
+                                value={isFree ? Number(item.suggested || item.salePrice || 0) : item.salePrice}
+                                onChange={(event) => updateAdditionalSaleItem(item.itemId, { salePrice: event.target.value })}
+                              />
+                              <Input
+                                label="Qtd."
+                                type="number"
+                                min={1}
+                                max={item.availableQty}
+                                value={item.qty}
+                                onChange={(event) => updateAdditionalSaleItem(item.itemId, { qty: clampQty(parseInt(event.target.value) || 1, item.availableQty) })}
+                              />
+                            </div>
+                            {isFree && (
+                              <div className="mt-3 rounded-xl border border-success-500/20 bg-success-100/25 px-3 py-2 text-xs font-semibold text-green-800">
+                                Este item tem valor real de {formatBRL(Number(item.suggested || item.salePrice || 0) * (item.qty || 1))}, mas sairá por R$ 0,00 como brinde.
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                  {additionalCandidates.length === 0 && additionalSaleItems.length === 0 && (
+                    <div className="rounded-2xl border border-dashed border-gray-200 py-8 text-center text-sm text-gray-400">
+                      Nenhum item disponível para adicionar.
                     </div>
                   )}
                 </div>
@@ -1883,52 +2134,119 @@ function NewSaleContent() {
             </div>
           </SectionCard>
 
-          <SectionCard eyebrow="4. Pagamento" title="Forma de pagamento" description="Escolha crédito uma vez e defina a parcela abaixo.">
+          <SectionCard eyebrow="4. Pagamento" title="Forma de pagamento" description="Escolha a forma de pagamento e defina a condição.">
             {storeAmountDue > 0 && (
-              <div className="mb-4 rounded-2xl border border-warning-500/30 bg-warning-100/30 p-4">
-                <p className="text-sm font-bold text-navy-900">Downgrade identificado</p>
-                <p className="mt-1 text-sm text-gray-600">
-                  O aparelho recebido ficou {formatBRL(storeAmountDue)} acima desta venda. Esse é o valor que a loja deve devolver ao cliente.
-                </p>
+              <div className="mb-4 rounded-[20px] border border-warning-500/30 bg-warning-100/40 p-4">
+                <div className="flex items-start gap-3">
+                  <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-warning-500 shadow-sm">
+                    <AlertTriangle className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-navy-900">Trade-in maior que a venda</p>
+                    <p className="mt-1 text-sm text-gray-600">
+                      O aparelho recebido ficou {formatBRL(storeAmountDue)} acima desta venda. Escolha a decisão operacional antes de concluir.
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                  <DecisionButton active={tradeInOverageDecision === "credit"} onClick={() => setTradeInOverageDecision("credit")}>
+                    Gerar crédito
+                  </DecisionButton>
+                  <DecisionButton active={tradeInOverageDecision === "change"} onClick={() => setTradeInOverageDecision("change")}>
+                    Registrar troco
+                  </DecisionButton>
+                  <DecisionButton active={tradeInOverageDecision === "block"} onClick={() => setTradeInOverageDecision("block")} tone="danger">
+                    Bloquear conclusão
+                  </DecisionButton>
+                </div>
               </div>
             )}
-            <div className="grid gap-2 md:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
               {quickPaymentMethods.map((method) => {
-                const payment = calculatePaymentPrice(amountAfterTradeIn, method.value, fees as any)
+                const payment = calculatePaymentPrice(amountAfterTradeIn, method.value, fees)
+                const MethodIcon = method.value === "cash" ? Banknote : method.value === "pix" ? PixBrandIcon : CreditCard
                 return (
-                  <button
+                  <PaymentMethodCard
                     key={method.value}
-                    type="button"
+                    icon={MethodIcon}
+                    label={method.label}
+                    selected={paymentMethod === method.value}
+                    customerPays={formatBRL(payment.price)}
+                    storeReceives={formatBRL(amountAfterTradeIn)}
                     onClick={() => setPaymentMethod(method.value)}
-                    className={`rounded-2xl border p-4 text-left transition-all ${
-                      paymentMethod === method.value ? "border-navy-900 bg-navy-900 text-white" : "border-gray-100 bg-white hover:border-royal-500"
-                    }`}
-                  >
-                    <p className="text-sm font-bold">{method.label}</p>
-                    <p className={`mt-1 text-lg font-bold ${paymentMethod === method.value ? "text-white" : "text-navy-900"}`}>{formatBRL(payment.price)}</p>
-                  </button>
+                  />
                 )
               })}
-              <button
-                type="button"
-                onClick={() => setPaymentMethod(isCreditPayment ? paymentMethod : "credit_1x")}
-                className={`rounded-2xl border p-4 text-left transition-all ${
-                  isCreditPayment ? "border-navy-900 bg-navy-900 text-white" : "border-gray-100 bg-white hover:border-royal-500"
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => setPaymentMethod(creditPaymentMethod)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") setPaymentMethod(creditPaymentMethod)
+                }}
+                className={`relative min-h-[168px] rounded-[20px] border p-4 text-left shadow-sm transition-all duration-200 ${
+                  isCreditPayment
+                    ? "border-royal-500 bg-white shadow-[0_16px_45px_rgba(58,107,196,0.14)] ring-2 ring-royal-500/10"
+                    : "border-gray-200 bg-white hover:border-royal-400 hover:shadow-[0_14px_34px_rgba(13,27,46,0.08)]"
                 }`}
               >
-                <p className="text-sm font-bold">Crédito</p>
-                <p className={`mt-1 text-lg font-bold ${isCreditPayment ? "text-white" : "text-navy-900"}`}>
-                  {formatBRL(calculatePaymentPrice(amountAfterTradeIn, isCreditPayment ? paymentMethod : "credit_1x", fees as any).price)}
-                </p>
-              </button>
+                {isCreditPayment && (
+                  <span className="absolute right-4 top-4 flex h-7 w-7 items-center justify-center rounded-full bg-royal-500 text-white">
+                    <Check className="h-4 w-4" />
+                  </span>
+                )}
+                <div className="flex items-center gap-3">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-100 text-purple-700">
+                    <CreditCard className="h-5 w-5" />
+                  </span>
+                  <p className="text-sm font-bold text-navy-900">Crédito</p>
+                </div>
+                <div className="mt-5 grid gap-2 text-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-gray-500">Cliente paga</span>
+                    <span className="font-bold text-navy-900">{formatBRL(creditPayment.price)}</span>
+                  </div>
+                  <p className="text-xs font-medium text-gray-500">
+                    {creditPayment.installments}x de {formatBRL(creditPayment.installmentValue)}
+                  </p>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-gray-500">Loja recebe</span>
+                    <span className="font-bold text-navy-900">{formatBRL(amountAfterTradeIn)}</span>
+                  </div>
+                </div>
+                <div className="mt-4 flex items-center justify-between gap-3">
+                  <select
+                    value={creditPaymentMethod}
+                    onClick={(event) => event.stopPropagation()}
+                    onChange={(event) => setPaymentMethod(event.target.value)}
+                    className="h-10 rounded-xl border border-gray-200 bg-white px-3 text-xs font-semibold text-navy-900 outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                  >
+                    {creditMethods.map((method) => (
+                      <option key={method.value} value={method.value}>
+                        {method.label.replace("Crédito ", "")}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setShowFeeTable((value) => !value)
+                    }}
+                    className="text-xs font-semibold text-royal-600 hover:text-royal-500"
+                  >
+                    Ver tabela de taxas
+                  </button>
+                </div>
+              </div>
             </div>
 
-            {isCreditPayment && (
-              <div className="mt-4 rounded-2xl border border-gray-100 bg-surface p-3">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Parcelas no crédito</p>
+            {(isCreditPayment || showFeeTable) && (
+              <div className="mt-4 rounded-[18px] border border-gray-100 bg-surface p-3">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Tabela de taxas do crédito</p>
                 <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
                   {creditMethods.map((method) => {
-                    const payment = calculatePaymentPrice(amountAfterTradeIn, method.value, fees as any)
+                    const payment = calculatePaymentPrice(amountAfterTradeIn, method.value, fees)
                     return (
                       <button
                         key={method.value}
@@ -1948,7 +2266,7 @@ function NewSaleContent() {
             )}
 
             <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <div className="rounded-2xl border border-warning-500/20 bg-warning-100/20 p-4">
+              <div className="rounded-[20px] border border-warning-500/25 bg-gradient-to-br from-warning-100/60 to-white p-4 shadow-sm">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-navy-900">Reservar venda</p>
@@ -1962,6 +2280,7 @@ function NewSaleContent() {
                     type="date"
                     value={paymentDueDate}
                     onChange={(event) => setPaymentDueDate(event.target.value)}
+                    icon={<CalendarDays className="h-4 w-4" />}
                     className="mt-3"
                   />
                 )}
@@ -1989,10 +2308,10 @@ function NewSaleContent() {
                 )}
               </div>
 
-              <div className="rounded-2xl border border-gray-100 bg-surface p-4">
+              <div className="rounded-[20px] border border-royal-500/20 bg-gradient-to-br from-royal-100/55 to-white p-4 shadow-sm">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <p className="text-sm font-semibold text-navy-900">Receber aparelho na troca</p>
+                    <p className="text-sm font-semibold text-navy-900">Receber aparelho na troca (trade-in)</p>
                     <p className="text-xs text-gray-500">Use quando tiver trade-in.</p>
                   </div>
                   <ToggleSwitch checked={hasTradeIn} onChange={() => setHasTradeIn(!hasTradeIn)} />
@@ -2001,14 +2320,20 @@ function NewSaleContent() {
             </div>
 
             {hasTradeIn && (
-              <div className="mt-4 rounded-2xl border border-gray-100 bg-surface p-4">
+              <div className="mt-4 rounded-[20px] border border-gray-100 bg-white p-4 shadow-sm">
                 <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <p className="text-sm font-semibold text-navy-900">Aparelho recebido</p>
-                    <p className="text-xs text-gray-500">Use a busca para puxar o modelo da tabela de avaliação e comparar o valor recebido.</p>
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-success-100/60 text-success-500">
+                      <Smartphone className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-royal-600">Aparelho recebido (trade-in)</p>
+                      <h3 className="text-base font-bold text-navy-900">Aparelho recebido (trade-in)</h3>
+                      <p className="text-xs text-gray-500">Use a busca para puxar o modelo da tabela de avaliação e comparar o valor abatido.</p>
+                    </div>
                   </div>
-                  <Badge variant={tradeInReferenceStatus.badge} dot>
-                    {tradeInReferenceStatus.label}
+                  <Badge variant={hasValidTradeIn ? "green" : tradeInReferenceStatus.badge} dot>
+                    {hasValidTradeIn ? "Valor abatido" : tradeInReferenceStatus.label}
                   </Badge>
                 </div>
 
@@ -2043,20 +2368,7 @@ function NewSaleContent() {
 
                 <div className="grid gap-3 md:grid-cols-4">
                   <select
-                    className="h-11 rounded-xl border border-gray-200 bg-white px-3 text-sm"
-                    value={tradeIn.category}
-                    onChange={(event) => {
-                      handleTradeInChange({ category: event.target.value, modelIdx: 0 })
-                      setTradeInModelSearch("")
-                    }}
-                  >
-                    <option value="">Categoria</option>
-                    {CATEGORIES.map((category) => (
-                      <option key={category.value} value={category.value}>{category.label}</option>
-                    ))}
-                  </select>
-                  <select
-                    className="h-11 rounded-xl border border-gray-200 bg-white px-3 text-sm"
+                    className="h-11 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-navy-900 outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
                     value={tradeIn.modelIdx}
                     onChange={(event) => {
                       const nextIndex = parseInt(event.target.value) || 0
@@ -2068,8 +2380,31 @@ function NewSaleContent() {
                       <option key={model.name} value={index}>{model.name}</option>
                     ))}
                   </select>
-                  <Input placeholder="IMEI" value={tradeIn.imei} onChange={(event) => handleTradeInChange({ imei: event.target.value.replace(/\D/g, "").slice(0, 15) })} />
-                  <Input placeholder="Valor recebido" type="number" value={tradeIn.value} onChange={(event) => handleTradeInChange({ value: event.target.value })} />
+                  <select
+                    className="h-11 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-navy-900 outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                    value={tradeIn.category}
+                    onChange={(event) => {
+                      handleTradeInChange({ category: event.target.value, modelIdx: 0 })
+                      setTradeInModelSearch("")
+                    }}
+                  >
+                    <option value="">Categoria</option>
+                    {CATEGORIES.map((category) => (
+                      <option key={category.value} value={category.value}>{category.label}</option>
+                    ))}
+                  </select>
+                  <Input placeholder="IMEI / Serial" value={tradeIn.imei} onChange={(event) => handleTradeInChange({ imei: event.target.value.replace(/\D/g, "").slice(0, 15) })} />
+                  <Input
+                    placeholder="Valor abatido"
+                    inputMode="decimal"
+                    value={tradeInValueInput || formatCurrencyInputValue(tradeIn.value)}
+                    onChange={(event) => {
+                      setTradeInValueInput(event.target.value)
+                      const parsed = parseCurrencyInput(event.target.value)
+                      handleTradeInChange({ value: parsed > 0 ? parsed.toString() : "" })
+                    }}
+                    onBlur={() => setTradeInValueInput(formatCurrencyInputValue(tradeIn.value))}
+                  />
                 </div>
 
                 <div className="mt-3 grid gap-3 md:grid-cols-[1fr_160px]">
@@ -2083,7 +2418,7 @@ function NewSaleContent() {
                           onClick={() => handleTradeInChange({ grade: grade.value })}
                           className={`rounded-xl border px-3 py-2 text-sm font-bold transition-all ${
                             tradeIn.grade === grade.value
-                              ? "border-navy-900 bg-navy-900 text-white"
+                              ? "border-success-500 bg-success-100/60 text-green-800"
                               : "border-gray-100 bg-white text-gray-500 hover:border-royal-500"
                           }`}
                         >
@@ -2128,22 +2463,39 @@ function NewSaleContent() {
             )}
           </SectionCard>
 
-          <SectionCard eyebrow="5. Garantia e observações" title="Fechamento" description="A garantia será emitida ao concluir uma venda recebida agora.">
-            <div className="mb-5 rounded-2xl border border-gray-100 bg-gray-50 p-4">
-              <div className="mb-4 flex items-start gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-royal-100 text-royal-600">
-                  <Megaphone className="h-5 w-5" />
+          <SectionCard eyebrow="5. Garantia e Observações" title="Garantia e Observações" description={warrantyIssueText}>
+            <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)] xl:items-start">
+              <div className="rounded-[20px] border border-gray-100 bg-surface p-4">
+                <div className="mb-3 flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-royal-100 text-royal-600">
+                    <ShieldCheck className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-navy-900">Garantia</p>
+                    <p className="text-xs text-gray-500">{warrantyIssueText}</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Origem da venda</p>
-                  <h3 className="text-lg font-bold text-navy-900">Rastreabilidade comercial</h3>
-                  <p className="text-sm text-gray-500">Marque de onde veio o cliente para medir ROI de campanha depois.</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {["1", "3", "6", "12"].map((months) => (
+                    <button
+                      key={months}
+                      type="button"
+                      onClick={() => setWarrantyMonths(months)}
+                      className={`rounded-xl border px-3 py-3 text-sm font-bold transition-all ${
+                        warrantyMonths === months
+                          ? "border-royal-500 bg-royal-100/70 text-royal-600 shadow-sm"
+                          : "border-gray-200 bg-white text-navy-900 hover:border-royal-400"
+                      }`}
+                    >
+                      {months} {months === "1" ? "mês" : "meses"}
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
                 <div>
-                  <label className="mb-2 block text-sm font-medium text-navy-900">Origem</label>
+                  <label className="mb-2 block text-sm font-medium text-navy-900">Origem da venda</label>
                   <select
                     value={saleOrigin}
                     onChange={(event) => {
@@ -2159,71 +2511,38 @@ function NewSaleContent() {
                     ))}
                   </select>
                 </div>
-
-                {saleOrigin === "trafego_pago" ? (
-                  <div>
-                    <label className="mb-2 block text-sm font-medium text-navy-900">Campanha</label>
-                    <select
-                      value={marketingCampaignId}
-                      onChange={(event) => setMarketingCampaignId(event.target.value)}
-                      className="h-12 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
-                    >
-                      <option value="">Sem campanha vinculada</option>
-                      {marketingCampaigns.map((campaign) => (
-                        <option key={campaign.id} value={campaign.id}>
-                          {campaign.name} · {campaign.channel}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                ) : (
-                  <div className="rounded-xl border border-gray-100 bg-white p-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Campanha</p>
-                    <p className="mt-1 text-sm font-semibold text-navy-900">Não se aplica</p>
-                    <p className="text-xs text-gray-500">Use apenas quando a origem for tráfego pago.</p>
-                  </div>
-                )}
-
-                <Input
-                  label="Observação do lead"
-                  placeholder="Ex: indicação, direct, grupo..."
-                  value={leadNotes}
-                  onChange={(event) => setLeadNotes(event.target.value)}
-                />
-              </div>
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-[260px_1fr]">
-              <div>
-                <label className="mb-2 block text-sm font-medium text-navy-900">Garantia: {warrantyMonths} meses</label>
-                <input
-                  type="range"
-                  min="1"
-                  max="12"
-                  value={warrantyMonths}
-                  onChange={(event) => setWarrantyMonths(event.target.value)}
-                  className="w-full accent-royal-500"
-                />
-                <div className="mt-1 flex justify-between text-xs text-gray-400">
-                  <span>1 mês</span>
-                  <span>12 meses</span>
+                <div>
+                  <label className="mb-2 flex items-center gap-1 text-sm font-medium text-navy-900">
+                    Campanha
+                    <Info className="h-3.5 w-3.5 text-gray-400" />
+                  </label>
+                  <select
+                    value={marketingCampaignId}
+                    onChange={(event) => setMarketingCampaignId(event.target.value)}
+                    disabled={saleOrigin !== "trafego_pago"}
+                    className="h-12 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10 disabled:bg-gray-50 disabled:text-gray-400"
+                  >
+                    <option value="">Não se aplica</option>
+                    {marketingCampaigns.map((campaign) => (
+                      <option key={campaign.id} value={campaign.id}>
+                        {campaign.name} · {campaign.channel}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
-              <Textarea
-                label="Observações da venda"
-                placeholder="Condição negociada, combinado com cliente, acessórios inclusos..."
-                value={saleNotes}
-                onChange={(event) => setSaleNotes(event.target.value)}
-              />
             </div>
 
-            <div className="mt-4 rounded-2xl border border-gray-100 bg-white p-4">
-              <div className="mb-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-royal-600">Entrega do aparelho</p>
-                <h3 className="text-base font-bold text-navy-900">Tipo de embalagem</h3>
-                <p className="text-sm text-gray-500">Essa informação aparece no pós-venda e na Compra Verificada do cliente.</p>
-              </div>
-              <div className="grid gap-3 md:grid-cols-[260px_1fr]">
+            <Textarea
+              label="Observações da venda"
+              placeholder="Condição negociada, combinado com cliente, acessórios inclusos..."
+              value={saleNotes}
+              onChange={(event) => setSaleNotes(event.target.value)}
+              className="mt-4 min-h-[150px]"
+            />
+
+            <div className="mt-4 rounded-[20px] border border-gray-100 bg-white p-4">
+              <div className="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)]">
                 <div>
                   <label className="mb-2 block text-sm font-medium text-navy-900">Tipo de embalagem</label>
                   <select
@@ -2250,174 +2569,221 @@ function NewSaleContent() {
                   />
                 ) : (
                   <div className="rounded-xl border border-gray-100 bg-gray-50 p-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Observação</p>
-                    <p className="mt-1 text-sm text-gray-500">Use “Outro” quando precisar descrever uma embalagem fora do padrão.</p>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Entrega</p>
+                    <p className="mt-1 text-sm text-gray-500">Essa informação aparece no pós-venda e na Compra Verificada do cliente.</p>
                   </div>
                 )}
+              </div>
+            </div>
+
+            <div className="mt-4 overflow-hidden rounded-[20px] border border-gray-100 bg-white">
+              <div className="flex flex-col gap-3 border-b border-gray-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-navy-900">Resumo dos itens da venda</h3>
+                    <Badge variant="green">{saleItems.length} itens</Badge>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">Produto principal, upsells, acessórios e brindes vinculados à venda.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={openAdditionalBuilder}
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-royal-500 px-3 text-xs font-bold text-royal-600 transition hover:bg-royal-100/50"
+                >
+                  <Plus className="h-4 w-4" />
+                  Adicionar item à venda
+                </button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-[880px] w-full text-left text-sm">
+                  <thead className="bg-gray-50 text-[11px] font-bold uppercase tracking-wide text-gray-400">
+                    <tr>
+                      <th className="px-4 py-3">Item</th>
+                      <th className="px-3 py-3">Tipo</th>
+                      <th className="px-3 py-3 text-center">Qtd.</th>
+                      <th className="px-3 py-3 text-right">Preço unit.</th>
+                      <th className="px-3 py-3 text-right">Total</th>
+                      <th className="px-3 py-3 text-right">Custo</th>
+                      <th className="px-3 py-3 text-right">Margem</th>
+                      <th className="px-3 py-3 text-right">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {saleItems.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="px-4 py-8 text-center text-sm text-gray-400">
+                          Selecione um produto para montar o resumo da venda.
+                        </td>
+                      </tr>
+                    ) : (
+                      saleItems.map((item) => (
+                        <tr key={item.id} className="transition hover:bg-royal-100/20">
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-3">
+                              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-gray-100 bg-gray-50 text-gray-500">
+                                {item.type === "Brinde" ? <Gift className="h-4 w-4" /> : <Smartphone className="h-4 w-4" />}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="truncate font-bold text-navy-900">{item.name}</p>
+                                <p className="truncate text-xs text-gray-500">{item.identity}</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-3 py-3"><ItemTypeBadge type={item.type} /></td>
+                          <td className="px-3 py-3 text-center font-semibold text-navy-900">{item.quantity}</td>
+                          <td className="px-3 py-3 text-right">
+                            <p className="font-semibold text-navy-900">{formatBRL(item.unitPrice)}</p>
+                            {item.type === "Brinde" && <p className="text-xs font-medium text-success-500">Sai por R$ 0,00</p>}
+                          </td>
+                          <td className="px-3 py-3 text-right">
+                            <p className="font-bold text-navy-900">{formatBRL(item.total)}</p>
+                            {item.type === "Brinde" && <p className="text-xs text-gray-500">Valor real {formatBRL(item.realTotal)}</p>}
+                          </td>
+                          <td className="px-3 py-3 text-right text-gray-600">{formatBRL(item.cost)}</td>
+                          <td className="px-3 py-3 text-right font-semibold text-navy-900">{item.marginPct === null ? "—" : `${item.marginPct.toFixed(1)}%`}</td>
+                          <td className="px-3 py-3 text-right">
+                            {item.removable ? (
+                              <button type="button" onClick={() => removeAdditionalSaleItem(item.id)} className="inline-flex h-8 items-center justify-center rounded-lg px-2 text-xs font-bold text-danger-500 hover:bg-danger-100">
+                                Remover
+                              </button>
+                            ) : (
+                              <button type="button" onClick={clearSelectedProduct} className="inline-flex h-8 items-center justify-center rounded-lg px-2 text-xs font-bold text-gray-500 hover:bg-gray-50 hover:text-navy-900">
+                                Trocar
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           </SectionCard>
         </div>
 
-        <aside className="xl:sticky xl:top-4 xl:self-start">
-          <div className="overflow-hidden rounded-2xl border border-gray-100 bg-card shadow-sm">
-            <div className="bg-navy-900 p-5 text-white">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-white/50">Resumo</p>
-                  <h2 className="text-xl font-bold">Venda atual</h2>
-                </div>
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10">
-                  <ShoppingCart className="h-5 w-5" />
-                </div>
+        <aside className="xl:sticky xl:top-20 xl:self-start">
+          <div className="overflow-hidden rounded-[24px] border border-gray-100 bg-card shadow-[0_22px_60px_rgba(13,27,46,0.10)]">
+            <div className="bg-navy-950 px-5 py-4 text-white">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-sm font-bold uppercase tracking-wide">RESUMO DA VENDA</h2>
+                <Badge variant={hasTradeIn ? "blue" : isReservation ? "yellow" : "green"} className={hasTradeIn ? "bg-emerald-500/15 text-emerald-100" : "bg-white/10 text-white"}>
+                  {hasTradeIn ? "Trade-in ativo" : isReservation ? "Reserva" : "Venda imediata"}
+                </Badge>
               </div>
-              <p className="mt-4 text-3xl font-bold">
-                {storeAmountDue > 0 ? formatBRL(storeAmountDue) : formatBRL(saleEconomics.customerCashPays)}
-              </p>
-              <p className="mt-1 text-sm text-white/60">{selectedPaymentLabel}</p>
             </div>
 
-            <div className="space-y-4 p-5">
-              <div className="space-y-3">
-                <div className="flex items-start gap-3">
-                  <Package className="mt-0.5 h-4 w-4 text-royal-500" />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Produto</p>
-                    <p className="truncate text-sm font-semibold text-navy-900">{selectedProduct?.name || "Nenhum produto selecionado"}</p>
-                    {quantity > 1 && <p className="text-xs text-gray-500">{quantity} unidades</p>}
+            <div className="divide-y divide-gray-100">
+              <section className="px-5 py-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-semibold text-navy-900">Status operacional</p>
+                    <Info className="h-3.5 w-3.5 text-gray-400" />
                   </div>
+                  <Badge variant={isReservation ? "yellow" : "green"} dot>
+                    {operationalStatus}
+                  </Badge>
                 </div>
-                <div className="flex items-start gap-3">
-                  <User className="mt-0.5 h-4 w-4 text-royal-500" />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Cliente</p>
-                    <p className="truncate text-sm font-semibold text-navy-900">{customer.name || "Cliente não informado"}</p>
-                    {customer.cpf && <p className="text-xs text-gray-500">{customer.cpf}</p>}
-                  </div>
-                </div>
-                {additionalSelectedItem && (
-                  <div className="flex items-start gap-3">
-                    <Gift className="mt-0.5 h-4 w-4 text-royal-500" />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Adicional</p>
-                      <p className="truncate text-sm font-semibold text-navy-900">{additionalSelectedItem.qty}x {getAdditionalItemDisplayName(additionalSelectedItem.name)}</p>
-                    </div>
-                  </div>
-                )}
-                {isReservation && (
-                  <div className="flex items-start gap-3">
-                    <CalendarClock className="mt-0.5 h-4 w-4 text-warning-500" />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Recebimento</p>
-                      <p className="text-sm font-semibold text-navy-900">{paymentDueDate ? paymentDueDate.split("-").reverse().join("/") : "Informe a data"}</p>
-                    </div>
-                  </div>
-                )}
-              </div>
+              </section>
 
-              <div className="rounded-2xl bg-surface p-4">
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">Produto principal</span>
-                  <span className="font-semibold text-navy-900">{formatBRL(totalBasePrice)}</span>
+              <SummarySection title="Itens da venda">
+                <SummaryLine icon={Package} label="Produto principal" value={formatBRL(totalBasePrice)} />
+                <SummaryLine icon={Plus} label={`Adicionais (${paidAdditionalCount})`} value={formatBRL(upsellTotal)} />
+                <div className="flex items-start justify-between gap-3 text-sm">
+                  <span className="flex min-w-0 items-center gap-2 text-gray-600">
+                    <Gift className="h-4 w-4 shrink-0 text-navy-700" />
+                    <span className="truncate">Brindes ({giftCount})</span>
+                  </span>
+                  <span className="text-right">
+                    <span className="block font-bold text-navy-900">{formatBRL(0)}</span>
+                    {giftRealTotal > 0 && <span className="block text-xs font-medium text-gray-500">valor real {formatBRL(giftRealTotal)}</span>}
+                  </span>
                 </div>
-                {upsellTotal > 0 && (
-                  <div className="mt-2 flex justify-between text-sm">
-                    <span className="text-gray-500">Upsell</span>
-                    <span className="font-semibold text-success-500">+{formatBRL(upsellTotal)}</span>
-                  </div>
-                )}
-                {hasTradeIn && calculateTradeInValue() > 0 && (
-                  <div className="mt-2 flex justify-between text-sm">
-                    <span className="text-gray-500">Trade-in</span>
-                    <span className="font-semibold text-danger-500">-{formatBRL(calculateTradeInValue())}</span>
-                  </div>
-                )}
-                {storeAmountDue > 0 && (
-                  <div className="mt-2 rounded-xl border border-warning-500/30 bg-warning-100/40 p-3">
-                    <div className="flex justify-between gap-3 text-sm">
-                      <span className="font-semibold text-amber-900">Loja paga ao cliente</span>
-                      <span className="font-bold text-amber-900">{formatBRL(storeAmountDue)}</span>
-                    </div>
-                    <p className="mt-1 text-xs text-amber-800">
-                      Diferença do trade-in. Não entra no DRE agora; vira custo do aparelho recebido quando ele for vendido.
-                    </p>
-                  </div>
-                )}
-                {saleEconomics.embeddedFee > 0 && (
-                  <div className="mt-2 flex justify-between text-sm">
-                    <span className="text-gray-500">Taxa embutida</span>
-                    <span className="font-semibold text-navy-900">+{formatBRL(saleEconomics.embeddedFee)}</span>
-                  </div>
-                )}
-                <div className="mt-3 border-t border-gray-200 pt-3">
-                  <div className="flex justify-between">
-                    <span className="font-bold text-navy-900">Cliente paga</span>
-                    <span className="font-bold text-navy-900">{formatBRL(saleEconomics.customerCashPays)}</span>
-                  </div>
-                  {saleEconomics.installments > 1 && (
-                    <p className="mt-1 text-right text-xs text-gray-500">{saleEconomics.installments}x de {formatBRL(saleEconomics.installmentValue)}</p>
-                  )}
-                  <div className="mt-2 flex justify-between text-xs text-gray-500">
-                    <span>Valor da venda</span>
-                    <span className="text-right font-semibold text-navy-900">
-                      {hasMainProductDiscount && (
-                        <span className="mr-1 text-gray-400 line-through">{formatBRL(originalTotalPrice + upsellTotal)}</span>
-                      )}
-                      {formatBRL(saleEconomics.storeReceives)}
-                    </span>
-                  </div>
-                  {hasMainProductDiscount && (
-                    <div className="mt-1 flex justify-between text-xs font-semibold text-emerald-700">
-                      <span>Desconto aplicado</span>
-                      <span>-{formatBRL(mainProductDiscount)}</span>
-                    </div>
-                  )}
-                  <div className="mt-1 flex justify-between text-xs text-gray-500">
-                    <span>Loja recebe em caixa</span>
-                    <span className="font-semibold text-navy-900">{formatBRL(saleEconomics.storeCashReceives)}</span>
-                  </div>
-                  {saleEconomics.tradeInCredit > 0 && (
-                    <div className="mt-1 flex justify-between text-xs text-gray-500">
-                      <span>Total negociado</span>
-                      <span className="font-semibold text-navy-900">{formatBRL(saleEconomics.customerTotalPays)}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
+                <SummaryLine label="Subtotal dos itens" value={formatBRL(finalTotal)} strong />
+              </SummarySection>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div className="rounded-2xl bg-success-100/30 p-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Lucro real</p>
-                  <p className={`mt-1 text-lg font-bold ${saleEconomics.grossProfit >= 0 ? "text-success-500" : "text-danger-500"}`}>{formatBRL(saleEconomics.grossProfit)}</p>
-                  <p className="mt-0.5 text-[11px] text-gray-500">{saleEconomics.realMarginPct.toFixed(1)}% sobre cliente</p>
-                </div>
-                <div className="rounded-2xl bg-royal-100/30 p-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Reserva risco</p>
-                  <p className="mt-1 text-lg font-bold text-navy-900">{formatBRL(saleEconomics.riskReserve)}</p>
-                  <p className="mt-0.5 text-[11px] text-gray-500">{warrantyMonths}m garantia</p>
-                </div>
-              </div>
-              {saleEconomics.riskReserve > 0 && (
-                <div className="rounded-2xl border border-amber-100 bg-amber-50/70 p-3">
-                  <div className="flex items-center justify-between gap-3 text-sm">
-                    <span className="font-semibold text-amber-900">Lucro conservador</span>
-                    <span className={`font-bold ${saleEconomics.conservativeProfit >= 0 ? "text-amber-900" : "text-danger-500"}`}>
-                      {formatBRL(saleEconomics.conservativeProfit)}
-                    </span>
+              {hasTradeIn && (
+                <SummarySection title="Trade-in (abatido)">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-purple-200 bg-purple-50 text-purple-700">
+                        <Smartphone className="h-5 w-5" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-bold text-navy-900">{tradeInDeviceName}</p>
+                        <p className="truncate text-xs text-gray-500">{tradeIn.imei ? `IMEI ${tradeIn.imei}` : "IMEI/serial não informado"}</p>
+                      </div>
+                    </div>
+                    <span className="shrink-0 text-sm font-bold text-danger-500">- {formatBRL(tradeInValue)}</span>
                   </div>
-                  <p className="mt-1 text-xs text-amber-800">
-                    Reserva técnica informativa para garantia/defeito. Não altera DRE nem caixa.
-                  </p>
-                </div>
+                  <SummaryLine label="Valor abatido" value={`- ${formatBRL(tradeInValue)}`} strong valueClassName="text-navy-900" />
+                  {tradeInOverageNeedsDecision && (
+                    <div className="rounded-xl border border-warning-500/20 bg-warning-100/40 p-3 text-xs text-amber-900">
+                      Diferença de {formatBRL(storeAmountDue)}: {tradeInOverageDecision === "credit" ? "crédito operacional" : tradeInOverageDecision === "change" ? "troco ao cliente" : "pendente de decisão"}.
+                    </div>
+                  )}
+                </SummarySection>
               )}
 
-              <Button fullWidth size="lg" variant={isReservation ? "primary" : "success"} onClick={handleConfirm} disabled={!canFinishSale} isLoading={isSubmitting}>
-                <Check className="h-4 w-4" />
-                {isReservation ? "Reservar venda" : "Concluir venda"}
-              </Button>
-              {!canFinishSale && (
-                <p className="text-center text-xs text-gray-400">Selecione produto, cliente válido, valor e pagamento para finalizar.</p>
-              )}
+              <SummarySection title="Valores da venda">
+                <SummaryLine label="Valor da venda cheio" value={formatBRL(grossItemsTotal)} />
+                <SummaryLine label="Descontos" value={formatBRL(discountTotal)} />
+                {hasTradeIn && <SummaryLine label="Trade-in abatido" value={`- ${formatBRL(tradeInValue)}`} valueClassName="text-danger-500" />}
+                <div className="rounded-2xl bg-success-100/45 px-3 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm font-bold text-green-800">Cliente paga (restante)</span>
+                    <span className="text-lg font-extrabold text-success-500">{formatBRL(saleEconomics.customerCashPays)}</span>
+                  </div>
+                </div>
+                <SummaryLine label="Loja recebe em caixa" value={formatBRL(saleEconomics.storeCashReceives)} strong />
+              </SummarySection>
+
+              <SummarySection title="Forma de pagamento">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-royal-100 text-royal-600">
+                      {isCreditPayment ? <CreditCard className="h-4 w-4" /> : paymentMethod === "cash" ? <Banknote className="h-4 w-4" /> : paymentMethod === "pix" ? <PixBrandIcon className="h-4 w-4" /> : <CreditCard className="h-4 w-4" />}
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-navy-900">{selectedPaymentLabel}</p>
+                      <p className="text-xs text-gray-500">{saleEconomics.installments > 1 ? `${saleEconomics.installments}x de ${formatBRL(saleEconomics.installmentValue)}` : "À vista"}</p>
+                    </div>
+                  </div>
+                  <div className="text-right text-xs text-gray-500">
+                    <p>Cliente paga</p>
+                    <p className="text-sm font-bold text-navy-900">{formatBRL(saleEconomics.customerCashPays)}</p>
+                    <p className="mt-1">Loja recebe em caixa</p>
+                    <p className="text-sm font-bold text-navy-900">{formatBRL(saleEconomics.storeCashReceives)}</p>
+                  </div>
+                </div>
+              </SummarySection>
+
+              <section className="space-y-3 px-5 py-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-2xl bg-success-100/35 p-3">
+                    <p className="text-xs font-bold uppercase tracking-wide text-gray-500">{profitTitle}</p>
+                    <p className={`mt-1 text-lg font-extrabold ${saleEconomics.grossProfit >= 0 ? "text-success-500" : "text-danger-500"}`}>{formatBRL(saleEconomics.grossProfit)}</p>
+                    <p className="text-xs text-gray-500">{profitCaption}</p>
+                  </div>
+                  <div className="rounded-2xl bg-royal-100/35 p-3">
+                    <p className="text-xs font-bold uppercase tracking-wide text-gray-500">Garantia</p>
+                    <p className="mt-1 text-lg font-extrabold text-navy-900">{warrantyMonths} meses</p>
+                    <p className="text-xs text-gray-500">{isReservation ? "Será emitida após receber" : "Será emitida ao concluir"}</p>
+                  </div>
+                </div>
+
+                <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-3">
+                  <ImpactCard icon={Box} label="Estoque" value={isReservation ? "Será bloqueado" : "Será baixado"} />
+                  <ImpactCard icon={ReceiptText} label="Financeiro" value={isReservation ? "Conta a receber" : isCreditPayment ? "Recebimento previsto" : "Recebimento à vista"} />
+                  <ImpactCard icon={ShieldCheck} label="Garantia" value={isReservation ? "Depois do recebimento" : "Ao concluir"} />
+                </div>
+
+                <Button fullWidth size="lg" variant="success" onClick={handleConfirm} disabled={!canFinishSale} isLoading={isSubmitting} className="h-12 rounded-xl font-bold shadow-lg shadow-success-500/20">
+                  <Check className="h-4 w-4" />
+                  {isReservation ? "Reservar venda" : hasTradeIn ? "Concluir com trade-in" : "Concluir venda"}
+                </Button>
+                {!canFinishSale && <PendingChecklist items={pendingChecklist} />}
+              </section>
             </div>
           </div>
         </aside>
