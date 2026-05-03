@@ -9,7 +9,7 @@ export default function LoginPage() {
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-royal-500 shadow-lg">
             <Smartphone className="h-7 w-7 text-white" />
           </div>
-          <h1 className="font-display text-2xl font-extrabold tracking-normal text-white sm:text-3xl">
+          <h1 className="font-sans text-2xl font-black tracking-normal text-white sm:text-3xl">
             NOBRETECH STORE
           </h1>
           <p className="mt-2 text-sm font-medium text-white/55">
@@ -42,7 +42,7 @@ export default function LoginPage() {
                 headerTitle: "font-sans text-xl font-bold text-white",
                 headerSubtitle: "text-sm text-slate-300",
                 socialButtonsBlockButton:
-                  "border-white/15 bg-white text-navy-900 hover:bg-slate-50",
+                  "mx-auto h-14 w-14 rounded-full border-white/15 bg-white text-navy-900 hover:bg-slate-50",
                 formFieldLabel: "text-slate-200",
                 formFieldInput:
                   "border-white/15 bg-white text-navy-900 placeholder:text-slate-400",
@@ -111,9 +111,36 @@ export default function LoginPage() {
             color: #60a5fa !important;
           }
 
-          .nobretech-clerk .cl-socialButtonsBlockButton,
+          .nobretech-clerk .cl-socialButtons {
+            justify-content: center !important;
+          }
+
+          .nobretech-clerk .cl-socialButtonsBlockButton {
+            width: 3.5rem !important;
+            height: 3.5rem !important;
+            min-width: 3.5rem !important;
+            padding: 0 !important;
+            border-radius: 9999px !important;
+            background: #ffffff !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+          }
+
+          .nobretech-clerk .cl-socialButtonsBlockButtonText {
+            display: none !important;
+          }
+
+          .nobretech-clerk .cl-socialButtonsProviderIcon {
+            margin: 0 !important;
+          }
+
           .nobretech-clerk .cl-formFieldInput {
             color: #0d1b2e !important;
+          }
+
+          .nobretech-clerk .cl-dividerText {
+            color: #cbd5e1 !important;
           }
         `}</style>
       </section>
