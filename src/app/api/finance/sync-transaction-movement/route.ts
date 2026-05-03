@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
-import { ensureDefaultCompanyAndUser, pool } from "@/lib/db"
+import { pool } from "@/lib/db"
+import { requireApiAuthContext } from "@/lib/auth-context"
 import {
   reverseMovementForDeletedTransaction,
   syncTransactionMovement,
@@ -9,16 +10,19 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 
 export async function POST(request: Request) {
   try {
+    const authResult = await requireApiAuthContext()
+    if (!authResult.ok) return authResult.response
+
     const body = await request.json()
     const transactionId = String(body.transactionId || "")
     const deletedOnly = Boolean(body.deletedOnly)
-    const createdBy = body.createdBy != null && String(body.createdBy).length > 0 ? String(body.createdBy) : null
+    const createdBy = authResult.context.appUserId
 
     if (!UUID_RE.test(transactionId)) {
       return NextResponse.json({ error: { message: "transactionId inválido" } }, { status: 400 })
     }
 
-    const { companyId } = await ensureDefaultCompanyAndUser()
+    const companyId = authResult.context.companyId
     const client = await pool.connect()
     try {
       await client.query("BEGIN")

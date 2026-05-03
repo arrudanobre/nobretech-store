@@ -1,4 +1,5 @@
 import type { Metadata } from "next"
+import { ClerkProvider } from "@clerk/nextjs"
 import { Inter, Syne, DM_Mono } from "next/font/google"
 import { Providers } from "@/components/providers"
 import "./globals.css"
@@ -36,13 +37,15 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html
-      lang="pt-BR"
-      className={`${inter.variable} ${syne.variable} ${dmMono.variable} antialiased`}
-    >
-      <body className="min-h-screen bg-surface">
-        <Providers>{children}</Providers>
-      </body>
-    </html>
+    <ClerkProvider>
+      <html
+        lang="pt-BR"
+        className={`${inter.variable} ${syne.variable} ${dmMono.variable} antialiased`}
+      >
+        <body className="min-h-screen bg-surface">
+          <Providers>{children}</Providers>
+        </body>
+      </html>
+    </ClerkProvider>
   )
 }

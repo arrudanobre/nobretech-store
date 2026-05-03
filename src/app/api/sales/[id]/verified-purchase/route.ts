@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { requireApiAuthContext } from "@/lib/auth-context"
 import { ensureSalePublicAccess, regenerateSalePublicPin } from "@/lib/public-purchase-access"
 
 type RouteContext = {
@@ -6,13 +7,17 @@ type RouteContext = {
 }
 
 export async function POST(request: Request, context: RouteContext) {
+  const authResult = await requireApiAuthContext()
+  if (!authResult.ok) return authResult.response
+
   const { id } = await Promise.resolve(context.params)
   const body = await request.json().catch(() => ({}))
   const action = String(body.action || "ensure")
+  const { companyId } = authResult.context
 
   const sale = action === "regenerate_pin"
-    ? await regenerateSalePublicPin(id)
-    : await ensureSalePublicAccess(id)
+    ? await regenerateSalePublicPin(id, companyId)
+    : await ensureSalePublicAccess(id, companyId)
 
   if (!sale) {
     return NextResponse.json(

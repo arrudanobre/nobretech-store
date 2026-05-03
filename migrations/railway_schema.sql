@@ -708,6 +708,7 @@ CREATE TABLE IF NOT EXISTS marketing_leads (
   origin TEXT,
   status TEXT NOT NULL DEFAULT 'new'
     CHECK (status IN ('new', 'in_service', 'table_sent', 'hot_negotiation', 'sold', 'lost')),
+  lead_temperature TEXT CHECK (lead_temperature IS NULL OR lead_temperature IN ('cold', 'warm', 'hot')),
   product_interest TEXT,
   notes TEXT,
   next_action TEXT,
@@ -725,6 +726,7 @@ ALTER TABLE marketing_leads
   ADD COLUMN IF NOT EXISTS name TEXT,
   ADD COLUMN IF NOT EXISTS source TEXT,
   ADD COLUMN IF NOT EXISTS origin TEXT,
+  ADD COLUMN IF NOT EXISTS lead_temperature TEXT,
   ADD COLUMN IF NOT EXISTS next_action_at TIMESTAMPTZ;
 
 UPDATE marketing_leads

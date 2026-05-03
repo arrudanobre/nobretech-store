@@ -631,7 +631,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
   }
 }
 
-export async function ensureSalePublicAccess(saleId: string) {
+export async function ensureSalePublicAccess(saleId: string, companyId?: string) {
   for (let attempt = 0; attempt < 5; attempt++) {
     const token = generatePublicAccessToken()
     const pin = generatePublicAccessPin()
@@ -647,9 +647,10 @@ export async function ensureSalePublicAccess(saleId: string) {
               public_access_locked_until = NULL
           WHERE id = $1
             AND COALESCE(sale_status, 'completed') = 'completed'
+            AND ($4::uuid IS NULL OR company_id = $4::uuid)
           RETURNING *
         `,
-        [saleId, token, pin]
+        [saleId, token, pin, companyId || null]
       )
       return result.rows[0] || null
     } catch (error: unknown) {
@@ -659,7 +660,7 @@ export async function ensureSalePublicAccess(saleId: string) {
   throw new Error("Não foi possível gerar um token único para esta compra.")
 }
 
-export async function regenerateSalePublicPin(saleId: string) {
+export async function regenerateSalePublicPin(saleId: string, companyId?: string) {
   const result = await pool.query(
     `
       UPDATE sales
@@ -669,9 +670,10 @@ export async function regenerateSalePublicPin(saleId: string) {
       WHERE id = $1
         AND COALESCE(sale_status, 'completed') = 'completed'
         AND public_access_token IS NOT NULL
+        AND ($3::uuid IS NULL OR company_id = $3::uuid)
       RETURNING *
     `,
-    [saleId, generatePublicAccessPin()]
+    [saleId, generatePublicAccessPin(), companyId || null]
   )
   return result.rows[0] || null
 }

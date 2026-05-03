@@ -6,6 +6,7 @@ import {
   ArrowRight,
   BarChart3,
   CalendarDays,
+  ClipboardList,
   ChevronDown,
   DollarSign,
   FileText,
@@ -25,13 +26,13 @@ import {
   type LucideIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/components/ui/toaster"
+import { CurrencyInputBR, FormBlock, SelectField, TextareaField } from "@/components/marketing/commercial-fields"
 import { supabase } from "@/lib/supabase"
 import { cn } from "@/lib/utils"
 import { formatBRL } from "@/lib/helpers"
 import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
+import { currencyNumberToInput, parseCurrencyBR } from "@/lib/marketing-format"
 
 type Campaign = {
   id: string
@@ -138,18 +139,19 @@ const EMPTY_FORM: CampaignForm = {
 }
 
 const CHANNEL_LABELS: Record<string, string> = {
+  trafego_pago: "Meta Ads",
   instagram: "Instagram",
   whatsapp: "WhatsApp",
   google: "Google",
-  tiktok: "TikTok",
+  organico: "Orgânico",
   indicacao: "Indicação",
-  loja: "Loja",
-  trafego_pago: "Meta Ads",
+  cliente_recorrente: "Cliente recorrente",
   outro: "Outro",
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  planned: "Planejada",
+  draft: "Rascunho",
+  planned: "Rascunho",
   active: "Ativa",
   paused: "Pausada",
   finished: "Finalizada",
@@ -208,22 +210,6 @@ const DEMO_CAMPAIGNS: DisplayCampaign[] = [
     roi: 2.3,
     isDemo: true,
   },
-  {
-    id: "demo-iphone",
-    name: "Campanha de iPhone 13",
-    status: "paused",
-    statusLabel: "Pausada",
-    channel: "Meta Ads",
-    period: "15 de abr - 29 de abr",
-    spend: 398,
-    leadsCount: 3,
-    costPerLead: 132.66,
-    contactedCount: 1,
-    soldCount: 0,
-    revenue: 0,
-    roi: 0,
-    isDemo: true,
-  },
 ]
 
 const DEMO_LEADS: DisplayLead[] = [
@@ -241,11 +227,8 @@ const DEMO_ORIGINS = [
   { origin: "Indicação", pct: 12.5, count: 1 },
 ]
 
-function parseMoney(value: string) {
-  if (!value) return 0
-  const normalized = value.replace(/[^\d,.-]/g, "").replace(/\./g, "").replace(",", ".")
-  return Number(normalized) || 0
-}
+const EMPTY_DISPLAY_CAMPAIGNS: DisplayCampaign[] = []
+const EMPTY_DISPLAY_LEADS: DisplayLead[] = []
 
 function isMissingMarketingLeadsTable(error: unknown) {
   const message = typeof error === "object" && error && "message" in error ? String(error.message) : String(error || "")
@@ -278,6 +261,24 @@ function saleProfit(sale: SaleRow) {
     qty: parseQtyFromNotes(sale.notes),
     additionalItems: sale.sales_additional_items || [],
   }).lucroTotal
+}
+
+function uniqueSalesById(sales: SaleRow[]) {
+  return Array.from(new Map(sales.map((sale) => [sale.id, sale])).values())
+}
+
+function normalizeLeadStatus(status?: string | null) {
+  if (status === "contacted") return "in_service"
+  if (status === "proposal") return "table_sent"
+  if (status === "qualified") return "hot_negotiation"
+  if (status === "converted") return "sold"
+  return status || "new"
+}
+
+function getCommercialNextAction(status: string, nextAction?: string | null, linkedSaleId?: string | null) {
+  if (status === "lost") return "Sem próxima ação"
+  if (status === "sold") return linkedSaleId ? `Venda #${String(linkedSaleId).slice(0, 8)}` : "Venda vinculada"
+  return nextAction || (status === "new" ? "Qualificar lead" : "Definir próxima ação")
 }
 
 function KpiCard({
@@ -337,7 +338,7 @@ function CampaignCard({ campaign, onEdit }: { campaign: DisplayCampaign; onEdit:
           >
             <Pencil className="h-4 w-4" />
           </Button>
-          <Link href={`/financeiro/marketing/leads?campaign=${campaign.id}`}>
+          <Link href={`/financeiro/marketing/leads?campaignId=${campaign.id}`}>
             <Button variant="outline" className="h-9 rounded-xl bg-white px-3 text-xs font-bold text-royal-600">
               Ver leads
               <ArrowRight className="h-4 w-4" />
@@ -425,7 +426,13 @@ function LeadsTable({ leads, totalLeads }: { leads: DisplayLead[]; totalLeads: n
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {leads.map((lead, index) => (
+            {leads.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="py-6 text-center text-sm font-medium text-slate-400">
+                  Nenhum lead real encontrado neste período.
+                </td>
+              </tr>
+            ) : leads.map((lead, index) => (
               <tr key={lead.id} className="transition hover:bg-slate-50">
                 <td className="py-3">
                   <div className="flex items-center gap-2">
@@ -451,7 +458,7 @@ function LeadsTable({ leads, totalLeads }: { leads: DisplayLead[]; totalLeads: n
         </table>
       </div>
       <div className="mt-4 flex items-center justify-between text-sm text-slate-500">
-        <span>Mostrando 1 a {Math.min(5, totalLeads)} de {totalLeads} leads</span>
+        <span>Mostrando {totalLeads > 0 ? 1 : 0} a {Math.min(5, totalLeads)} de {totalLeads} leads</span>
         <div className="flex items-center gap-3">
           <span className="rounded-md bg-royal-500 px-3 py-1 text-xs font-bold text-white">1</span>
           <span className="text-xs font-bold text-slate-700">2</span>
@@ -477,7 +484,11 @@ function LeadOriginCard({ rows, total }: { rows: { origin: string; pct: number; 
     <div className="rounded-2xl border border-[#e2e8f0] bg-white p-5 shadow-sm">
       <SectionTitle icon={BarChart3} title="Origem dos leads" subtitle="De onde seus leads estão vindo" />
       <div className="mt-5 space-y-5">
-        {rows.map((row, index) => (
+        {rows.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-200 py-6 text-center text-sm font-medium text-slate-400">
+            Nenhuma origem real encontrada.
+          </div>
+        ) : rows.map((row, index) => (
           <div key={row.origin} className="grid grid-cols-[1fr_1.25fr_48px_24px] items-center gap-3 text-sm">
             <span className="truncate font-semibold text-slate-950">{row.origin}</span>
             <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
@@ -528,12 +539,18 @@ export default function MarketingRoiPage() {
   const loadData = async () => {
     setLoading(true)
     try {
+      const { data: company, error: companyError } = await supabase.from("companies").select("id").limit(1).single()
+      if (companyError) throw companyError
+      const companyId = company?.id
+      if (!companyId) throw new Error("Empresa atual não encontrada.")
+
       const [campaignsRes, leadsRes, salesRes] = await Promise.all([
-        supabase.from("marketing_campaigns").select("*").order("created_at", { ascending: false }),
-        supabase.from("marketing_leads").select("*").order("created_at", { ascending: false }),
+        supabase.from("marketing_campaigns").select("*").eq("company_id", companyId).order("created_at", { ascending: false }),
+        supabase.from("marketing_leads").select("*").eq("company_id", companyId).order("created_at", { ascending: false }),
         supabase
           .from("sales")
           .select("id, marketing_campaign_id, marketing_lead_id, sale_origin, sale_price, net_amount, supplier_cost, payment_method, card_fee_pct, warranty_months, notes, sale_date, inventory:inventory_id(id, purchase_price), sales_additional_items(type,cost_price,sale_price,profit)")
+          .eq("company_id", companyId)
           .neq("sale_status", "cancelled")
           .order("sale_date", { ascending: false }),
       ])
@@ -566,10 +583,13 @@ export default function MarketingRoiPage() {
     return campaigns.map((campaign) => {
       const campaignLeads = leads.filter((lead) => (lead.campaign_id || lead.marketing_campaign_id) === campaign.id)
       const campaignLeadIds = new Set(campaignLeads.map((lead) => lead.id))
-      const campaignSales = sales.filter((sale) => sale.marketing_campaign_id === campaign.id || (sale.marketing_lead_id && campaignLeadIds.has(sale.marketing_lead_id)))
+      const campaignLeadSaleIds = new Set(campaignLeads.map((lead) => lead.sale_id || lead.converted_sale_id).filter(Boolean))
+      const campaignSales = uniqueSalesById(sales.filter((sale) =>
+        campaignLeadSaleIds.has(sale.id) || Boolean(sale.marketing_lead_id && campaignLeadIds.has(sale.marketing_lead_id))
+      ))
       const spend = Number(campaign.actual_spend || campaign.budget_amount || 0)
       const revenue = campaignSales.reduce((sum, sale) => sum + (Number(sale.sale_price) || 0), 0)
-      const soldCount = campaignLeads.filter((lead) => lead.status === "sold" || lead.status === "converted" || lead.sale_id || lead.converted_sale_id).length || campaignSales.length
+      const soldCount = campaignLeads.filter((lead) => Boolean(lead.sale_id || lead.converted_sale_id)).length
       return {
         id: campaign.id,
         name: campaign.name,
@@ -580,7 +600,7 @@ export default function MarketingRoiPage() {
         spend,
         leadsCount: campaignLeads.length,
         costPerLead: campaignLeads.length > 0 ? spend / campaignLeads.length : 0,
-        contactedCount: campaignLeads.filter((lead) => lead.status === "in_service" || lead.status === "contacted").length,
+        contactedCount: campaignLeads.filter((lead) => normalizeLeadStatus(lead.status) === "in_service").length,
         soldCount,
         revenue,
         roi: spend > 0 ? revenue / spend : 0,
@@ -591,32 +611,33 @@ export default function MarketingRoiPage() {
 
   const realLeads = useMemo<DisplayLead[]>(() => {
     return leads.map((lead) => {
-      const campaignId = lead.campaign_id || lead.marketing_campaign_id
       const linkedSaleId = lead.sale_id || lead.converted_sale_id
       const leadName = lead.name || lead.full_name || "Lead sem nome"
       const leadOrigin = lead.origin || lead.source || lead.source_channel || "Sem origem"
-      const campaign = campaigns.find((item) => item.id === campaignId)
+      const normalizedStatus = normalizeLeadStatus(lead.status)
       return {
         id: lead.id,
         name: leadName,
         product: lead.product_interest || "Não informado",
-        origin: campaign?.name || CHANNEL_LABELS[leadOrigin] || leadOrigin,
-        status: lead.status || "new",
-        statusLabel: LEAD_STATUS_LABELS[lead.status] || lead.status || "Novo",
-        nextAction: lead.next_action || "Qualificar lead",
+        origin: CHANNEL_LABELS[leadOrigin] || leadOrigin,
+        status: normalizedStatus,
+        statusLabel: LEAD_STATUS_LABELS[normalizedStatus] || normalizedStatus,
+        nextAction: getCommercialNextAction(normalizedStatus, lead.next_action, linkedSaleId),
         linked: Boolean(linkedSaleId),
         saleId: linkedSaleId,
       }
     })
-  }, [campaigns, leads])
+  }, [leads])
 
-  const hasRealData = leads.length > 0
-  const displayCampaigns = hasRealData ? realCampaigns : DEMO_CAMPAIGNS
-  const displayLeads = hasRealData ? realLeads.slice(0, 5) : DEMO_LEADS
-  const displayTotalLeads = hasRealData ? realLeads.length : 8
+  const hasRealCampaigns = campaigns.length > 0
+  const hasRealLeads = leads.length > 0
+  const isDemoMode = !loading && !hasRealCampaigns && !hasRealLeads
+  const displayCampaigns = loading ? EMPTY_DISPLAY_CAMPAIGNS : isDemoMode ? DEMO_CAMPAIGNS : realCampaigns
+  const displayLeads = loading ? EMPTY_DISPLAY_LEADS : isDemoMode ? DEMO_LEADS : realLeads.slice(0, 5)
+  const displayTotalLeads = loading ? 0 : isDemoMode ? 8 : realLeads.length
 
   const originRows = useMemo(() => {
-    if (!hasRealData) return DEMO_ORIGINS
+    if (isDemoMode) return DEMO_ORIGINS
     const groups = new Map<string, number>()
     realLeads.forEach((lead) => groups.set(lead.origin, (groups.get(lead.origin) || 0) + 1))
     return Array.from(groups.entries())
@@ -627,26 +648,31 @@ export default function MarketingRoiPage() {
       }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 4)
-  }, [hasRealData, realLeads])
+  }, [isDemoMode, realLeads])
 
   const kpis = useMemo(() => {
     const primaryCampaign = displayCampaigns[0]
-    const spend = hasRealData ? displayCampaigns.reduce((sum, campaign) => sum + campaign.spend, 0) : primaryCampaign?.spend || 0
-    const leadsCount = hasRealData ? realLeads.length : primaryCampaign?.leadsCount || 0
-    const salesCount = hasRealData ? displayCampaigns.reduce((sum, campaign) => sum + campaign.soldCount, 0) : primaryCampaign?.soldCount || 0
-    const revenue = hasRealData ? displayCampaigns.reduce((sum, campaign) => sum + campaign.revenue, 0) : primaryCampaign?.revenue || 0
-    const profit = sales.reduce((sum, sale) => sum + saleProfit(sale), 0)
+    const spend = isDemoMode ? primaryCampaign?.spend || 0 : displayCampaigns.reduce((sum, campaign) => sum + campaign.spend, 0)
+    const leadsCount = isDemoMode ? primaryCampaign?.leadsCount || 0 : realLeads.length
+    const leadIds = new Set(leads.map((lead) => lead.id))
+    const linkedSaleIds = new Set(leads.map((lead) => lead.sale_id || lead.converted_sale_id).filter(Boolean))
+    const attributedSales = isDemoMode ? [] : uniqueSalesById(sales.filter((sale) =>
+      linkedSaleIds.has(sale.id) || Boolean(sale.marketing_lead_id && leadIds.has(sale.marketing_lead_id))
+    ))
+    const salesCount = isDemoMode ? primaryCampaign?.soldCount || 0 : attributedSales.length
+    const revenue = isDemoMode ? primaryCampaign?.revenue || 0 : attributedSales.reduce((sum, sale) => sum + (Number(sale.sale_price) || 0), 0)
+    const profit = isDemoMode ? 0 : attributedSales.reduce((sum, sale) => sum + saleProfit(sale), 0)
     const roi = spend > 0 ? revenue / spend : 0
     return {
       spend,
       leadsCount,
-      costPerLead: hasRealData ? (leadsCount > 0 ? spend / leadsCount : 0) : primaryCampaign?.costPerLead || 0,
+      costPerLead: isDemoMode ? primaryCampaign?.costPerLead || 0 : (leadsCount > 0 ? spend / leadsCount : 0),
       salesCount,
       revenue,
       profit,
       roi,
     }
-  }, [displayCampaigns, hasRealData, realLeads.length, sales])
+  }, [displayCampaigns, isDemoMode, leads, realLeads.length, sales])
 
   const updateForm = (partial: Partial<CampaignForm>) => setForm((prev) => ({ ...prev, ...partial }))
 
@@ -664,8 +690,8 @@ export default function MarketingRoiPage() {
       objective: campaign.objective || "",
       start_date: campaign.start_date || "",
       end_date: campaign.end_date || "",
-      budget_amount: String(campaign.budget_amount || ""),
-      actual_spend: String(campaign.actual_spend || ""),
+      budget_amount: currencyNumberToInput(campaign.budget_amount || 0),
+      actual_spend: currencyNumberToInput(campaign.actual_spend || 0),
       status: campaign.status || "active",
       notes: campaign.notes || "",
     })
@@ -686,8 +712,8 @@ export default function MarketingRoiPage() {
         objective: form.objective || null,
         start_date: form.start_date || null,
         end_date: form.end_date || null,
-        budget_amount: parseMoney(form.budget_amount),
-        actual_spend: parseMoney(form.actual_spend),
+        budget_amount: parseCurrencyBR(form.budget_amount),
+        actual_spend: parseCurrencyBR(form.actual_spend),
         status: form.status,
         notes: form.notes || null,
       }
@@ -716,7 +742,7 @@ export default function MarketingRoiPage() {
               Marketing e Leads
               <TrendingUp className="h-6 w-6 text-slate-400" />
             </h1>
-            {!hasRealData && !loading ? (
+            {isDemoMode && !loading ? (
               <span className="rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">Dados demonstrativos</span>
             ) : null}
           </div>
@@ -754,40 +780,81 @@ export default function MarketingRoiPage() {
       {showForm ? (
         <section className="rounded-2xl border border-[#e2e8f0] bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-start justify-between gap-4">
-            <div>
-              <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Campanha</p>
-              <h2 className="text-xl font-bold text-slate-950">{editingId ? "Editar campanha" : "Nova campanha"}</h2>
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+                <Megaphone className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Campanha comercial</p>
+                <h2 className="text-xl font-bold text-slate-950">{editingId ? "Editar campanha" : "Nova campanha"}</h2>
+                <p className="mt-1 text-sm text-slate-500">Defina canal, investimento e objetivo para medir lead, venda e ROI com consistência.</p>
+              </div>
             </div>
             <Button variant="ghost" size="icon" onClick={resetForm}>
               <X className="h-4 w-4" />
             </Button>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <Input label="Nome" value={form.name} onChange={(event) => updateForm({ name: event.target.value })} />
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-900">Canal</label>
-              <select value={form.channel} onChange={(event) => updateForm({ channel: event.target.value })} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20">
-                {Object.entries(CHANNEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              </select>
+          <div className="grid gap-4 xl:grid-cols-[1.1fr_1fr]">
+            <FormBlock icon={<ClipboardList className="h-4 w-4" />} title="Identificação da campanha" subtitle="Nomeie a ação e padronize canal, status e objetivo.">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="md:col-span-2">
+                  <label className="mb-1.5 block text-sm font-semibold text-slate-900">Nome da campanha</label>
+                  <input
+                    value={form.name}
+                    onChange={(event) => updateForm({ name: event.target.value })}
+                    placeholder="Ex: Campanha iPad 11 Maio"
+                    className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                  />
+                </div>
+                <SelectField label="Canal" value={form.channel} onChange={(event) => updateForm({ channel: event.target.value })}>
+                  {Object.entries(CHANNEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </SelectField>
+                <SelectField label="Status" value={form.status} onChange={(event) => updateForm({ status: event.target.value })}>
+                  {["active", "paused", "finished", "draft"].map((value) => <option key={value} value={value}>{STATUS_LABELS[value]}</option>)}
+                </SelectField>
+                <div className="md:col-span-2">
+                  <label className="mb-1.5 block text-sm font-semibold text-slate-900">Objetivo</label>
+                  <input
+                    value={form.objective}
+                    onChange={(event) => updateForm({ objective: event.target.value })}
+                    placeholder="Ex: Gerar leads para iPad 11 lacrado"
+                    className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                  />
+                </div>
+              </div>
+            </FormBlock>
+
+            <FormBlock icon={<CalendarDays className="h-4 w-4" />} title="Período e investimento" subtitle="Separe orçamento previsto do gasto real para calcular CPL e ROI.">
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-semibold text-slate-900">Data de início</span>
+                  <input type="date" value={form.start_date} onChange={(event) => updateForm({ start_date: event.target.value })} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20" />
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-semibold text-slate-900">Data de fim</span>
+                  <input type="date" value={form.end_date} onChange={(event) => updateForm({ end_date: event.target.value })} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20" />
+                </label>
+                <CurrencyInputBR label="Orçamento previsto" value={form.budget_amount} onValueChange={(value) => updateForm({ budget_amount: value })} placeholder="R$ 1.500,00" />
+                <CurrencyInputBR label="Gasto real" value={form.actual_spend} onValueChange={(value) => updateForm({ actual_spend: value })} placeholder="R$ 1.186,00" />
+              </div>
+            </FormBlock>
+
+            <div className="xl:col-span-2">
+              <FormBlock icon={<FileText className="h-4 w-4" />} title="Estratégia e observações" subtitle="Registre contexto útil para revisar criativo, público e resultado.">
+                <TextareaField
+                  label="Notas internas"
+                  value={form.notes}
+                  onChange={(event) => updateForm({ notes: event.target.value })}
+                  placeholder="Observações sobre criativo, público, verba, estratégia ou resultado da campanha."
+                />
+              </FormBlock>
             </div>
-            <Input label="Orçamento" value={form.budget_amount} onChange={(event) => updateForm({ budget_amount: event.target.value })} />
-            <Input label="Gasto real" value={form.actual_spend} onChange={(event) => updateForm({ actual_spend: event.target.value })} />
-            <Input label="Início" type="date" value={form.start_date} onChange={(event) => updateForm({ start_date: event.target.value })} />
-            <Input label="Fim" type="date" value={form.end_date} onChange={(event) => updateForm({ end_date: event.target.value })} />
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-900">Status</label>
-              <select value={form.status} onChange={(event) => updateForm({ status: event.target.value })} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20">
-                {Object.entries(STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              </select>
-            </div>
-            <Input label="Objetivo" value={form.objective} onChange={(event) => updateForm({ objective: event.target.value })} />
           </div>
-          <div className="mt-3">
-            <Textarea label="Notas" value={form.notes} onChange={(event) => updateForm({ notes: event.target.value })} />
-          </div>
-          <div className="mt-4 flex justify-end">
-            <Button onClick={saveCampaign} isLoading={saving}>
+
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            <Button variant="outline" onClick={resetForm}>Cancelar</Button>
+            <Button onClick={saveCampaign} isLoading={saving} className="bg-blue-600 hover:bg-blue-700">
               <Save className="h-4 w-4" />
               Salvar campanha
             </Button>
@@ -799,14 +866,18 @@ export default function MarketingRoiPage() {
         <div className="col-span-12 rounded-2xl border border-[#e2e8f0] bg-white p-5 shadow-sm md:col-span-8">
           <SectionTitle icon={Megaphone} title="Campanhas" subtitle="Desempenho das suas campanhas de marketing" />
           <div className="mt-4 space-y-2">
-            {displayCampaigns.map((campaign) => (
+            {loading ? (
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 p-6 text-sm font-medium text-slate-400">
+                Carregando campanhas reais...
+              </div>
+            ) : displayCampaigns.map((campaign) => (
               <CampaignCard key={campaign.id} campaign={campaign} onEdit={editCampaign} />
             ))}
           </div>
         </div>
 
         <div className="col-span-12 md:col-span-4">
-          <LeadFunnel leads={displayLeads} useDemo={!hasRealData} />
+          <LeadFunnel leads={displayLeads} useDemo={isDemoMode} />
         </div>
 
         <div className="col-span-12 md:col-span-8">
@@ -814,7 +885,7 @@ export default function MarketingRoiPage() {
         </div>
 
         <div className="col-span-12 md:col-span-4">
-          <LeadOriginCard rows={originRows} total={hasRealData ? realLeads.length : 8} />
+          <LeadOriginCard rows={originRows} total={isDemoMode ? 8 : realLeads.length} />
         </div>
       </section>
     </div>

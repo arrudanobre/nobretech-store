@@ -67,14 +67,15 @@ export default function WarrantiesPage() {
           end_date,
           status,
           notes,
-          sales (
+          sales!inner (
             id,
             sale_price,
             payment_method,
             sale_date,
             warranty_months,
             warranty_start,
-            warranty_end
+            warranty_end,
+            sale_status
           ),
           inventory (
             id,
@@ -491,7 +492,9 @@ export default function WarrantiesPage() {
     }
   }
 
-  const filtered = warranties.filter((w) => {
+  const visibleWarranties = warranties.filter((w) => w.sales?.sale_status === "completed")
+
+  const filtered = visibleWarranties.filter((w) => {
     const matchFilter =
       filter === "all" ||
       (filter === "active" && w.status === "active") ||
@@ -510,10 +513,10 @@ export default function WarrantiesPage() {
   })
 
   const counts = {
-    all: warranties.length,
-    active: warranties.filter((w) => w.status === "active").length,
-    expiring: warranties.filter((w) => w.status === "expiring_soon").length,
-    expired: warranties.filter((w) => w.status === "expired").length,
+    all: visibleWarranties.length,
+    active: visibleWarranties.filter((w) => w.status === "active").length,
+    expiring: visibleWarranties.filter((w) => w.status === "expiring_soon").length,
+    expired: visibleWarranties.filter((w) => w.status === "expired").length,
   }
 
   const filters = [

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
-import { ensureDefaultCompanyAndUser, pool } from "@/lib/db"
+import { pool } from "@/lib/db"
+import { requireApiAuthContext } from "@/lib/auth-context"
 
 type Filter = { op: "eq" | "neq" | "gte" | "lte" | "in" | "match" | "or"; column?: string; value: unknown }
 type Order = { column: string; ascending?: boolean }
@@ -190,45 +191,61 @@ function addFilter(where: string[], params: unknown[], filter: Filter) {
   params.push(filter.value)
 }
 
-async function hydrate(table: string, rows: Record<string, unknown>[]) {
+function addCompanyScope(table: string, companyId: string, where: string[], params: unknown[]) {
+  if (!TABLES_WITH_COMPANY.has(table)) return
+
+  params.push(companyId)
+  where.push(`${ident("company_id")} = $${params.length}`)
+}
+
+async function hydrate(table: string, rows: Record<string, unknown>[], companyId: string) {
   if (rows.length === 0) return rows
 
   if (table === "inventory") {
-    await hydrateInventory(rows)
+    await hydrateInventory(rows, companyId)
   }
 
   if (table === "sales") {
-    await hydrateSales(rows)
+    await hydrateSales(rows, companyId)
   }
 
   if (table === "warranties") {
-    await hydrateWarranties(rows)
+    await hydrateWarranties(rows, companyId)
   }
 
   if (table === "problems") {
-    await hydrateProblems(rows)
+    await hydrateProblems(rows, companyId)
   }
 
   if (table === "checklists") {
-    await hydrateChecklists(rows)
+    await hydrateChecklists(rows, companyId)
   }
 
   if (table === "sales_additional_items") {
-    await hydrateSalesAdditionalItems(rows)
+    await hydrateSalesAdditionalItems(rows, companyId)
   }
 
   return rows
 }
 
-async function getByIds(table: string, ids: unknown[]) {
+async function getByIds(table: string, ids: unknown[], companyId?: string) {
   const unique = Array.from(new Set(ids.filter(Boolean)))
   if (unique.length === 0) return new Map<string, Record<string, unknown>>()
-  const res = await pool.query(`SELECT * FROM ${ident(table)} WHERE id = ANY($1::uuid[])`, [unique])
+
+  const where = ["id = ANY($1::uuid[])"]
+  const params: unknown[] = [unique]
+
+  if (companyId && TABLES_WITH_COMPANY.has(table)) {
+    params.push(companyId)
+    where.push(`${ident("company_id")} = $${params.length}`)
+  }
+
+  const res = await pool.query(`SELECT * FROM ${ident(table)} WHERE ${where.join(" AND ")}`, params)
   return new Map(res.rows.map((row) => [row.id, row]))
 }
 
-async function hydrateInventory(rows: Record<string, unknown>[]) {
-  const catalogs = await getByIds("product_catalog", rows.map((row) => row.catalog_id))
+async function hydrateInventory(rows: Record<string, unknown>[], companyId: string) {
+  const catalogs = await getByIds("product_catalog", rows.map((row) => row.catalog_id), companyId)
   for (const row of rows) {
     const catalog = catalogs.get(String(row.catalog_id || ""))
     row.catalog = catalog || null
@@ -236,16 +253,19 @@ async function hydrateInventory(rows: Record<string, unknown>[]) {
   }
 }
 
-async function hydrateSales(rows: Record<string, unknown>[]) {
-  const customers = await getByIds("customers", rows.map((row) => row.customer_id))
-  const inventory = await getByIds("inventory", rows.map((row) => row.inventory_id))
-  await hydrateInventory(Array.from(inventory.values()))
+async function hydrateSales(rows: Record<string, unknown>[], companyId: string) {
+  const customers = await getByIds("customers", rows.map((row) => row.customer_id), companyId)
+  const inventory = await getByIds("inventory", rows.map((row) => row.inventory_id), companyId)
+  await hydrateInventory(Array.from(inventory.values()), companyId)
 
   const saleIds = rows.map((row) => row.id).filter(Boolean)
   const additional = saleIds.length
-    ? await pool.query("SELECT * FROM sales_additional_items WHERE sale_id = ANY($1::uuid[])", [saleIds])
+    ? await pool.query(
+        "SELECT * FROM sales_additional_items WHERE sale_id = ANY($1::uuid[]) AND company_id = $2",
+        [saleIds, companyId]
+      )
     : { rows: [] as Record<string, unknown>[] }
-  await hydrateSalesAdditionalItems(additional.rows)
+  await hydrateSalesAdditionalItems(additional.rows, companyId)
 
   for (const row of rows) {
     const customer = customers.get(String(row.customer_id || "")) || null
@@ -257,20 +277,20 @@ async function hydrateSales(rows: Record<string, unknown>[]) {
   }
 }
 
-async function hydrateSalesAdditionalItems(rows: Record<string, unknown>[]) {
-  const inventory = await getByIds("inventory", rows.map((row) => row.product_id))
-  await hydrateInventory(Array.from(inventory.values()))
+async function hydrateSalesAdditionalItems(rows: Record<string, unknown>[], companyId: string) {
+  const inventory = await getByIds("inventory", rows.map((row) => row.product_id), companyId)
+  await hydrateInventory(Array.from(inventory.values()), companyId)
 
   for (const row of rows) {
     row.inventory = inventory.get(String(row.product_id || "")) || null
   }
 }
 
-async function hydrateWarranties(rows: Record<string, unknown>[]) {
-  const sales = await getByIds("sales", rows.map((row) => row.sale_id))
-  const inventory = await getByIds("inventory", rows.map((row) => row.inventory_id))
-  const customers = await getByIds("customers", rows.map((row) => row.customer_id))
-  await hydrateInventory(Array.from(inventory.values()))
+async function hydrateWarranties(rows: Record<string, unknown>[], companyId: string) {
+  const sales = await getByIds("sales", rows.map((row) => row.sale_id), companyId)
+  const inventory = await getByIds("inventory", rows.map((row) => row.inventory_id), companyId)
+  const customers = await getByIds("customers", rows.map((row) => row.customer_id), companyId)
+  await hydrateInventory(Array.from(inventory.values()), companyId)
   for (const row of rows) {
     row.sales = sales.get(String(row.sale_id || "")) || null
     row.sale = row.sales
@@ -280,11 +300,11 @@ async function hydrateWarranties(rows: Record<string, unknown>[]) {
   }
 }
 
-async function hydrateProblems(rows: Record<string, unknown>[]) {
-  const inventory = await getByIds("inventory", rows.map((row) => row.inventory_id))
-  const customers = await getByIds("customers", rows.map((row) => row.customer_id))
-  const sales = await getByIds("sales", rows.map((row) => row.sale_id))
-  await hydrateInventory(Array.from(inventory.values()))
+async function hydrateProblems(rows: Record<string, unknown>[], companyId: string) {
+  const inventory = await getByIds("inventory", rows.map((row) => row.inventory_id), companyId)
+  const customers = await getByIds("customers", rows.map((row) => row.customer_id), companyId)
+  const sales = await getByIds("sales", rows.map((row) => row.sale_id), companyId)
+  await hydrateInventory(Array.from(inventory.values()), companyId)
   for (const row of rows) {
     row.inventory = inventory.get(String(row.inventory_id || "")) || null
     row.customers = customers.get(String(row.customer_id || "")) || null
@@ -293,9 +313,9 @@ async function hydrateProblems(rows: Record<string, unknown>[]) {
   }
 }
 
-async function hydrateChecklists(rows: Record<string, unknown>[]) {
-  const inventory = await getByIds("inventory", rows.map((row) => row.inventory_id))
-  await hydrateInventory(Array.from(inventory.values()))
+async function hydrateChecklists(rows: Record<string, unknown>[], companyId: string) {
+  const inventory = await getByIds("inventory", rows.map((row) => row.inventory_id), companyId)
+  await hydrateInventory(Array.from(inventory.values()), companyId)
   for (const row of rows) {
     row.inventory = inventory.get(String(row.inventory_id || "")) || null
   }
@@ -303,17 +323,24 @@ async function hydrateChecklists(rows: Record<string, unknown>[]) {
 
 export async function POST(request: Request) {
   try {
+    const authResult = await requireApiAuthContext()
+    if (!authResult.ok) return authResult.response
+
     const body = await request.json()
     const table = String(body.table || "")
     const action = String(body.action || "select")
     if (!SIMPLE_IDENTIFIER.test(table)) throw new Error("Invalid table")
 
-    const { companyId } = await ensureDefaultCompanyAndUser()
+    const companyId = authResult.context.companyId
     const params: unknown[] = []
     const where: string[] = []
     for (const filter of (body.filters || []) as Filter[]) addFilter(where, params, filter)
+    const userFilterCount = where.length
+    const tableHasCompany = TABLES_WITH_COMPANY.has(table)
 
     if (action === "select") {
+      addCompanyScope(table, companyId, where, params)
+
       const columns = parseColumns(body.select)
       let sql = `SELECT ${columns} FROM ${ident(table)}`
       if (where.length) sql += ` WHERE ${where.join(" AND ")}`
@@ -328,7 +355,7 @@ export async function POST(request: Request) {
       if (Number.isFinite(body.offset)) sql += ` OFFSET ${Number(body.offset)}`
 
       const result = await pool.query(sql, params)
-      const data = await hydrate(table, result.rows)
+      const data = await hydrate(table, result.rows, companyId)
       return NextResponse.json({ data: finalizeRows(data, body), error: null })
     }
 
@@ -336,7 +363,7 @@ export async function POST(request: Request) {
       const inputRows = (Array.isArray(body.values) ? body.values : [body.values]) as Record<string, unknown>[]
       const rows: Record<string, unknown>[] = inputRows.map((row) => ({
         ...(row || {}),
-        ...(TABLES_WITH_COMPANY.has(table) && !(row || {}).company_id ? { company_id: companyId } : {}),
+        ...(tableHasCompany ? { company_id: companyId } : {}),
       }))
       if (rows.length === 0) return NextResponse.json({ data: [], error: null })
 
@@ -355,18 +382,27 @@ export async function POST(request: Request) {
         const conflict = body.onConflict && SIMPLE_IDENTIFIER.test(body.onConflict) ? body.onConflict : "id"
         const updates = columns
           .filter((column) => column !== conflict)
+          .filter((column) => !(tableHasCompany && column === "company_id"))
           .map((column) => `${ident(column)} = EXCLUDED.${ident(column)}`)
         sql += ` ON CONFLICT (${ident(conflict)}) DO ${updates.length ? `UPDATE SET ${updates.join(", ")}` : "NOTHING"}`
       }
       sql += " RETURNING *"
 
       const result = await pool.query(sql, values)
-      const data = await hydrate(table, result.rows)
+      const data = await hydrate(table, result.rows, companyId)
       return NextResponse.json({ data: finalizeRows(data, body), error: null })
     }
 
     if (action === "update") {
-      const valuesObject = body.values || {}
+      if (tableHasCompany && userFilterCount === 0) {
+        return NextResponse.json(
+          { data: null, error: { message: "Update requires at least one filter" } },
+          { status: 400 }
+        )
+      }
+
+      const valuesObject = { ...(body.values || {}) }
+      if (tableHasCompany) delete valuesObject.company_id
       const columns = Object.keys(valuesObject)
       if (columns.length === 0) return NextResponse.json({ data: [], error: null })
 
@@ -374,15 +410,24 @@ export async function POST(request: Request) {
         params.push(normalizeValue(table, column, valuesObject[column]))
         return `${ident(column)} = $${params.length}`
       })
+      addCompanyScope(table, companyId, where, params)
       let sql = `UPDATE ${ident(table)} SET ${sets.join(", ")}`
       if (where.length) sql += ` WHERE ${where.join(" AND ")}`
       sql += " RETURNING *"
       const result = await pool.query(sql, params)
-      const data = await hydrate(table, result.rows)
+      const data = await hydrate(table, result.rows, companyId)
       return NextResponse.json({ data: finalizeRows(data, body), error: null })
     }
 
     if (action === "delete") {
+      if (tableHasCompany && userFilterCount === 0) {
+        return NextResponse.json(
+          { data: null, error: { message: "Delete requires at least one filter" } },
+          { status: 400 }
+        )
+      }
+
+      addCompanyScope(table, companyId, where, params)
       let sql = `DELETE FROM ${ident(table)}`
       if (where.length) sql += ` WHERE ${where.join(" AND ")}`
       sql += " RETURNING *"

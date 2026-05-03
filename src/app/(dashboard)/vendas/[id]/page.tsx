@@ -1027,9 +1027,16 @@ export default function SaleDetailPage() {
         .eq("id", id)
       if (saleError) throw saleError
 
+      const { error: warrantyError } = await supabase
+        .from("warranties")
+        .update({ status: "voided" })
+        .eq("sale_id", id)
+        .neq("status", "voided")
+      if (warrantyError) throw warrantyError
+
       await logAudit("updated", { sale_status: sale.sale_status || "completed" }, { sale_status: "cancelled" })
 
-      toast({ title: "Venda cancelada com segurança", description: "Histórico preservado e recebimentos conciliados estornados quando necessário.", type: "success" })
+      toast({ title: "Venda cancelada com segurança", description: "Histórico preservado, garantias anuladas e recebimentos conciliados estornados quando necessário.", type: "success" })
       router.replace("/vendas")
     } catch (e: any) {
       toast({ title: "Erro ao cancelar venda", description: e?.message || "Não foi possível cancelar a venda com segurança.", type: "error" })

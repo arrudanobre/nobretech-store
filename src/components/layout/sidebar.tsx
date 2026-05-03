@@ -434,12 +434,18 @@ export function DashboardLayout({ children, title }: { children: React.ReactNode
         const today = new Date().toISOString().split("T")[0]
         const { data: warrantyData, error: warrantyError } = await (supabase
           .from("warranties") as any)
-          .select("id")
+          .select(`
+            id,
+            sales!inner (
+              sale_status
+            )
+          `)
           .gte("end_date", today)
           .neq("status", "expired")
           .neq("status", "voided")
         if (!warrantyError) {
-          setCounts((prev) => ({ ...prev, garantias: warrantyData?.length ?? 0 }))
+          const completedWarrantyCount = (warrantyData || []).filter((w: any) => w.sales?.sale_status === "completed").length
+          setCounts((prev) => ({ ...prev, garantias: completedWarrantyCount }))
         }
 
         // Contagem de problemas (apenas não fechados)

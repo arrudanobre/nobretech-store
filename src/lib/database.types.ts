@@ -407,6 +407,7 @@ export interface Database {
           source: string | null;
           origin: string | null;
           status: string;
+          lead_temperature: string | null;
           product_interest: string | null;
           notes: string | null;
           next_action: string | null;
@@ -428,6 +429,7 @@ export interface Database {
           source?: string | null;
           origin?: string | null;
           status?: string;
+          lead_temperature?: string | null;
           product_interest?: string | null;
           notes?: string | null;
           next_action?: string | null;
@@ -449,6 +451,7 @@ export interface Database {
           source?: string | null;
           origin?: string | null;
           status?: string;
+          lead_temperature?: string | null;
           product_interest?: string | null;
           notes?: string | null;
           next_action?: string | null;
