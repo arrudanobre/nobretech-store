@@ -16,6 +16,8 @@
 # next.js
 /.next/
 /.next-cache/
+/.next-old/
+/.next-cache-old/
 /out/
 
 # production
@@ -43,6 +45,9 @@ next-env.d.ts
 
 # claude/agent files
 .claude/
+
+# local experiment projects
+/clerk-nextjs/
 
 # supabase temp files
 supabase/.temp/
