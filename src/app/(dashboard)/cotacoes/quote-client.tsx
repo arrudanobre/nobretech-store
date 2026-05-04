@@ -22,6 +22,7 @@ type InventoryItem = {
   quantity?: number | null
   notes?: string | null
   condition_notes?: string | null
+  source_sale_id?: string | null
   catalog?: {
     model?: string | null
     variant?: string | null
@@ -34,6 +35,25 @@ type InventoryItem = {
 type QuoteItem = {
   inventoryId: string
   price: number
+}
+
+type QueryError = {
+  message: string
+}
+
+type InventoryRow = InventoryItem & {
+  suggested_price?: number | string | null
+  purchase_price?: number | string | null
+  quantity?: number | string | null
+}
+
+type ReservedSaleRow = {
+  id: string
+  inventory_id: string | null
+}
+
+type ReservedAdditionalItemRow = {
+  product_id: string | null
 }
 
 const PAYMENT_LABEL_TONES: Record<string, string> = {
@@ -137,6 +157,10 @@ function quoteImageName() {
   return `orcamento-nobretech-${todayISO()}.png`
 }
 
+function errorMessage(error: unknown, fallback = "Erro inesperado") {
+  return error instanceof Error ? error.message : fallback
+}
+
 async function blobFromElement(element: HTMLElement) {
   const html2canvas = (await import("html2canvas")).default
   const canvas = await html2canvas(element, {
@@ -166,8 +190,37 @@ function downloadBlob(blob: Blob, fileName: string) {
   URL.revokeObjectURL(url)
 }
 
+async function copyTextWithFallback(text: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      // Mobile browsers can reject clipboard writes even from a user gesture.
+    }
+  }
+
+  const textArea = document.createElement("textarea")
+  textArea.value = text
+  textArea.setAttribute("readonly", "")
+  textArea.style.position = "fixed"
+  textArea.style.left = "-9999px"
+  textArea.style.top = "0"
+  document.body.appendChild(textArea)
+  textArea.focus()
+  textArea.select()
+  textArea.setSelectionRange(0, text.length)
+
+  try {
+    return document.execCommand("copy")
+  } finally {
+    document.body.removeChild(textArea)
+  }
+}
+
 export default function QuotesPage() {
   const [inventory, setInventory] = useState<InventoryItem[]>([])
+  const [reservedInventoryIds, setReservedInventoryIds] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
   const [quoteItems, setQuoteItems] = useState<QuoteItem[]>([])
@@ -179,6 +232,8 @@ export default function QuotesPage() {
   const [notes, setNotes] = useState("Valores sujeitos a disponibilidade do estoque.")
   const [fees, setFees] = useState<Record<string, number>>({ ...SIDEPAY_FEE_PCTS })
   const [sharing, setSharing] = useState(false)
+  const [copyFeedback, setCopyFeedback] = useState(false)
+  const [manualCopyText, setManualCopyText] = useState("")
   const [mounted, setMounted] = useState(false)
   const reportRef = useRef<HTMLDivElement>(null)
   const exportRef = useRef<HTMLDivElement>(null)
@@ -192,16 +247,50 @@ export default function QuotesPage() {
     async function fetchQuoteData() {
       setLoading(true)
       try {
-        const [inventoryRes, settingsRes] = await Promise.all([
-          (supabase.from("inventory") as any)
-            .select("id, imei, serial_number, grade, suggested_price, purchase_price, status, quantity, notes, condition_notes, catalog:catalog_id(model, variant, storage, color, category)")
+        const [inventoryRes, settingsRes, reservedSalesRes] = await Promise.all([
+          supabase.from("inventory")
+            .select("id, imei, serial_number, grade, suggested_price, purchase_price, status, quantity, notes, condition_notes, source_sale_id, catalog:catalog_id(model, variant, storage, color, category)")
             .in("status", ["active", "in_stock"])
             .order("created_at", { ascending: false }),
-          (supabase.from("financial_settings") as any).select("*").limit(1).single(),
+          supabase.from("financial_settings").select("*").limit(1).single(),
+          supabase.from("sales")
+            .select("id, inventory_id")
+            .eq("sale_status", "reserved"),
         ])
 
-        if (inventoryRes.error) throw new Error(inventoryRes.error.message)
-        setInventory((inventoryRes.data || []).map((item: any) => ({
+        if (inventoryRes.error) throw new Error((inventoryRes.error as QueryError).message)
+        if (reservedSalesRes.error) throw new Error((reservedSalesRes.error as QueryError).message)
+
+        const reservedSales = (reservedSalesRes.data || []) as ReservedSaleRow[]
+
+        const reservedIds = new Set<string>(
+          reservedSales
+            .map((sale) => sale.inventory_id)
+            .filter((id): id is string => Boolean(id))
+        )
+
+        if (reservedSales.length) {
+          const saleIds = reservedSales.map((sale) => sale.id).filter(Boolean)
+          const { data: reservedAdditionalItems, error: reservedAdditionalError } = await supabase.from("sales_additional_items")
+            .select("product_id")
+            .in("sale_id", saleIds)
+
+          if (reservedAdditionalError) throw new Error((reservedAdditionalError as QueryError).message)
+          ;((reservedAdditionalItems || []) as ReservedAdditionalItemRow[]).forEach((item) => {
+            if (item.product_id) reservedIds.add(item.product_id)
+          })
+        }
+
+        const inventoryRows = (inventoryRes.data || []) as InventoryRow[]
+        const reservedSaleIds = new Set(reservedSales.map((sale) => sale.id))
+        inventoryRows.forEach((item) => {
+          if (item.source_sale_id && reservedSaleIds.has(item.source_sale_id)) {
+            reservedIds.add(item.id)
+          }
+        })
+
+        setReservedInventoryIds(reservedIds)
+        setInventory(inventoryRows.map((item) => ({
           ...item,
           suggested_price: item.suggested_price === null ? null : Number(item.suggested_price || 0),
           purchase_price: item.purchase_price === null ? null : Number(item.purchase_price || 0),
@@ -215,8 +304,8 @@ export default function QuotesPage() {
           })
           setFees(nextFees)
         }
-      } catch (error: any) {
-        toast({ title: "Erro ao carregar orcamento", description: error.message, type: "error" })
+      } catch (error: unknown) {
+        toast({ title: "Erro ao carregar orcamento", description: errorMessage(error), type: "error" })
       } finally {
         setLoading(false)
       }
@@ -263,10 +352,14 @@ export default function QuotesPage() {
     })
   }, [amountDue, fees])
 
+  const availableInventory = useMemo(() => {
+    return inventory.filter((item) => !reservedInventoryIds.has(item.id))
+  }, [inventory, reservedInventoryIds])
+
   const filteredInventory = useMemo(() => {
     const query = search.toLowerCase().trim()
     const selectedIds = new Set(quoteItems.map((item) => item.inventoryId))
-    return inventory
+    return availableInventory
       .filter((item) => !selectedIds.has(item.id))
       .filter((item) => {
         if (!query) return true
@@ -279,8 +372,8 @@ export default function QuotesPage() {
           item.condition_notes || "",
         ].some((value) => value.toLowerCase().includes(query))
       })
-      .slice(0, 8)
-  }, [inventory, quoteItems, search])
+      .slice(0, 20)
+  }, [availableInventory, quoteItems, search])
 
   const validUntil = addDaysISO(todayISO(), Math.max(1, Number(validDays) || 1)) || todayISO()
   const shareText = useMemo(() => {
@@ -315,9 +408,21 @@ export default function QuotesPage() {
     return lines.filter((line): line is string => line !== null && line !== undefined).join("\n")
   }, [amountDue, customerName, notes, paymentRows, quoteTotal, selectedProducts, tradeInCredit, tradeInDevice, validUntil])
 
+  useEffect(() => {
+    setManualCopyText("")
+  }, [shareText])
+
   const addProduct = (product: InventoryItem) => {
+    if (reservedInventoryIds.has(product.id)) {
+      toast({ title: "Produto reservado", description: "Este aparelho ja esta vinculado a uma venda reservada.", type: "error" })
+      return
+    }
+
     const price = quoteOriginalPrice(product)
-    setQuoteItems((current) => [...current, { inventoryId: product.id, price }])
+    setQuoteItems((current) => {
+      if (current.some((item) => item.inventoryId === product.id)) return current
+      return [...current, { inventoryId: product.id, price }]
+    })
   }
 
   const updateQuotePrice = (inventoryId: string, value: string) => {
@@ -344,8 +449,8 @@ export default function QuotesPage() {
       if (!blob) return
       downloadBlob(blob, quoteImageName())
       toast({ title: "Imagem do orcamento gerada", type: "success" })
-    } catch (error: any) {
-      toast({ title: "Erro ao gerar imagem", description: error.message, type: "error" })
+    } catch (error: unknown) {
+      toast({ title: "Erro ao gerar imagem", description: errorMessage(error), type: "error" })
     } finally {
       setSharing(false)
     }
@@ -373,9 +478,9 @@ export default function QuotesPage() {
 
       downloadBlob(blob, quoteImageName())
       toast({ title: "Compartilhamento indisponivel", description: "Baixei a imagem para voce enviar pelo WhatsApp.", type: "success" })
-    } catch (error: any) {
-      if (error?.name !== "AbortError") {
-        toast({ title: "Erro ao compartilhar", description: error.message, type: "error" })
+    } catch (error: unknown) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        toast({ title: "Erro ao compartilhar", description: errorMessage(error), type: "error" })
       }
     } finally {
       setSharing(false)
@@ -397,10 +502,14 @@ export default function QuotesPage() {
     }
 
     try {
-      await navigator.clipboard.writeText(shareText)
+      const copied = await copyTextWithFallback(shareText)
+      if (!copied) throw new Error("clipboard_unavailable")
+      setCopyFeedback(true)
+      window.setTimeout(() => setCopyFeedback(false), 2500)
       toast({ title: "Texto copiado", description: "Agora e so colar no WhatsApp.", type: "success" })
     } catch {
-      toast({ title: "Nao foi possivel copiar", description: "Use o botao WhatsApp para abrir a mensagem pronta.", type: "error" })
+      setManualCopyText(shareText)
+      toast({ title: "Copie manualmente", description: "O navegador bloqueou a area de transferencia, mas deixei o texto pronto para selecionar.", type: "error" })
     }
   }
 
@@ -433,13 +542,33 @@ export default function QuotesPage() {
             <MessageCircle className="h-4 w-4" /> WhatsApp
           </Button>
           <Button variant="outline" onClick={handleCopyWhatsAppText} disabled={selectedProducts.length === 0}>
-            <Copy className="h-4 w-4" /> Copiar texto
+            <Copy className="h-4 w-4" /> {copyFeedback ? "Copiado" : "Copiar texto"}
           </Button>
           <Button onClick={handleShareImage} disabled={sharing || selectedProducts.length === 0}>
             <Share2 className="h-4 w-4" /> Compartilhar
           </Button>
         </div>
       </div>
+
+      {manualCopyText && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-sm font-bold text-amber-900">Texto pronto para copiar manualmente</p>
+              <p className="mt-1 text-xs leading-5 text-amber-800">Seu navegador bloqueou a copia automatica. Selecione o texto abaixo e cole no WhatsApp.</p>
+            </div>
+            <Button type="button" variant="outline" size="sm" onClick={() => setManualCopyText("")}>
+              Fechar
+            </Button>
+          </div>
+          <textarea
+            readOnly
+            value={manualCopyText}
+            className="mt-3 h-36 w-full rounded-xl border border-amber-200 bg-white p-3 text-xs leading-5 text-navy-900 outline-none focus:border-amber-400"
+            onFocus={(event) => event.target.select()}
+          />
+        </div>
+      )}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(330px,0.78fr)_minmax(0,1.22fr)]">
         <div className="min-w-0 space-y-4">
@@ -450,7 +579,7 @@ export default function QuotesPage() {
               </div>
               <div>
                 <h3 className="font-bold text-navy-900">Aparelhos em estoque</h3>
-                <p className="text-xs text-gray-500">{inventory.length} item(ns) disponiveis para cotar</p>
+                <p className="text-xs text-gray-500">{availableInventory.length} item(ns) disponiveis para cotar</p>
               </div>
             </div>
             <Input
@@ -716,7 +845,7 @@ export default function QuotesPage() {
                   <MessageCircle className="h-4 w-4" /> WhatsApp
                 </Button>
                 <Button variant="outline" size="sm" onClick={handleCopyWhatsAppText} disabled={selectedProducts.length === 0}>
-                  <Copy className="h-4 w-4" /> Copiar texto
+                  <Copy className="h-4 w-4" /> {copyFeedback ? "Copiado" : "Copiar texto"}
                 </Button>
                 <Button size="sm" onClick={handleShareImage} isLoading={sharing} disabled={selectedProducts.length === 0}>
                   <Share2 className="h-4 w-4" /> Compartilhar imagem

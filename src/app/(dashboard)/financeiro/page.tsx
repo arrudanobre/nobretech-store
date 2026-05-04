@@ -255,12 +255,20 @@ export default function FinanceiroPage() {
   }, [transactions])
 
   const accountBalances = useMemo(() => {
+    const unassignedLedger =
+      accounts.length === 1
+        ? accountMovements
+            .filter((movement) => !movement.account_id)
+            .reduce((sum, movement) => sum + Number(movement.amount || 0), 0)
+        : 0
+
     return accounts.map((account) => {
-      const balance = accountMovements
+      const linkedLedger = accountMovements
         .filter((movement) => movement.account_id === account.id)
         .reduce((sum, movement) => sum + Number(movement.amount || 0), 0)
       const baseBalance = 0
-      const ledger = balance
+      const ledger = linkedLedger + unassignedLedger
+      const balance = ledger
       return { ...account, baseBalance, ledger, balance }
     })
   }, [accountMovements, accounts])
@@ -310,6 +318,13 @@ export default function FinanceiroPage() {
   }
 
   const isResultExpense = (transaction: Transaction) => hasFinancialType(transaction, "operating_expense") || hasFinancialType(transaction, "tax")
+  const isMarketingInvestment = (transaction: Transaction) => {
+    const account = getTransactionAccount(transaction)
+    const label = `${transaction.category || ""} ${account?.name || ""}`.toLowerCase()
+    return /marketing|tr[aá]fego|an[uú]ncio|ads|campanha/.test(label)
+  }
+  const isFixedExpense = (transaction: Transaction) =>
+    isResultExpense(transaction) && !hasFinancialType(transaction, "tax") && !isMarketingInvestment(transaction)
   const isInventoryCashOut = (transaction: Transaction) => hasFinancialType(transaction, "inventory_asset")
   const isOwnerWithdrawal = (transaction: Transaction) => transaction.type === "expense" && hasFinancialType(transaction, "owner_equity")
   const isOwnerContribution = (transaction: Transaction) => transaction.type === "income" && hasFinancialType(transaction, "owner_equity")
@@ -338,9 +353,7 @@ export default function FinanceiroPage() {
     const grossProfit = salesRevenue - cmv
     const netProfit = netRevenue - cmv - paidOperatingExpenses
     const grossMargin = salesRevenue > 0 ? (grossProfit / salesRevenue) * 100 : 0
-    const fixedExpenses = activeTransactions
-      .filter((t) => isResultExpense(t) && t.category !== "Impostos / Taxas")
-      .reduce((sum, t) => sum + Number(t.amount), 0)
+    const fixedExpenses = activeTransactions.filter(isFixedExpense).reduce((sum, t) => sum + Number(t.amount), 0)
     const grossMarginRate = salesRevenue > 0 ? grossProfit / salesRevenue : 0
     const breakEvenRevenue = grossMarginRate > 0 ? fixedExpenses / grossMarginRate : fixedExpenses
     const breakEvenGap = Math.max(0, breakEvenRevenue - salesRevenue)

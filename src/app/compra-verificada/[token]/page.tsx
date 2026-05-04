@@ -2,23 +2,24 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { useParams } from "next/navigation"
+import { jsPDF } from "jspdf"
 import {
   BadgeCheck,
-  BatteryCharging,
   CalendarDays,
   CheckCircle2,
   ChevronRight,
   Clock,
   CreditCard,
+  Download,
+  FileText,
   Hash,
-  HelpCircle,
   LockKeyhole,
-  MessageCircle,
   PackageCheck,
-  Palette,
+  ReceiptText,
   ShieldCheck,
   Smartphone,
   Sparkles,
+  UserRound,
   Wrench,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -66,14 +67,36 @@ type Purchase = {
     grade: string | null
     batteryHealth: number | null
     boxType: string
+    photoUrl: string | null
     imei: string | null
     serial: string | null
   }
   purchaseItems: Array<PurchaseItem>
+  provenance: {
+    kind: "trade_in" | "supplier" | "sealed" | "unknown"
+    description: string
+    previousOwnerName: string | null
+    previousOwnerCpf: string | null
+    previousPurchaseDate: string | null
+    receivedAt: string | null
+    inspectionDate: string | null
+    stockEntryDate: string | null
+    originLabel: string | null
+    conditionLabel: string | null
+    technicalStatus: string | null
+    status: string | null
+    privacyNote: string
+  }
+  documents: {
+    receiptAvailable: boolean
+    warrantyAvailable: boolean
+    technicalReportUrl: string | null
+  }
   assistance: Array<{
     id: string
     itemId: string | null
     itemName: string | null
+    type?: string | null
     statusLabel: string
     description: string
     openedAt: string | null
@@ -93,6 +116,7 @@ type PurchaseItem = {
   grade: string | null
   batteryHealth: number | null
   boxType: string
+  photoUrl: string | null
   imei: string | null
   serial: string | null
   warrantyStart: string | null
@@ -129,6 +153,26 @@ function parsePublicDate(value?: string | null) {
 function formatPublicDate(value?: string | null) {
   const date = parsePublicDate(value)
   return date ? new Intl.DateTimeFormat("pt-BR").format(date) : notInformed
+}
+
+function formatDateBR(value?: string | null) {
+  return formatPublicDate(value)
+}
+
+function formatCurrencyBR(value: number) {
+  return formatBRL(value)
+}
+
+function maskIdentifier(value?: string | null) {
+  return value || notInformed
+}
+
+function maskOwnerName(value?: string | null) {
+  return value || notInformed
+}
+
+function maskCpf(value?: string | null) {
+  return value || notInformed
 }
 
 function startOfToday() {
@@ -204,17 +248,24 @@ function getWarrantyStatusCopy(status: WarrantyState) {
   return map[status]
 }
 
+function latestTimelineDate(timeline: Array<{ date: string | null }>) {
+  for (let index = timeline.length - 1; index >= 0; index -= 1) {
+    if (timeline[index]?.date) return timeline[index].date
+  }
+  return null
+}
+
 function PortalShell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="min-h-screen bg-[#f6f9fd] px-4 py-4 text-slate-950 sm:px-6 sm:py-8">
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 sm:gap-5">{children}</div>
+    <main className="min-h-screen bg-[#f4f7fb] px-3 py-3 pb-24 text-slate-950 sm:px-6 sm:py-8 sm:pb-10">
+      <div className="mx-auto grid w-full max-w-[1180px] grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-[1.05fr_0.95fr]">{children}</div>
     </main>
   )
 }
 
 function PortalCard({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return (
-    <section className={`rounded-[1.35rem] border border-white/80 bg-white p-4 shadow-[0_18px_60px_rgba(15,23,42,0.08)] sm:p-6 ${className}`}>
+    <section className={`rounded-[1.45rem] border border-[#dce6f2] bg-white p-4 shadow-[0_12px_34px_rgba(15,27,45,0.045)] sm:p-5 ${className}`}>
       {children}
     </section>
   )
@@ -249,16 +300,17 @@ function InfoRows({
   )
 }
 
-function SectionTitle({ icon: Icon, title, subtitle }: { icon: IconType; title: string; subtitle?: string }) {
+function SectionTitle({ icon: Icon, title, subtitle, action = true }: { icon: IconType; title: string; subtitle?: string; action?: boolean }) {
   return (
     <div className="mb-4 flex items-start gap-3">
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-royal-50 text-royal-600">
-        <Icon className="h-5 w-5" />
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-royal-50 text-royal-600">
+        <Icon className="h-4 w-4" />
       </span>
-      <div>
-        <h3 className="text-lg font-bold text-navy-900">{title}</h3>
+      <div className="min-w-0 flex-1">
+        <h3 className="text-lg font-extrabold leading-tight text-navy-900">{title}</h3>
         {subtitle && <p className="mt-0.5 text-sm leading-5 text-slate-500">{subtitle}</p>}
       </div>
+      {action && <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-royal-600" />}
     </div>
   )
 }
@@ -273,42 +325,51 @@ function StatusPill({ children, tone = "blue" }: { children: React.ReactNode; to
   return <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold ring-1 ${colors[tone]}`}>{children}</span>
 }
 
+function WhatsAppIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 32 32" aria-hidden="true" className={className} fill="currentColor">
+      <path d="M16.02 3.2c-7.02 0-12.72 5.68-12.72 12.68 0 2.22.58 4.39 1.68 6.31L3.2 28.8l6.76-1.77a12.72 12.72 0 0 0 6.06 1.54c7.02 0 12.72-5.68 12.72-12.69S23.04 3.2 16.02 3.2Zm0 23.22c-1.87 0-3.7-.5-5.3-1.45l-.38-.23-4.01 1.05 1.07-3.9-.25-.4a10.45 10.45 0 0 1-1.61-5.61c0-5.81 4.7-10.53 10.48-10.53 2.8 0 5.44 1.1 7.42 3.08a10.48 10.48 0 0 1 3.08 7.45c0 5.81-4.7 10.54-10.5 10.54Zm5.75-7.89c-.31-.16-1.86-.92-2.15-1.02-.29-.11-.5-.16-.71.16-.21.31-.81 1.02-.99 1.23-.18.21-.37.24-.68.08-.31-.16-1.33-.49-2.53-1.56-.94-.84-1.57-1.87-1.75-2.18-.18-.32-.02-.49.14-.64.14-.14.31-.37.47-.55.16-.18.21-.31.31-.52.1-.21.05-.39-.03-.55-.08-.16-.71-1.72-.97-2.35-.26-.62-.52-.54-.71-.55h-.6c-.21 0-.55.08-.84.39-.29.31-1.1 1.07-1.1 2.61s1.13 3.04 1.28 3.25c.16.21 2.22 3.39 5.38 4.75.75.32 1.34.52 1.8.66.76.24 1.45.21 1.99.13.61-.09 1.86-.76 2.12-1.49.26-.73.26-1.36.18-1.49-.08-.13-.29-.21-.61-.37Z" />
+    </svg>
+  )
+}
+
 function VerifiedPurchaseHero({ purchase }: { purchase: Purchase }) {
   return (
-    <section className="space-y-4">
-      <div className="flex items-start justify-between gap-4 px-1 pt-1">
-        <div>
-          <p className="text-xs font-black uppercase tracking-[0.24em] text-royal-600">NOBRETECH STORE</p>
-          <h1 className="mt-1 text-[1.75rem] font-display font-extrabold leading-tight text-navy-900 font-syne sm:text-4xl">Compra Verificada</h1>
-        </div>
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white text-royal-600 shadow-[0_10px_30px_rgba(37,99,235,0.16)] ring-1 ring-slate-100">
-          <ShieldCheck className="h-5 w-5" />
-        </span>
-      </div>
-
-      <div className="relative overflow-hidden rounded-[1.35rem] border border-blue-100 bg-[linear-gradient(110deg,#ffffff_0%,#f7fbff_48%,#dfeaff_100%)] p-5 shadow-[0_18px_60px_rgba(37,99,235,0.13)] sm:p-6">
-        <div className="absolute right-4 top-7 hidden h-28 w-28 items-center justify-center rounded-[2rem] bg-white/55 text-royal-500 shadow-inner sm:flex">
-          <ShieldCheck className="h-16 w-16" />
-        </div>
-        <div className="relative flex gap-4 sm:max-w-[70%]">
-          <span className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-royal-600 text-white shadow-[0_12px_28px_rgba(37,99,235,0.28)]">
-            <Smartphone className="h-8 w-8" />
+    <section className="space-y-3 lg:col-span-2">
+      <header className="flex items-center justify-between gap-3 px-1">
+        <div className="flex items-center gap-2">
+          <span className="flex h-9 w-9 items-center justify-center rounded-2xl border border-[#dce6f2] bg-white text-royal-600 shadow-sm">
+            <ShieldCheck className="h-5 w-5" />
           </span>
-          <div>
+          <p className="text-[0.95rem] font-black uppercase tracking-[0.13em] text-navy-900">
+            NOBRETECH <span className="text-royal-600">STORE</span>
+          </p>
+        </div>
+        <span className="hidden items-center gap-1.5 rounded-full border border-[#dce6f2] bg-white px-3 py-2 text-xs font-extrabold text-slate-700 sm:inline-flex">
+          <LockKeyhole className="h-3.5 w-3.5 text-royal-600" />
+          Ambiente seguro
+        </span>
+      </header>
+
+      <div className="rounded-[1.45rem] border border-[#dce6f2] bg-white p-4 shadow-[0_12px_34px_rgba(15,27,45,0.045)] sm:p-5">
+        <div className="flex gap-4">
+          <span className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-royal-700 to-navy-900 text-white shadow-[0_14px_28px_rgba(35,87,184,0.24)]">
+            <UserRound className="h-8 w-8" />
+          </span>
+          <div className="min-w-0">
             <h2 className="text-2xl font-extrabold leading-tight text-navy-900">Olá, {purchase.customerName}</h2>
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              Aqui você encontra os detalhes da sua compra realizada na Nobretech Store.
+              Aqui você encontra todos os detalhes da sua compra realizada na Nobretech Store.
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
               <StatusPill tone="green">
                 <BadgeCheck className="h-3.5 w-3.5" />
                 Compra verificada
               </StatusPill>
-              <StatusPill tone="blue">
+              <StatusPill tone="neutral">
                 <LockKeyhole className="h-3.5 w-3.5" />
                 Ambiente seguro
               </StatusPill>
-              <StatusPill tone="neutral">Seus dados estão protegidos</StatusPill>
             </div>
           </div>
         </div>
@@ -336,11 +397,11 @@ function PinGate({
 }) {
   return (
     <PortalShell>
-      <header className="px-1 py-2">
+      <header className="px-1 py-2 lg:col-span-2">
         <p className="text-xs font-bold uppercase tracking-[0.22em] text-royal-600">Nobretech Store</p>
       </header>
 
-      <PortalCard className="overflow-hidden">
+      <PortalCard className="overflow-hidden lg:col-span-2 lg:mx-auto lg:w-full lg:max-w-xl">
         <div className="rounded-[1.25rem] bg-gradient-to-br from-navy-900 to-royal-700 p-5 text-white">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -399,6 +460,215 @@ function PinGate({
   )
 }
 
+function ProductThumb({ src, name }: { src?: string | null; name: string }) {
+  return (
+    <div className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-[1.2rem] bg-[#f7f9fc] ring-1 ring-[#dce6f2]">
+      {src ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={src} alt={name} className="h-full w-full object-cover" />
+      ) : (
+        <Smartphone className="h-11 w-11 text-royal-500" />
+      )}
+    </div>
+  )
+}
+
+function VerifiedDeviceCard({ purchase }: { purchase: Purchase }) {
+  const status = getWarrantyStatus(purchase.sale.warrantyStart, purchase.sale.warrantyEnd)
+  const statusCopy = getWarrantyStatusCopy(status)
+
+  return (
+    <PortalCard>
+      <SectionTitle icon={Smartphone} title="Seu aparelho" />
+      <div className="flex items-center gap-4">
+        <ProductThumb src={purchase.device.photoUrl} name={purchase.device.model} />
+        <div className="min-w-0 flex-1">
+          <h2 className="text-xl font-extrabold leading-tight text-navy-900">{fallback(purchase.device.model)}</h2>
+          <p className="mt-1 text-sm font-semibold text-slate-500">{fallback(purchase.device.color)}</p>
+          <span className={`mt-3 inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-extrabold ${statusCopy.className}`}>
+            <ShieldCheck className="h-3.5 w-3.5" />
+            {statusCopy.label}
+          </span>
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 overflow-hidden rounded-2xl border border-[#dce6f2] bg-[#fbfdff]">
+        <div className="p-3">
+          <p className="text-xs font-extrabold uppercase tracking-wide text-slate-500">IMEI</p>
+          <p className="mt-1 font-mono text-sm font-black text-navy-900">{maskIdentifier(purchase.device.imei)}</p>
+        </div>
+        <div className="border-l border-[#dce6f2] p-3">
+          <p className="text-xs font-extrabold uppercase tracking-wide text-slate-500">Serial</p>
+          <p className="mt-1 font-mono text-sm font-black text-navy-900">{maskIdentifier(purchase.device.serial)}</p>
+        </div>
+      </div>
+    </PortalCard>
+  )
+}
+
+function VerifiedPurchaseProvenanceCard({ purchase }: { purchase: Purchase }) {
+  const provenance = purchase.provenance
+  const hasData = provenance.kind !== "unknown" && Boolean(provenance.stockEntryDate || provenance.previousOwnerName || provenance.previousOwnerCpf || provenance.originLabel)
+  const rows = provenance.kind === "trade_in"
+    ? [
+        ...(provenance.previousOwnerName ? [{ icon: UserRound, label: "Antigo proprietário", value: maskOwnerName(provenance.previousOwnerName), tone: "green" as const }] : []),
+        ...(provenance.previousOwnerCpf ? [{ icon: CreditCard, label: "CPF validado", value: maskCpf(provenance.previousOwnerCpf), tone: "green" as const }] : []),
+        ...(provenance.stockEntryDate ? [{ icon: CalendarDays, label: "Entrada no estoque", value: formatDateBR(provenance.stockEntryDate), tone: "green" as const }] : []),
+        { icon: ShieldCheck, label: "Status da procedência", value: <StatusPill tone="green">{provenance.status || "Sem restrições"}</StatusPill>, tone: "green" as const },
+      ]
+    : [
+        ...(provenance.stockEntryDate ? [{ icon: CalendarDays, label: "Entrada no estoque", value: formatDateBR(provenance.stockEntryDate), tone: "green" as const }] : []),
+        ...(provenance.originLabel ? [{ icon: PackageCheck, label: "Origem", value: provenance.originLabel, tone: "green" as const }] : []),
+        ...(provenance.conditionLabel ? [{ icon: Sparkles, label: "Condição", value: provenance.conditionLabel, tone: "green" as const }] : []),
+        ...(provenance.technicalStatus ? [{ icon: CheckCircle2, label: "Conferência técnica", value: provenance.technicalStatus, tone: "green" as const }] : []),
+        { icon: ShieldCheck, label: "Status da procedência", value: <StatusPill tone="green">{provenance.status || "Sem restrições"}</StatusPill>, tone: "green" as const },
+      ]
+
+  return (
+    <PortalCard className={hasData ? "bg-[linear-gradient(135deg,#ffffff_0%,#f6fffb_100%)]" : ""}>
+      <SectionTitle
+        icon={ShieldCheck}
+        title="Procedência verificada"
+        subtitle={provenance.description}
+      />
+
+      {hasData ? (
+        <>
+          <InfoRows rows={rows} />
+          <p className="mt-3 flex gap-2 text-xs font-semibold leading-5 text-slate-500">
+            <LockKeyhole className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500" />
+            {provenance.privacyNote}
+          </p>
+        </>
+      ) : (
+        <div className="rounded-2xl border border-dashed border-[#dce6f2] bg-slate-50/70 p-4 text-sm font-semibold leading-6 text-slate-600">
+          Dados de procedência ainda não registrados.
+        </div>
+      )}
+    </PortalCard>
+  )
+}
+
+function VerifiedPurchaseTimelineCard({ purchase }: { purchase: Purchase }) {
+  const events = [
+    { label: "Aparelho adquirido pelo antigo proprietário", date: purchase.provenance.previousPurchaseDate },
+    { label: "Aparelho recebido pela Nobretech", date: purchase.provenance.receivedAt },
+    { label: "Inspeção técnica realizada", date: purchase.provenance.inspectionDate },
+    { label: "Entrada no estoque da Nobretech", date: purchase.provenance.stockEntryDate },
+    { label: "Venda realizada", date: purchase.sale.date },
+  ].filter((event) => event.date)
+
+  if (events.length === 0) return null
+
+  return (
+    <PortalCard>
+      <SectionTitle icon={Clock} title="Linha do tempo" />
+      <ol className="space-y-0">
+        {events.map((event, index) => (
+          <li key={event.label} className="grid grid-cols-[22px_1fr_auto] gap-3 py-1.5">
+            <span className="relative mt-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-600 text-white">
+              <CheckCircle2 className="h-3 w-3" />
+              {index < events.length - 1 && <span className="absolute left-1/2 top-4 h-7 w-0.5 -translate-x-1/2 bg-emerald-100" />}
+            </span>
+            <p className="text-sm font-bold leading-5 text-navy-900">{event.label}</p>
+            <p className="whitespace-nowrap text-xs font-semibold text-slate-500">{formatDateBR(event.date)}</p>
+          </li>
+        ))}
+      </ol>
+    </PortalCard>
+  )
+}
+
+function downloadPublicDocument(kind: "receipt" | "warranty", purchase: Purchase) {
+  const doc = new jsPDF()
+  const title = kind === "receipt" ? "Recibo da compra" : "Termo de garantia"
+  const fileSuffix = kind === "receipt" ? "recibo" : "garantia"
+  const lines = kind === "receipt"
+    ? [
+        ["Compra", purchase.sale.number],
+        ["Data", formatDateBR(purchase.sale.date)],
+        ["Cliente", purchase.customerName],
+        ["Produto", purchase.device.model],
+        ["Valor da compra", formatCurrencyBR(purchase.sale.purchaseAmount)],
+        ["Valor pago", formatCurrencyBR(purchase.sale.amountPaid)],
+        ["Forma de pagamento", purchase.sale.paymentMethod || notInformed],
+      ]
+    : [
+        ["Compra", purchase.sale.number],
+        ["Cliente", purchase.customerName],
+        ["Produto", purchase.device.model],
+        ["Início da garantia", formatDateBR(purchase.sale.warrantyStart)],
+        ["Término da garantia", formatDateBR(purchase.sale.warrantyEnd)],
+        ["Status", getWarrantyStatusCopy(getWarrantyStatus(purchase.sale.warrantyStart, purchase.sale.warrantyEnd)).label],
+      ]
+
+  doc.setFont("helvetica", "bold")
+  doc.setFontSize(16)
+  doc.text("NOBRETECH STORE", 20, 22)
+  doc.setFontSize(13)
+  doc.text(title, 20, 34)
+  doc.setFont("helvetica", "normal")
+  doc.setFontSize(10)
+  doc.text("Documento gerado pelo portal de compra verificada.", 20, 43)
+
+  let y = 58
+  for (const [label, value] of lines) {
+    doc.setFont("helvetica", "bold")
+    doc.text(`${label}:`, 20, y)
+    doc.setFont("helvetica", "normal")
+    doc.text(String(value || notInformed), 64, y)
+    y += 9
+  }
+
+  if (kind === "warranty") {
+    y += 4
+    doc.setFontSize(9)
+    doc.text("A garantia segue os termos e condições informados pela Nobretech Store no momento da compra.", 20, y, { maxWidth: 170 })
+  }
+
+  doc.save(`${fileSuffix}-${purchase.sale.number.toLowerCase()}.pdf`)
+}
+
+function DocumentRow({ icon: Icon, title, subtitle, href, disabled, onClick }: { icon: IconType; title: string; subtitle: string; href?: string | null; disabled?: boolean; onClick?: () => void }) {
+  const content = (
+    <>
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-royal-50 text-royal-600">
+        <Icon className="h-5 w-5" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-extrabold leading-tight text-navy-900">{title}</span>
+        <span className="text-xs font-semibold text-slate-500">{subtitle}</span>
+      </span>
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#dce6f2] text-royal-600">
+        <Download className="h-4 w-4" />
+      </span>
+    </>
+  )
+
+  if (href && !disabled) {
+    return <a href={href} target="_blank" rel="noreferrer" className="flex items-center gap-3 border-t border-slate-100 py-3 first:border-t-0">{content}</a>
+  }
+
+  return (
+    <button type="button" disabled={disabled} onClick={onClick} className={`flex w-full items-center gap-3 border-t border-slate-100 py-3 text-left first:border-t-0 ${disabled ? "cursor-not-allowed opacity-45" : "cursor-pointer hover:bg-royal-50/40"}`}>
+      {content}
+    </button>
+  )
+}
+
+function VerifiedPurchaseDocumentsCard({ purchase }: { purchase: Purchase }) {
+  return (
+    <PortalCard>
+      <SectionTitle icon={FileText} title="Documentos da compra" />
+      <div className="overflow-hidden rounded-2xl border border-[#dce6f2] bg-white px-3">
+        <DocumentRow icon={ReceiptText} title="Recibo da compra" subtitle="PDF" disabled={!purchase.documents.receiptAvailable} onClick={() => downloadPublicDocument("receipt", purchase)} />
+        <DocumentRow icon={ShieldCheck} title="Termo de garantia" subtitle="PDF" disabled={!purchase.documents.warrantyAvailable} onClick={() => downloadPublicDocument("warranty", purchase)} />
+        <DocumentRow icon={FileText} title="Laudo técnico" subtitle={purchase.documents.technicalReportUrl ? "PDF" : "Sem laudo registrado"} href={purchase.documents.technicalReportUrl} disabled={!purchase.documents.technicalReportUrl} />
+      </div>
+    </PortalCard>
+  )
+}
+
 function VerifiedPurchaseSummaryCard({ purchase }: { purchase: Purchase }) {
   const hasTradeIn = purchase.sale.tradeInApplied
   const summaryRows = [
@@ -409,13 +679,13 @@ function VerifiedPurchaseSummaryCard({ purchase }: { purchase: Purchase }) {
   ]
   const moneyRows = hasTradeIn
     ? [
-        { icon: CreditCard, label: "Valor da compra", value: formatBRL(purchase.sale.purchaseAmount) },
-        { icon: PackageCheck, label: "Crédito do trade-in", value: `- ${formatBRL(purchase.sale.tradeInCreditAmount)}`, tone: "green" as const },
-        { icon: CreditCard, label: "Valor pago", value: formatBRL(purchase.sale.amountPaid) },
+        { icon: CreditCard, label: "Valor da compra", value: formatCurrencyBR(purchase.sale.purchaseAmount) },
+        { icon: PackageCheck, label: "Crédito do trade-in", value: `- ${formatCurrencyBR(purchase.sale.tradeInCreditAmount)}`, tone: "green" as const },
+        { icon: CreditCard, label: "Valor pago", value: formatCurrencyBR(purchase.sale.amountPaid) },
         { icon: CreditCard, label: "Forma de pagamento", value: purchase.sale.remainingPaymentMethod || notInformed },
       ]
     : [
-        { icon: CreditCard, label: "Valor pago", value: formatBRL(purchase.sale.amountPaid) },
+        { icon: CreditCard, label: "Valor pago", value: formatCurrencyBR(purchase.sale.amountPaid) },
         { icon: CreditCard, label: "Forma de pagamento", value: purchase.sale.paymentMethod || notInformed },
       ]
 
@@ -440,7 +710,7 @@ function VerifiedPurchaseSummaryCard({ purchase }: { purchase: Purchase }) {
               <p className="text-sm font-extrabold text-navy-900">Aparelho entregue no trade-in</p>
               <p className="mt-0.5 text-xs font-medium text-emerald-700">Recebido como parte do pagamento</p>
             </div>
-            <p className="shrink-0 text-sm font-black text-emerald-700">-{formatBRL(purchase.sale.tradeInCreditAmount)}</p>
+            <p className="shrink-0 text-sm font-black text-emerald-700">-{formatCurrencyBR(purchase.sale.tradeInCreditAmount)}</p>
           </div>
           {purchase.sale.tradeInDevice?.model ? (
             <div className="space-y-2 text-sm">
@@ -488,68 +758,34 @@ function VerifiedPurchaseItemsCard({ purchase }: { purchase: Purchase }) {
     grade: purchase.device.grade,
     batteryHealth: purchase.device.batteryHealth,
     boxType: purchase.device.boxType,
+    photoUrl: purchase.device.photoUrl,
     imei: purchase.device.imei,
     serial: purchase.device.serial,
     warrantyStart: purchase.sale.warrantyStart,
     warrantyEnd: purchase.sale.warrantyEnd,
     issues: [],
   }]
-  const hasMultipleItems = items.length > 1
-  const title = hasMultipleItems ? "Itens da sua compra" : "Seu aparelho"
-  const subtitle = hasMultipleItems ? "Produtos vinculados a esta venda." : "Dados básicos do produto entregue."
 
   return (
     <PortalCard>
-      <SectionTitle icon={Smartphone} title={title} subtitle={subtitle} />
-      <div className="space-y-4">
+      <SectionTitle icon={PackageCheck} title="Itens da sua compra" />
+      <div className="divide-y divide-slate-100">
         {items.map((item, index) => {
-          const identityItems = [
-            { label: "IMEI", value: item.imei },
-            { label: "Serial", value: item.serial },
-          ].filter((identity) => identity.value)
           const tone = itemTone(item.type)
-          const warrantyDiffers = Boolean(item.warrantyEnd && item.warrantyEnd !== purchase.sale.warrantyEnd)
+          const amount = item.type === "free" ? "Brinde" : item.type === "principal" ? formatCurrencyBR(purchase.sale.purchaseAmount) : item.label
 
           return (
-            <div key={item.id || `${item.type}-${index}`} className="overflow-hidden rounded-[1.2rem] border border-slate-200 bg-white">
-              <div className="bg-gradient-to-br from-slate-50 to-blue-50/60 p-4">
-                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+            <div key={item.id || `${item.type}-${index}`} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
+              <ProductThumb src={item.photoUrl} name={item.model} />
+              <div className="min-w-0 flex-1">
+                <p className="line-clamp-2 text-sm font-extrabold leading-5 text-navy-900">{fallback(item.model)}</p>
+                <p className="mt-0.5 text-xs font-semibold text-slate-500">{fallback(item.color || item.storage)}</p>
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
                   <StatusPill tone={tone as "blue" | "green" | "neutral" | "amber"}>{item.label}</StatusPill>
-                  {item.issues.length > 0 && (
-                    <StatusPill tone="amber">
-                      <Wrench className="h-3.5 w-3.5" />
-                      Assistência vinculada
-                    </StatusPill>
-                  )}
+                  {item.issues.length > 0 && <StatusPill tone="amber">OS vinculada</StatusPill>}
                 </div>
-                <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Produto</p>
-                <p className="mt-1 text-xl font-extrabold leading-snug text-navy-900">{fallback(item.model)}</p>
               </div>
-
-              <div className="p-3">
-                <InfoRows rows={[
-                  { icon: PackageCheck, label: "Armazenamento", value: fallback(item.storage) },
-                  { icon: Palette, label: "Cor", value: fallback(item.color), tone: "orange" },
-                  { icon: Sparkles, label: "Classificação", value: fallback(item.grade) },
-                  { icon: BatteryCharging, label: "Saúde da bateria", value: item.batteryHealth === null ? notInformed : `${item.batteryHealth}%`, tone: "green" },
-                  { icon: PackageCheck, label: "Caixa/entrega", value: fallback(item.boxType) },
-                  ...(warrantyDiffers ? [{ icon: ShieldCheck, label: "Garantia até", value: formatPublicDate(item.warrantyEnd) }] : []),
-                ]} />
-
-                {identityItems.length > 0 && (
-                  <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-                    <p className="text-xs font-bold uppercase tracking-wide text-slate-400">Identificação protegida</p>
-                    <div className="mt-3 space-y-2">
-                      {identityItems.map((identity) => (
-                        <div key={identity.label} className="flex items-center justify-between gap-4 text-sm">
-                          <span className="font-medium text-slate-500">{identity.label}</span>
-                          <span className="font-mono font-bold text-slate-900">{identity.value}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
+              <p className="shrink-0 text-right text-sm font-black text-navy-900">{amount}</p>
             </div>
           )
         })}
@@ -630,13 +866,22 @@ function VerifiedPurchaseWarrantyCard({ purchase }: { purchase: Purchase }) {
 }
 
 function VerifiedPurchaseIssueCard({ purchase }: { purchase: Purchase }) {
-  if (purchase.assistance.length === 0) return null
+  if (purchase.assistance.length === 0) {
+    return (
+      <PortalCard>
+        <SectionTitle icon={Wrench} title="Ordem de Serviço" />
+        <div className="rounded-2xl border border-dashed border-[#dce6f2] bg-slate-50/70 p-4 text-sm font-semibold leading-6 text-slate-600">
+          Nenhuma ordem de serviço aberta para este aparelho.
+        </div>
+      </PortalCard>
+    )
+  }
 
   return (
     <PortalCard>
-      <SectionTitle icon={Wrench} title="Assistência técnica" subtitle="Aparece somente quando existe atendimento vinculado a um item desta compra." />
+      <SectionTitle icon={Wrench} title="Ordem de Serviço" subtitle="Acompanhamento de atendimentos vinculados ao aparelho." />
       <div className="space-y-4">
-        {purchase.assistance.map((item) => (
+        {purchase.assistance.map((item, index) => (
           <div key={item.id} className="rounded-[1.2rem] border border-slate-200 bg-slate-50/70 p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
@@ -647,6 +892,7 @@ function VerifiedPurchaseIssueCard({ purchase }: { purchase: Purchase }) {
                 {item.itemName && (
                   <p className="mt-3 text-xs font-black uppercase tracking-wide text-royal-600">{item.itemName}</p>
                 )}
+                <p className="mt-2 text-xs font-bold text-slate-500">OS-{String(item.id).slice(0, 8).toUpperCase()}</p>
                 <p className="mt-3 text-sm font-semibold leading-6 text-slate-800">{item.description}</p>
               </div>
               <p className="text-xs font-semibold text-slate-500">{item.openedAt ? formatPublicDate(item.openedAt) : "Aberto"}</p>
@@ -654,8 +900,14 @@ function VerifiedPurchaseIssueCard({ purchase }: { purchase: Purchase }) {
 
             {item.expectedAt && <p className="mt-3 text-sm text-slate-600">Previsão: {formatPublicDate(item.expectedAt)}</p>}
             {item.publicNote && <p className="mt-3 rounded-2xl bg-white p-3 text-sm leading-6 text-slate-700">{item.publicNote}</p>}
+            <InfoRows rows={[
+              { icon: Hash, label: "Número da OS", value: `OS-${String(item.id).slice(0, 8).toUpperCase()}` },
+              { icon: Clock, label: "Status atual", value: item.statusLabel },
+              { icon: CalendarDays, label: "Data de abertura", value: item.openedAt ? formatDateBR(item.openedAt) : notInformed },
+              { icon: CalendarDays, label: "Última atualização", value: latestTimelineDate(item.timeline) ? formatDateBR(latestTimelineDate(item.timeline)) : item.openedAt ? formatDateBR(item.openedAt) : notInformed },
+            ]} />
 
-            <div className="mt-4 space-y-3">
+            <div className={`${index === 0 ? "mt-4" : "mt-3"} space-y-3`}>
               {item.timeline.map((step, index) => (
                 <div key={`${item.id}-${step.label}`} className="flex gap-3">
                   <div className="flex flex-col items-center">
@@ -671,6 +923,10 @@ function VerifiedPurchaseIssueCard({ purchase }: { purchase: Purchase }) {
                 </div>
               ))}
             </div>
+            <button type="button" className="mt-4 flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-royal-600 px-4 text-sm font-bold text-white">
+              Acompanhar OS
+              <ChevronRight className="h-4 w-4" />
+            </button>
           </div>
         ))}
       </div>
@@ -678,35 +934,28 @@ function VerifiedPurchaseIssueCard({ purchase }: { purchase: Purchase }) {
   )
 }
 
-function VerifiedPurchaseSupportCard({ purchase }: { purchase: Purchase }) {
-  const href = purchase.support.whatsappUrl || "#"
+function VerifiedPurchaseSupportCard() {
+  const href = "http://wa.me/5598988265655"
   return (
-    <section className="rounded-[1.35rem] border border-royal-100 bg-white p-4 shadow-[0_18px_60px_rgba(15,23,42,0.06)] sm:p-5">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex gap-3">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-royal-50 text-royal-600">
-            <HelpCircle className="h-5 w-5" />
-          </span>
-          <div>
-            <h3 className="text-lg font-bold text-navy-900">Precisa de ajuda?</h3>
-            <p className="mt-1 text-sm leading-6 text-slate-500">
-              Nossa equipe está pronta para te atender{purchase.support.phoneLabel ? ` pelo ${purchase.support.phoneLabel}` : ""}.
-            </p>
-          </div>
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="fixed inset-x-3 bottom-3 z-20 rounded-[1.25rem] bg-[#25D366] p-3 text-white shadow-[0_16px_34px_rgba(37,211,102,0.28)] transition hover:bg-[#20bd5a] sm:static sm:rounded-[1.35rem] sm:p-4 lg:col-start-2"
+    >
+      <div className="grid grid-cols-[3rem_1fr_3rem] items-center gap-3">
+        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white text-[#25D366] shadow-sm">
+          <WhatsAppIcon className="h-8 w-8" />
+        </span>
+        <div className="min-w-0 text-center">
+          <h3 className="text-lg font-extrabold leading-tight">Precisa de ajuda?</h3>
+          <p className="mt-0.5 text-sm font-semibold leading-5 text-white/90">Falar no WhatsApp</p>
         </div>
-        <a
-          href={href}
-          target={purchase.support.whatsappUrl ? "_blank" : undefined}
-          rel={purchase.support.whatsappUrl ? "noreferrer" : undefined}
-          aria-disabled={!purchase.support.whatsappUrl}
-          className={`inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl px-4 text-sm font-bold transition ${purchase.support.whatsappUrl ? "bg-emerald-600 text-white shadow-sm hover:bg-emerald-700" : "bg-slate-100 text-slate-500"}`}
-        >
-          <MessageCircle className="h-4 w-4" />
-          Falar no WhatsApp
-          <ChevronRight className="h-4 w-4" />
-        </a>
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/16 text-white">
+          <ChevronRight className="h-5 w-5" />
+        </span>
       </div>
-    </section>
+    </a>
   )
 }
 
@@ -794,11 +1043,15 @@ export default function VerifiedPurchasePage() {
   return (
     <PortalShell>
       <VerifiedPurchaseHero purchase={purchase} />
-      <VerifiedPurchaseSummaryCard purchase={purchase} />
-      <VerifiedPurchaseItemsCard purchase={purchase} />
-      <VerifiedPurchaseWarrantyCard purchase={purchase} />
+      <VerifiedDeviceCard purchase={purchase} />
+      <VerifiedPurchaseProvenanceCard purchase={purchase} />
+      <VerifiedPurchaseTimelineCard purchase={purchase} />
+      <VerifiedPurchaseDocumentsCard purchase={purchase} />
       <VerifiedPurchaseIssueCard purchase={purchase} />
-      <VerifiedPurchaseSupportCard purchase={purchase} />
+      <VerifiedPurchaseItemsCard purchase={purchase} />
+      <VerifiedPurchaseSummaryCard purchase={purchase} />
+      <VerifiedPurchaseWarrantyCard purchase={purchase} />
+      <VerifiedPurchaseSupportCard />
     </PortalShell>
   )
 }

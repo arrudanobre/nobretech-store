@@ -1,6 +1,6 @@
 import { randomBytes, randomInt } from "crypto"
 import { pool } from "@/lib/db"
-import { formatPaymentMethod, getAdditionalItemDisplayName } from "@/lib/helpers"
+import { addDaysISO, formatPaymentMethod, getAdditionalItemDisplayName } from "@/lib/helpers"
 
 const TOKEN_PREFIX = "ntcv_"
 const TOKEN_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
@@ -49,10 +49,31 @@ export type PublicPurchaseDetails = {
     grade: string | null
     batteryHealth: number | null
     boxType: string
+    photoUrl: string | null
     imei: string | null
     serial: string | null
   }
   purchaseItems: PublicPurchaseItem[]
+  provenance: {
+    kind: "trade_in" | "supplier" | "sealed" | "unknown"
+    description: string
+    previousOwnerName: string | null
+    previousOwnerCpf: string | null
+    previousPurchaseDate: string | null
+    receivedAt: string | null
+    inspectionDate: string | null
+    stockEntryDate: string | null
+    originLabel: string | null
+    conditionLabel: string | null
+    technicalStatus: string | null
+    status: string | null
+    privacyNote: string
+  }
+  documents: {
+    receiptAvailable: boolean
+    warrantyAvailable: boolean
+    technicalReportUrl: string | null
+  }
   assistance: Array<{
     id: string
     itemId: string | null
@@ -90,6 +111,7 @@ export type PublicPurchaseItem = {
   grade: string | null
   batteryHealth: number | null
   boxType: string
+  photoUrl: string | null
   imei: string | null
   serial: string | null
   warrantyStart: string | null
@@ -126,8 +148,20 @@ type SaleAccessRow = {
   warranty_start: string | Date | null
   warranty_end: string | Date | null
   warranty_months: number | null
+  warranty_pdf_url: string | null
   company_settings: Record<string, unknown> | string | null
   inventory_id: string | null
+  inventory_purchase_date: string | Date | null
+  inventory_created_at: string | Date | null
+  inventory_origin: string | null
+  inventory_supplier_name: string | null
+  inventory_photos: string[] | null
+  previous_sale_date: string | Date | null
+  previous_owner_name: string | null
+  previous_owner_cpf: string | null
+  checklist_completed_at: string | Date | null
+  checklist_created_at: string | Date | null
+  checklist_pdf_url: string | null
   model: string | null
   variant: string | null
   storage: string | null
@@ -200,6 +234,22 @@ function maskTrailing(value?: string | null) {
   return `***${clean.slice(-4)}`
 }
 
+function maskOwnerName(fullName?: string | null) {
+  const parts = fullName?.trim().split(/\s+/).filter(Boolean) || []
+  if (parts.length === 0) return null
+  return parts.map((part, index) => {
+    if (index === 0) return part
+    const first = part[0] || ""
+    return `${first}${"*".repeat(Math.max(4, part.length - 1))}`
+  }).join(" ")
+}
+
+function maskCpf(cpf?: string | null) {
+  const digits = String(cpf || "").replace(/\D/g, "")
+  if (digits.length !== 11) return null
+  return `***.${digits.slice(3, 6)}.${digits.slice(6, 9)}-**`
+}
+
 function packagingLabel(type?: string | null, notes?: string | null) {
   const note = notes?.trim()
   if (type === "original_box") return "Caixa original"
@@ -233,6 +283,63 @@ function warrantyStatus(endDate?: string | null) {
   today.setHours(0, 0, 0, 0)
   const end = new Date(`${endDate}T00:00:00`)
   return end >= today ? "Dentro da garantia" : "Garantia expirada"
+}
+
+function warrantyPeriodFromSale(row: Pick<SaleAccessRow, "sale_date" | "warranty_start" | "warranty_end" | "warranty_months">) {
+  const saleDate = dateOnly(row.sale_date)
+  const savedWarrantyStart = dateOnly(row.warranty_start)
+  const start = saleDate || savedWarrantyStart
+  const warrantyMonths = Number(row.warranty_months || 0)
+  const end = start && warrantyMonths > 0
+    ? addDaysISO(start, warrantyMonths * 30)
+    : dateOnly(row.warranty_end)
+
+  return {
+    saleDate,
+    warrantyStart: start,
+    warrantyEnd: end,
+  }
+}
+
+function firstPhoto(photos?: string[] | null) {
+  return photos?.find((photo) => typeof photo === "string" && photo.trim()) || null
+}
+
+function buildProvenance(row: SaleAccessRow) {
+  const stockEntryDate = dateOnly(row.inventory_purchase_date) || dateOnly(row.inventory_created_at)
+  const inspectionDate = dateOnly(row.checklist_completed_at) || dateOnly(row.checklist_created_at)
+  const hasPreviousOwner = Boolean(row.previous_owner_name || row.previous_owner_cpf || row.inventory_origin === "trade_in")
+  const grade = String(row.grade || "").toLowerCase()
+  const isSealed = grade.includes("lacrado") || grade.includes("novo")
+  const kind: PublicPurchaseDetails["provenance"]["kind"] = hasPreviousOwner ? "trade_in" : isSealed ? "sealed" : stockEntryDate ? "supplier" : "unknown"
+  const descriptions = {
+    trade_in: "Este aparelho passou por validação de origem, conferência técnica e registro de entrada antes da venda.",
+    supplier: "Este aparelho foi adquirido por fornecedor parceiro da Nobretech e passou por registro de entrada, conferência técnica e validação antes da venda.",
+    sealed: "Este produto foi adquirido por fornecedor/distribuidor parceiro e passou por validação comercial antes da venda.",
+    unknown: "Este aparelho possui rastreabilidade em atualização no sistema da Nobretech.",
+  } satisfies Record<typeof kind, string>
+  const privacyNotes = {
+    trade_in: "Dados parcialmente ocultos por segurança e conformidade com a LGPD.",
+    supplier: "Informações comerciais do fornecedor preservadas por segurança e política interna da Nobretech.",
+    sealed: "Informações comerciais preservadas por política interna.",
+    unknown: "Informações de procedência ainda estão sendo atualizadas pela Nobretech.",
+  } satisfies Record<typeof kind, string>
+
+  return {
+    kind,
+    description: descriptions[kind],
+    previousOwnerName: maskOwnerName(row.previous_owner_name),
+    previousOwnerCpf: maskCpf(row.previous_owner_cpf),
+    previousPurchaseDate: dateOnly(row.previous_sale_date),
+    receivedAt: row.inventory_origin === "trade_in" ? stockEntryDate : null,
+    inspectionDate,
+    stockEntryDate,
+    originLabel: kind === "trade_in" ? "Cliente pessoa física" : kind === "sealed" ? "Fornecedor/distribuidor" : kind === "supplier" ? "Fornecedor parceiro" : null,
+    conditionLabel: kind === "sealed" ? "Lacrado" : null,
+    technicalStatus: kind === "unknown" ? null : "Aprovada",
+    status: kind === "sealed" ? "Produto novo/lacrado validado" : kind === "unknown" ? null : "Sem restrições",
+    privacyNote: privacyNotes[kind],
+  }
 }
 
 function uniqueDeviceName(...parts: Array<string | null>) {
@@ -395,6 +502,7 @@ async function getSaleByToken(token: string) {
         s.warranty_start,
         s.warranty_end,
         s.warranty_months,
+        s.warranty_pdf_url,
         s.inventory_id,
         co.settings AS company_settings,
         c.full_name AS customer_name,
@@ -412,11 +520,22 @@ async function getSaleByToken(token: string) {
         pc.variant,
         pc.storage,
         pc.color,
+        i.purchase_date AS inventory_purchase_date,
+        i.created_at AS inventory_created_at,
+        i.origin AS inventory_origin,
+        i.supplier_name AS inventory_supplier_name,
+        i.photos AS inventory_photos,
         i.grade,
         i.battery_health,
         i.imei,
         i.serial_number,
-        i.condition_notes
+        i.condition_notes,
+        ps.sale_date AS previous_sale_date,
+        pc_owner.full_name AS previous_owner_name,
+        pc_owner.cpf AS previous_owner_cpf,
+        ch.completed_at AS checklist_completed_at,
+        ch.created_at AS checklist_created_at,
+        ch.pdf_url AS checklist_pdf_url
       FROM sales s
       LEFT JOIN customers c ON c.id = s.customer_id
       LEFT JOIN companies co ON co.id = s.company_id
@@ -425,6 +544,9 @@ async function getSaleByToken(token: string) {
       LEFT JOIN product_catalog tipc ON tipc.id = tii.catalog_id
       LEFT JOIN inventory i ON i.id = s.inventory_id
       LEFT JOIN product_catalog pc ON pc.id = i.catalog_id
+      LEFT JOIN sales ps ON ps.id = i.source_sale_id
+      LEFT JOIN customers pc_owner ON pc_owner.id = ps.customer_id
+      LEFT JOIN checklists ch ON ch.id = i.checklist_id OR ch.inventory_id = i.id
       WHERE s.public_access_token = $1
       LIMIT 1
     `,
@@ -527,9 +649,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
   ].filter((id): id is string => Boolean(id))
   const problemsByInventoryId = await getProblemsByInventoryId(row.id, inventoryIds)
   const deviceName = uniqueDeviceName(row.model, row.variant, row.storage)
-  const saleDate = dateOnly(row.sale_date)
-  const warrantyStart = dateOnly(row.warranty_start) || (row.warranty_end || row.warranty_months ? saleDate : null)
-  const warrantyEnd = dateOnly(row.warranty_end)
+  const { saleDate, warrantyStart, warrantyEnd } = warrantyPeriodFromSale(row)
   const support = whatsappUrl(companySettings(row.company_settings).phone)
   const purchaseAmount = Number(row.sale_price || 0)
   const tradeInCreditAmount = row.has_trade_in || row.trade_in_id
@@ -560,6 +680,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
     grade: row.grade || null,
     batteryHealth: row.battery_health === null || row.battery_health === undefined ? null : Number(row.battery_health),
     boxType: packagingLabel(row.packaging_type, row.packaging_notes),
+    photoUrl: firstPhoto(row.inventory_photos),
     imei: maskTrailing(row.imei),
     serial: maskTrailing(row.serial_number),
     warrantyStart,
@@ -582,6 +703,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
         grade: item.grade || null,
         batteryHealth: item.battery_health === null || item.battery_health === undefined ? null : Number(item.battery_health),
         boxType: packagingLabel(item.packaging_type, item.packaging_notes),
+        photoUrl: null,
         imei: maskTrailing(item.imei),
         serial: maskTrailing(item.serial_number),
         warrantyStart: null,
@@ -623,10 +745,17 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
       grade: principalItem.grade,
       batteryHealth: principalItem.batteryHealth,
       boxType: principalItem.boxType,
+      photoUrl: principalItem.photoUrl,
       imei: principalItem.imei,
       serial: principalItem.serial,
     },
     purchaseItems,
+    provenance: buildProvenance(row),
+    documents: {
+      receiptAvailable: true,
+      warrantyAvailable: Boolean(warrantyStart && warrantyEnd) || Boolean(row.warranty_pdf_url),
+      technicalReportUrl: row.checklist_pdf_url || null,
+    },
     assistance,
   }
 }
