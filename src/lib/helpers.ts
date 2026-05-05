@@ -25,6 +25,8 @@ export function getFeeKey(method: string): string {
     credit_16x: 'credit_16x',
     credit_17x: 'credit_17x',
     credit_18x: 'credit_18x',
+    transfer: 'transfer',
+    other: 'other',
   }
   return map[method] ?? 'pix'
 }

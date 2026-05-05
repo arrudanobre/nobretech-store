@@ -345,6 +345,15 @@ export default function TransacoesPage() {
       }
 
       const saleIds = salesData.map((sale: any) => String(sale.id))
+      let saleIdsWithSplitPayments = new Set<string>()
+      if (saleIds.length > 0) {
+        const splitPaymentsRes = await (supabase.from("sale_payments") as any)
+          .select("sale_id")
+          .in("sale_id", saleIds)
+          .neq("status", "cancelled")
+        if (splitPaymentsRes.error) throw new Error(splitPaymentsRes.error.message)
+        saleIdsWithSplitPayments = new Set((splitPaymentsRes.data || []).map((payment: any) => String(payment.sale_id)))
+      }
       let saleTransactions = transactions.filter((t: any) => t.source_type === "sale" && t.source_id)
       if (saleIds.length > 0) {
         const saleTransactionsRes = await (supabase.from("transactions") as any)
@@ -408,7 +417,7 @@ export default function TransacoesPage() {
           notes: t.notes,
         }))
 
-      const sales: UnifiedTransaction[] = salesData.map((s: any) => {
+      const sales: UnifiedTransaction[] = salesData.filter((s: any) => !saleIdsWithSplitPayments.has(String(s.id))).map((s: any) => {
         const modelName = s.inventory?.catalog?.model || "Produto"
         const saleTransaction = saleTransactionById.get(String(s.id))
         const status = saleTransaction?.status === "reconciled" ? "reconciled" : "pending"

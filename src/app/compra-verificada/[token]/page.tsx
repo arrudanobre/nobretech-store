@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { useParams } from "next/navigation"
-import { jsPDF } from "jspdf"
 import {
   BadgeCheck,
   CalendarDays,
@@ -24,6 +23,7 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { formatBRL } from "@/lib/helpers"
+import { generateReceiptPDF, generateWarrantyPDF, type SaleDocumentData } from "@/lib/sale-documents"
 
 type Intro = {
   available: boolean
@@ -45,6 +45,7 @@ type Purchase = {
     amountPaid: number
     paymentMethod: string
     remainingPaymentMethod: string
+    payments: Array<{ method: string; amount: number }>
     tradeInApplied: boolean
     tradeInCreditAmount: number
     tradeInDevice: {
@@ -91,6 +92,8 @@ type Purchase = {
     receiptAvailable: boolean
     warrantyAvailable: boolean
     technicalReportUrl: string | null
+    receiptDocument: SaleDocumentData | null
+    warrantyDocument: SaleDocumentData | null
   }
   assistance: Array<{
     id: string
@@ -579,57 +582,26 @@ function VerifiedPurchaseTimelineCard({ purchase }: { purchase: Purchase }) {
   )
 }
 
-function downloadPublicDocument(kind: "receipt" | "warranty", purchase: Purchase) {
-  const doc = new jsPDF()
-  const title = kind === "receipt" ? "Recibo da compra" : "Termo de garantia"
-  const fileSuffix = kind === "receipt" ? "recibo" : "garantia"
-  const lines = kind === "receipt"
-    ? [
-        ["Compra", purchase.sale.number],
-        ["Data", formatDateBR(purchase.sale.date)],
-        ["Cliente", purchase.customerName],
-        ["Produto", purchase.device.model],
-        ["Valor da compra", formatCurrencyBR(purchase.sale.purchaseAmount)],
-        ["Valor pago", formatCurrencyBR(purchase.sale.amountPaid)],
-        ["Forma de pagamento", purchase.sale.paymentMethod || notInformed],
-      ]
-    : [
-        ["Compra", purchase.sale.number],
-        ["Cliente", purchase.customerName],
-        ["Produto", purchase.device.model],
-        ["Início da garantia", formatDateBR(purchase.sale.warrantyStart)],
-        ["Término da garantia", formatDateBR(purchase.sale.warrantyEnd)],
-        ["Status", getWarrantyStatusCopy(getWarrantyStatus(purchase.sale.warrantyStart, purchase.sale.warrantyEnd)).label],
-      ]
+async function downloadPublicDocument(kind: "receipt" | "warranty", purchase: Purchase) {
+  try {
+    const documentData = kind === "receipt"
+      ? purchase.documents.receiptDocument
+      : purchase.documents.warrantyDocument
 
-  doc.setFont("helvetica", "bold")
-  doc.setFontSize(16)
-  doc.text("NOBRETECH STORE", 20, 22)
-  doc.setFontSize(13)
-  doc.text(title, 20, 34)
-  doc.setFont("helvetica", "normal")
-  doc.setFontSize(10)
-  doc.text("Documento gerado pelo portal de compra verificada.", 20, 43)
+    if (!documentData) return
 
-  let y = 58
-  for (const [label, value] of lines) {
-    doc.setFont("helvetica", "bold")
-    doc.text(`${label}:`, 20, y)
-    doc.setFont("helvetica", "normal")
-    doc.text(String(value || notInformed), 64, y)
-    y += 9
+    if (kind === "receipt") {
+      await generateReceiptPDF(documentData)
+      return
+    }
+
+    await generateWarrantyPDF(documentData)
+  } catch (error) {
+    console.error("Erro ao gerar documento público:", error)
   }
-
-  if (kind === "warranty") {
-    y += 4
-    doc.setFontSize(9)
-    doc.text("A garantia segue os termos e condições informados pela Nobretech Store no momento da compra.", 20, y, { maxWidth: 170 })
-  }
-
-  doc.save(`${fileSuffix}-${purchase.sale.number.toLowerCase()}.pdf`)
 }
 
-function DocumentRow({ icon: Icon, title, subtitle, href, disabled, onClick }: { icon: IconType; title: string; subtitle: string; href?: string | null; disabled?: boolean; onClick?: () => void }) {
+function DocumentRow({ icon: Icon, title, subtitle, href, disabled, onClick }: { icon: IconType; title: string; subtitle: string; href?: string | null; disabled?: boolean; onClick?: () => void | Promise<void> }) {
   const content = (
     <>
       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-royal-50 text-royal-600">
@@ -701,6 +673,16 @@ function VerifiedPurchaseSummaryCard({ purchase }: { purchase: Purchase }) {
       <div className="mt-4 rounded-2xl border border-slate-200/80 bg-slate-50/60 p-3">
         <p className="mb-2 text-xs font-black uppercase tracking-wide text-slate-400">Composição da compra</p>
         <InfoRows rows={moneyRows} />
+        {purchase.sale.payments?.length > 1 && (
+          <div className="mt-3 space-y-2 border-t border-slate-200 pt-3">
+            {purchase.sale.payments.map((payment) => (
+              <div key={`${payment.method}-${payment.amount}`} className="flex items-center justify-between gap-3 text-sm">
+                <span className="font-semibold text-slate-600">{payment.method}</span>
+                <span className="font-black text-navy-900">{formatCurrencyBR(payment.amount)}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {hasTradeIn && (

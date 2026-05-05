@@ -26,6 +26,7 @@ const TABLES_WITH_COMPANY = new Set([
   "finance_chart_accounts",
   "supplier_prices",
   "sales_additional_items",
+  "sale_payments",
   "audit_logs",
   "transactions",
   "financial_account_movements",
@@ -147,6 +148,62 @@ function normalizeRows(rows: Record<string, unknown>[]) {
   return rows.map((row) => normalizeOutput(row) as Record<string, unknown>)
 }
 
+function splitTopLevel(value: string) {
+  const parts: string[] = []
+  let depth = 0
+  let start = 0
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index]
+    if (char === "(") depth += 1
+    if (char === ")") depth = Math.max(0, depth - 1)
+    if (char === "," && depth === 0) {
+      parts.push(value.slice(start, index).trim())
+      start = index + 1
+    }
+  }
+  parts.push(value.slice(start).trim())
+  return parts.filter(Boolean)
+}
+
+function parseOrCondition(part: string, params: unknown[]): string | null {
+  const andMatch = part.match(/^and\((.*)\)$/)
+  if (andMatch) {
+    const clauses = splitTopLevel(andMatch[1])
+      .map((condition) => parseOrCondition(condition, params))
+      .filter(Boolean)
+    return clauses.length ? `(${clauses.join(" AND ")})` : null
+  }
+
+  const ilikeMatch = part.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\.ilike\.%(.*)%$/)
+  if (ilikeMatch) {
+    params.push(`%${ilikeMatch[2]}%`)
+    return `${ident(ilikeMatch[1])} ILIKE $${params.length}`
+  }
+
+  const isNullMatch = part.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\.is\.null$/)
+  if (isNullMatch) return `${ident(isNullMatch[1])} IS NULL`
+
+  const comparisonMatch = part.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\.(eq|neq|gte|lte)\.(.+)$/)
+  if (comparisonMatch) {
+    const operators = { eq: "=", neq: "<>", gte: ">=", lte: "<=" } as const
+    params.push(comparisonMatch[3])
+    return `${ident(comparisonMatch[1])} ${operators[comparisonMatch[2] as keyof typeof operators]} $${params.length}`
+  }
+
+  const inMatch = part.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\.in\.\((.*)\)$/)
+  if (inMatch) {
+    const values = splitTopLevel(inMatch[2])
+    if (values.length === 0) return "FALSE"
+    const placeholders = values.map((item) => {
+      params.push(item)
+      return `$${params.length}`
+    })
+    return `${ident(inMatch[1])} IN (${placeholders.join(", ")})`
+  }
+
+  return null
+}
+
 function addFilter(where: string[], params: unknown[], filter: Filter) {
   if (filter.op === "match" && typeof filter.value === "object" && filter.value) {
     for (const [column, value] of Object.entries(filter.value as Record<string, unknown>)) {
@@ -157,15 +214,11 @@ function addFilter(where: string[], params: unknown[], filter: Filter) {
   }
 
   if (filter.op === "or" && typeof filter.value === "string") {
-    const parts = filter.value.split(",").map((part) => part.trim()).filter(Boolean)
-    const clauses: string[] = []
-    for (const part of parts) {
-      const match = part.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\.ilike\.%(.*)%$/)
-      if (!match) continue
-      clauses.push(`${ident(match[1])} ILIKE $${params.length + 1}`)
-      params.push(`%${match[2]}%`)
-    }
+    const clauses = splitTopLevel(filter.value)
+      .map((part) => parseOrCondition(part, params))
+      .filter(Boolean)
     if (clauses.length) where.push(`(${clauses.join(" OR ")})`)
+    else throw new Error(`Unsupported OR filter: ${filter.value}`)
     return
   }
 
@@ -332,6 +385,26 @@ export async function POST(request: Request) {
     if (!SIMPLE_IDENTIFIER.test(table)) throw new Error("Invalid table")
 
     const companyId = authResult.context.companyId
+
+    if (action === "rpc") {
+      const rpcName = String(body.rpc || "")
+      if (rpcName !== "validate_sale_payment_total") throw new Error(`Unsupported RPC: ${rpcName}`)
+
+      const saleId = String((body.args as Record<string, unknown> | undefined)?.p_sale_id || "")
+      if (!saleId) throw new Error("p_sale_id is required")
+
+      const result = await pool.query(
+        `SELECT validate_sale_payment_total($1::uuid)
+         FROM sales
+         WHERE id = $1::uuid
+           AND company_id = $2::uuid`,
+        [saleId, companyId]
+      )
+      if (result.rowCount === 0) throw new Error("Venda não encontrada para validação")
+
+      return NextResponse.json({ data: null, error: null })
+    }
+
     const params: unknown[] = []
     const where: string[] = []
     for (const filter of (body.filters || []) as Filter[]) addFilter(where, params, filter)

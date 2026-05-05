@@ -3,6 +3,7 @@ const DEFAULT_USER_EMAIL = "arrudanobre@gmail.com"
 
 type Filter = { op: string; column?: string; value: unknown }
 type Order = { column: string; ascending?: boolean }
+type RailwayResult = { data: unknown; error: { message: string } | null }
 
 class RailwayQuery {
   private action = "select"
@@ -137,7 +138,7 @@ class RailwayQuery {
   }
 
   then<TResult1 = unknown, TResult2 = never>(
-    onfulfilled?: ((value: { data: any; error: any }) => TResult1 | PromiseLike<TResult1>) | null,
+    onfulfilled?: ((value: RailwayResult) => TResult1 | PromiseLike<TResult1>) | null,
     onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
   ) {
     return this.execute().then(onfulfilled, onrejected)
@@ -148,6 +149,26 @@ const railwaySupabase = {
   from(table: string) {
     return new RailwayQuery(table)
   },
+  async rpc(name: string, args?: Record<string, unknown>) {
+    try {
+      const response = await fetch("/api/db", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          table: "sales",
+          action: "rpc",
+          rpc: name,
+          args: args || {},
+        }),
+      })
+      return await response.json()
+    } catch (error) {
+      return {
+        data: null,
+        error: { message: error instanceof Error ? error.message : "Erro ao executar rotina Railway" },
+      }
+    }
+  },
   auth: {
     async getSession() {
       return { data: { session: { user: { id: DEFAULT_USER_ID, email: DEFAULT_USER_EMAIL } } }, error: null }
@@ -155,10 +176,10 @@ const railwaySupabase = {
     async getUser() {
       return { data: { user: { id: DEFAULT_USER_ID, email: DEFAULT_USER_EMAIL } }, error: null }
     },
-    async signInWithOtp(_options?: any) {
+    async signInWithOtp() {
       return { data: null, error: null }
     },
-    async exchangeCodeForSession(_code?: string) {
+    async exchangeCodeForSession() {
       return { data: null, error: null }
     },
     onAuthStateChange(callback: (event: string, session: unknown) => void) {
@@ -180,4 +201,6 @@ const railwaySupabase = {
   },
 }
 
+// Mantem compatibilidade com o uso legado do client Supabase em todo o app.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const supabase: any = railwaySupabase

@@ -35,6 +35,11 @@ export type ReceiptFinancialSummary = {
   storeReceives?: number
 }
 
+export type ReceiptPaymentLine = {
+  method: string
+  amount: number
+}
+
 export type SaleDocumentData = {
   saleId: string
   saleDate: string
@@ -46,6 +51,7 @@ export type SaleDocumentData = {
   saleNotes?: string | null
   additionalItems?: string | null
   item: SaleDocumentItem
+  payments?: ReceiptPaymentLine[]
   /** Optional: multiple line items for multi-product receipt */
   receiptItems?: ReceiptLineItem[]
   receiptSummary?: ReceiptFinancialSummary
@@ -331,19 +337,27 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
   const payY = settlementY
   setFont(doc, 9, "bold")
   text(doc, "PAGAMENTO", 17.5, payY)
-  doc.rect(17, payY + 1, 176, 5)
-  doc.line(158, payY + 1, 158, payY + 6)
+  const paymentRows = data.payments && data.payments.length > 0
+    ? data.payments
+    : [{ method: data.paymentMethod, amount: customerPaid }]
+  const paymentLineHeight = 4.5
+  const paymentBoxHeight = Math.max(9, 5 + paymentRows.length * paymentLineHeight)
+  doc.rect(17, payY + 1, 176, paymentBoxHeight)
+  doc.line(158, payY + 1, 158, payY + 1 + paymentBoxHeight)
   doc.setFillColor(MID_GRAY)
   doc.rect(17, payY + 1, 176, 5, "F")
   setFont(doc, 8.2, "bold")
   text(doc, "Forma de Pagamento", 87, payY + 5, { align: "center" })
   text(doc, "Valor Pago", 176, payY + 5, { align: "center" })
   setFont(doc, 8.2)
-  text(doc, data.paymentMethod, 87, payY + 10, { align: "center" })
-  text(doc, money(customerPaid), 176, payY + 10, { align: "center" })
+  paymentRows.forEach((payment, index) => {
+    const rowY = payY + 10 + index * paymentLineHeight
+    text(doc, payment.method, 87, rowY, { align: "center" })
+    text(doc, money(payment.amount), 176, rowY, { align: "center" })
+  })
 
   // ── Observations ──
-  const obsY = payY + 13
+  const obsY = payY + paymentBoxHeight + 8
   setFont(doc, 9, "bold")
   text(doc, "OBSERVAÇÕES DA VENDA", 17.5, obsY)
   doc.rect(17, obsY + 1, 176, 12)

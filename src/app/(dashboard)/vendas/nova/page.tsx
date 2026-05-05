@@ -1,24 +1,23 @@
 "use client"
 
 import { useState, useMemo, useCallback, useEffect, Suspense } from "react"
-import Image from "next/image"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
-import { calculatePaymentPrice, formatBRL, maskCPF, formatPhone, validateCPF, getProductName, getAdditionalItemDisplayName, calculateDeviceValue, formatTradeInSuggestedRange, getTradeInSummaryStatus, getComputedInventoryStatus, normalizePaymentFeePct, todayISO, addDaysISO } from "@/lib/helpers"
+import { calculatePaymentPrice, formatBRL, maskCPF, formatPhone, validateCPF, getProductName, getAdditionalItemDisplayName, calculateDeviceValue, formatTradeInSuggestedRange, getTradeInSummaryStatus, getComputedInventoryStatus, normalizePaymentFeePct, todayISO, addDaysISO, formatPaymentMethod, formatDate } from "@/lib/helpers"
 import { atualizarStatusEstoque } from "@/services/vendaService"
 import { PAYMENT_METHODS, CATEGORIES, PRODUCT_CATALOG, GRADES, SIDEPAY_FEE_PCTS } from "@/lib/constants"
-import { calculateSaleEconomics, estimateRiskReserve } from "@/lib/sale-economics"
+import { estimateRiskReserve } from "@/lib/sale-economics"
+import { calculateSplitPaymentEconomics, isCreditPayment as isCreditSalePayment, isFinancialPayment, normalizeSalePaymentMethod, parseCurrencyLike, roundCurrency, SPLIT_PAYMENT_METHODS, validateSalePayments, type SalePayment, type SalePaymentDraft } from "@/lib/sale-payments"
 import { useToast } from "@/components/ui/toaster"
 import { supabase } from "@/lib/supabase"
 import { generateReceiptPDF, generateWarrantyPDF, type SaleDocumentData } from "@/lib/sale-documents"
-import { upsertSaleReceivable } from "@/lib/finance/sale-receivable-client"
+import { upsertSalePaymentReceivable, upsertTradeInChangePayable } from "@/lib/finance/sale-receivable-client"
 import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 import {
   AlertTriangle,
-  Banknote,
   Box,
   CalendarDays,
   Search,
@@ -83,6 +82,15 @@ type FinanceAccountOption = {
   id: string
   name: string
   institution?: string | null
+}
+
+type SupplierPrice = {
+  id: string
+  category?: string | null
+  model?: string | null
+  storage?: string | null
+  grade?: string | null
+  price?: number | string | null
 }
 
 type AdditionalSaleItem = {
@@ -159,17 +167,49 @@ const calculateTradeInValue = (
 const sanitizeTradeInImei = (value: string): string => value.replace(/\D/g, "").slice(0, 15)
 
 const parseCurrencyInput = (value: string): number => {
-  const normalized = value
-    .replace(/[^\d,.-]/g, "")
-    .replace(/\./g, "")
-    .replace(",", ".")
-  const parsed = Number(normalized)
-  return Number.isFinite(parsed) ? parsed : 0
+  return parseCurrencyLike(value)
 }
 
 const formatCurrencyInputValue = (value: string): string => {
-  const parsed = Number(value || 0)
+  const parsed = parseCurrencyLike(value)
   return parsed > 0 ? formatBRL(parsed) : ""
+}
+
+const formatCurrencyMaskInput = (value: string): string => {
+  const digits = value.replace(/\D/g, "")
+  const cents = Number(digits || "0")
+  return formatBRL(cents / 100)
+}
+
+const newPaymentDraft = (suffix = Date.now().toString()): SalePaymentDraft => ({
+  id: `payment-${suffix}`,
+  payment_method: "",
+  amount: "",
+  due_date: todayISO(),
+  financial_account_id: "",
+})
+
+const paymentAmountInput = (amount: number) => {
+  const rounded = roundCurrency(amount)
+  return rounded > 0 ? formatBRL(rounded) : ""
+}
+
+const normalizeSearchText = (value?: string | null) => String(value || "")
+  .normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .toLowerCase()
+  .replace(/\s+/g, " ")
+  .trim()
+
+const defaultPaymentDueDate = (method: string) => {
+  if (isCreditSalePayment(method)) return addDaysISO(todayISO(), 1) || todayISO()
+  return todayISO()
+}
+
+const paymentMethodOptionLabel = (method: string, label: string) => {
+  if (method.startsWith("credit_")) return "Crédito"
+  if (method === "debit") return "Cartão de débito"
+  return label
 }
 
 const parseTradeInModelIndex = (value: string): number => {
@@ -459,56 +499,6 @@ function SaleStepper({
   )
 }
 
-function PaymentMethodCard({
-  icon: Icon,
-  label,
-  selected,
-  customerPays,
-  storeReceives,
-  onClick,
-}: {
-  icon: React.ComponentType<{ className?: string }>
-  label: string
-  selected: boolean
-  customerPays: string
-  storeReceives: string
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`relative min-h-[168px] rounded-[20px] border p-4 text-left shadow-sm transition-all duration-200 ${
-        selected
-          ? "border-royal-500 bg-white shadow-[0_16px_45px_rgba(58,107,196,0.14)] ring-2 ring-royal-500/10"
-          : "border-gray-200 bg-white hover:border-royal-400 hover:shadow-[0_14px_34px_rgba(13,27,46,0.08)]"
-      }`}
-    >
-      {selected && (
-        <span className="absolute right-4 top-4 flex h-7 w-7 items-center justify-center rounded-full bg-royal-500 text-white">
-          <Check className="h-4 w-4" />
-        </span>
-      )}
-      <div className="flex items-center gap-3">
-        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-success-100/60 text-success-500">
-          <Icon className="h-5 w-5" />
-        </span>
-        <p className="text-sm font-bold text-navy-900">{label}</p>
-      </div>
-      <div className="mt-6 grid gap-2 text-sm">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-gray-500">Cliente paga</span>
-          <span className="font-bold text-navy-900">{customerPays}</span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-gray-500">Loja recebe</span>
-          <span className="font-bold text-navy-900">{storeReceives}</span>
-        </div>
-      </div>
-    </button>
-  )
-}
-
 function DecisionButton({
   active,
   onClick,
@@ -624,21 +614,6 @@ function PendingChecklist({ items }: { items: Array<{ label: string; done: boole
   )
 }
 
-function PixBrandIcon({ className = "" }: { className?: string }) {
-  return (
-    <span className={`relative inline-flex shrink-0 overflow-hidden ${className}`} aria-hidden="true">
-      <Image
-        src="/brand/pix-logo.svg"
-        alt=""
-        width={64}
-        height={24}
-        unoptimized
-        className="absolute left-0 top-1/2 h-full w-auto max-w-none -translate-y-1/2"
-      />
-    </span>
-  )
-}
-
 const classifyAdditionalItem = (product: InventoryProduct | any) => {
   const text = `${product.name || ""} ${product.condition_notes || ""}`.toLowerCase()
   if (/(capa|pel[ií]cula|fone|airpods|cabo|fonte|carregador|pencil|caneta|case|adaptador|suporte)/i.test(text)) {
@@ -659,11 +634,11 @@ function NewSaleContent() {
   const [salePriceInput, setSalePriceInput] = useState("")
   const [isSalePriceManual, setIsSalePriceManual] = useState(false)
   const [supplierCostInput, setSupplierCostInput] = useState("")
-  const [paymentMethod, setPaymentMethod] = useState("")
   const [isReservation, setIsReservation] = useState(false)
   const [paymentDueDate, setPaymentDueDate] = useState("")
   const [receiptAccountId, setReceiptAccountId] = useState("")
-  const [showFeeTable, setShowFeeTable] = useState(false)
+  const [salePayments, setSalePayments] = useState<SalePaymentDraft[]>(() => [newPaymentDraft("initial")])
+  const [remainingTargetPickerOpen, setRemainingTargetPickerOpen] = useState(false)
   const [warrantyMonths, setWarrantyMonths] = useState("3")
   const [hasTradeIn, setHasTradeIn] = useState(false)
   const [tradeIn, setTradeIn] = useState({ category: "", modelIdx: 0, storage: "", color: "", imei: "", grade: "", batteryHealth: "", value: "" })
@@ -685,6 +660,7 @@ function NewSaleContent() {
   const [tradeInValueInput, setTradeInValueInput] = useState("")
   const [tradeInModelSearch, setTradeInModelSearch] = useState("")
   const [inventoryProducts, setInventoryProducts] = useState<any[]>([])
+  const [supplierPrices, setSupplierPrices] = useState<SupplierPrice[]>([])
   const [loadingInventory, setLoadingInventory] = useState(true)
   const [marketingCampaigns, setMarketingCampaigns] = useState<MarketingCampaignOption[]>([])
   const [financeAccounts, setFinanceAccounts] = useState<FinanceAccountOption[]>([])
@@ -795,6 +771,22 @@ function NewSaleContent() {
       }
     }
     fetchInventory()
+  }, [])
+
+  useEffect(() => {
+    const fetchSupplierPrices = async () => {
+      try {
+        const { data, error } = await (supabase.from("supplier_prices") as any)
+          .select("id, category, model, storage, grade, price")
+          .order("created_at", { ascending: false })
+        if (error) throw error
+        setSupplierPrices(data || [])
+      } catch (error) {
+        console.error("Erro ao carregar preços de fornecedores:", error)
+        setSupplierPrices([])
+      }
+    }
+    fetchSupplierPrices()
   }, [])
 
   // If opened from a product detail page, fetch that product and pre-select
@@ -925,6 +917,15 @@ function NewSaleContent() {
 
     fetchFinanceAccounts()
   }, [])
+
+  useEffect(() => {
+    if (!receiptAccountId) return
+    setSalePayments((previous) => previous.map((payment) => (
+      payment.financial_account_id || !isFinancialPayment(payment.payment_method)
+        ? payment
+        : { ...payment, financial_account_id: receiptAccountId }
+    )))
+  }, [receiptAccountId])
 
   const filteredProducts = useMemo(() => {
     const products = inventoryProducts
@@ -1115,7 +1116,7 @@ function NewSaleContent() {
     setSalePriceInput("")
     setSupplierCostInput("")
     setQuantity(1)
-    setPaymentMethod("")
+    setSalePayments([newPaymentDraft("initial")])
     setAdditionalSaleItems([])
     setHasAdditionalItem(false)
   }
@@ -1176,9 +1177,31 @@ function NewSaleContent() {
 
   const tradeInSupplierMatches = useMemo(() => {
     if (!tradeIn.category || !tradeInModel) return [] as any[]
-    return inventoryProducts.filter((p: any) => p.name?.includes(tradeInModel.name))
-      .map((p: any) => ({ price: p.cost }))
-  }, [tradeIn.category, tradeInModel, inventoryProducts])
+    const selectedModel = normalizeSearchText(tradeInModel.name)
+    const selectedStorage = normalizeSearchText(tradeIn.storage)
+    const selectedGrade = normalizeSearchText(tradeIn.grade)
+
+    const supplierMatches = supplierPrices
+      .filter((price) => {
+        const categoryMatches = !price.category || price.category === tradeIn.category
+        const priceModel = normalizeSearchText(price.model)
+        const modelMatches = priceModel === selectedModel || priceModel.includes(selectedModel) || selectedModel.includes(priceModel)
+        const storage = normalizeSearchText(price.storage)
+        const grade = normalizeSearchText(price.grade)
+        const storageMatches = !selectedStorage || !storage || storage === selectedStorage
+        const gradeMatches = !selectedGrade || !grade || grade === selectedGrade
+        return categoryMatches && modelMatches && storageMatches && gradeMatches
+      })
+      .map((price) => ({ price: Number(price.price || 0) }))
+      .filter((price) => Number.isFinite(price.price) && price.price > 0)
+
+    if (supplierMatches.length > 0) return supplierMatches
+
+    return inventoryProducts
+      .filter((product: any) => normalizeSearchText(product.name).includes(selectedModel))
+      .map((product: any) => ({ price: Number(product.cost || 0) }))
+      .filter((price) => Number.isFinite(price.price) && price.price > 0)
+  }, [tradeIn.category, tradeInModel, tradeIn.storage, tradeIn.grade, supplierPrices, inventoryProducts])
 
   const tradeInEvaluation = useMemo(() => {
     if (!hasTradeIn || !tradeInModel) return null
@@ -1280,12 +1303,6 @@ function NewSaleContent() {
     }
   }, [])
 
-  const getPaymentMethodLabel = (method: string) => {
-    if (method === "trade_in_return") return "Troco no trade-in"
-    if (method === "trade_in_credit") return "Crédito gerado no trade-in"
-    return PAYMENT_METHODS.find((item) => item.value === method)?.label || method
-  }
-
   const handleConfirm = async () => {
     setIsSubmitting(true)
     try {
@@ -1355,10 +1372,24 @@ function NewSaleContent() {
         }
       }
 
-      const isCreditSale = paymentMethod.startsWith("credit_")
-      const creditDueDate = addDaysISO(today, 1) || today
-      const receivableDueDate = isReservation ? paymentDueDate : isCreditSale ? creditDueDate : today
-      const receivableStatus = isReservation || isCreditSale ? "pending" : "reconciled"
+      const finalPaymentRows = paymentDraftRows.map((payment) => ({
+        ...payment,
+        payment_method: normalizeSalePaymentMethod(payment.payment_method),
+        due_date: payment.due_date || today,
+        status: payment.status || "pending",
+      }))
+      const serverValidation = validateSalePayments({
+        payments: paymentValidationRows.map((payment) => ({
+          payment_method: payment.payment_method,
+          amount: String(payment.amount),
+          due_date: payment.due_date || "",
+          financial_account_id: payment.financial_account_id || "",
+        })),
+        expectedTotal: finalTotal,
+        requireAccount: !isReservation,
+      })
+      if (!serverValidation.ok) throw new Error(serverValidation.message || "Pagamentos inválidos")
+
       const tradeInOverageNote = storeAmountDue > 0
         ? `Diferença do trade-in: ${tradeInOverageDecision === "credit" ? "gerar crédito operacional" : "registrar troco ao cliente"} (${formatBRL(storeAmountDue)}).`
         : null
@@ -1367,9 +1398,11 @@ function NewSaleContent() {
         saleNotes || null,
         tradeInOverageNote,
       ].filter(Boolean).join("\n") || null
-      const resolvedPaymentMethod = paymentMethod || (storeAmountDue > 0
-        ? tradeInOverageDecision === "credit" ? "trade_in_credit" : "trade_in_return"
-        : null)
+      const resolvedPaymentMethod = finalPaymentRows.length > 1
+        ? "mixed"
+        : finalPaymentRows[0]?.payment_method || (storeAmountDue > 0
+          ? tradeInOverageDecision === "credit" ? "trade_in_credit" : "trade_in_return"
+          : null)
 
       // 2. Register the sale (sale_price = total including quantity)
       const { data: sale, error: saleError } = await (supabase
@@ -1389,7 +1422,7 @@ function NewSaleContent() {
           supplier_name: selectedProduct?.type === "supplier" ? (selectedProduct.supplier_name || null) : null,
           supplier_cost: selectedProduct?.type === "supplier" ? (parseFloat(supplierCostInput) || 0) : null,
           sale_status: isReservation ? "reserved" : "completed",
-          payment_due_date: isReservation || isCreditSale ? receivableDueDate : null,
+          payment_due_date: finalPaymentRows.find((payment) => payment.status === "pending")?.due_date || null,
           sale_date: today,
           sale_origin: saleOrigin || "unknown",
           marketing_campaign_id: saleOrigin === "trafego_pago" && marketingCampaignId ? marketingCampaignId : null,
@@ -1503,6 +1536,66 @@ function NewSaleContent() {
         }
       }
 
+      const salePaymentInsertRows = finalPaymentRows.map((payment) => ({
+        company_id: companyId,
+        sale_id: sale.id,
+        payment_method: payment.payment_method,
+        amount: payment.amount,
+        status: payment.status,
+        due_date: payment.due_date || today,
+        received_date: payment.status === "received" ? today : null,
+        financial_account_id: isFinancialPayment(payment.payment_method) ? payment.financial_account_id || null : null,
+        notes: payment.notes || null,
+      }))
+
+      const { data: insertedPayments, error: paymentError } = await (supabase.from("sale_payments") as any)
+        .insert(salePaymentInsertRows)
+        .select("id, payment_method, amount, status, due_date, financial_account_id")
+      if (paymentError) throw new Error(paymentError.message || "Erro ao registrar pagamentos da venda")
+
+      const validateResult = await (supabase as any).rpc("validate_sale_payment_total", { p_sale_id: sale.id })
+      if (validateResult.error) throw new Error(validateResult.error.message || "Soma dos pagamentos inválida")
+
+      for (const payment of insertedPayments || []) {
+        if (!isFinancialPayment(payment.payment_method)) continue
+        const transactionStatus = payment.status === "received" ? "reconciled" : "pending"
+        const transactionId = await upsertSalePaymentReceivable({
+          supabase,
+          companyId,
+          saleId: sale.id,
+          paymentId: payment.id,
+          accountId: payment.financial_account_id || null,
+          amount: Number(payment.amount || 0),
+          saleDate: transactionStatus === "reconciled" ? today : payment.due_date || today,
+          dueDate: payment.due_date || today,
+          paymentMethod: payment.payment_method,
+          description: `${isReservation ? "Reserva" : "Venda"} · ${selectedProduct!.name} · ${formatPaymentMethod(payment.payment_method)}`,
+          status: transactionStatus,
+        })
+
+        if (transactionId) {
+          await (supabase.from("sale_payments") as any)
+            .update({ transaction_id: transactionId })
+            .eq("id", payment.id)
+        }
+
+        if (transactionStatus === "reconciled" && transactionId) {
+          await requestSyncTransactionMovement(transactionId, { createdBy: user.id })
+        }
+      }
+
+      if (storeAmountDue > 0 && tradeInOverageDecision === "change") {
+        await upsertTradeInChangePayable({
+          supabase,
+          companyId,
+          saleId: sale.id,
+          amount: storeAmountDue,
+          saleDate: today,
+          dueDate: today,
+          description: `Troco de trade-in · ${selectedProduct!.name} · ${customer.name || "Cliente"}`,
+        })
+      }
+
       if (!isReservation) try {
         const additionalItemsSummary = additionalSaleItems.length
           ? additionalSaleItems.map((item) => `${item.qty || 1}x ${getAdditionalItemDisplayName(item.name)}${item.type === "free" ? " (brinde)" : ""}`).join(", ")
@@ -1514,9 +1607,13 @@ function NewSaleContent() {
           customerName: customer.name,
           customerCpf: customer.cpf || null,
           customerPhone: customer.phone || null,
-          paymentMethod: getPaymentMethodLabel(resolvedPaymentMethod || ""),
+          paymentMethod: selectedPaymentLabel,
           saleNotes: documentNotes || null,
           additionalItems: additionalItemsSummary,
+          payments: finalPaymentRows.map((payment) => ({
+            method: formatPaymentMethod(payment.payment_method),
+            amount: payment.amount,
+          })),
           item: {
             name: selectedProduct!.name,
             imei: selectedProduct!.imei,
@@ -1539,29 +1636,10 @@ function NewSaleContent() {
         })
       }
 
-      if (saleEconomics.storeCashReceives > 0) {
-        const transactionId = await upsertSaleReceivable({
-          supabase,
-          companyId,
-          saleId: sale.id,
-          accountId: isReservation ? null : receiptAccountId,
-          amount: saleEconomics.storeCashReceives,
-          saleDate: today,
-          dueDate: receivableDueDate,
-          paymentMethod: resolvedPaymentMethod,
-          description: `${isReservation ? "Reserva" : "Venda"} · ${selectedProduct!.name}`,
-          status: receivableStatus,
-        })
-
-        if (receivableStatus === "reconciled" && transactionId) {
-          await requestSyncTransactionMovement(transactionId, { createdBy: user.id })
-        }
-      }
-
       toast({
         title: isReservation ? "Venda reservada!" : "Venda registrada!",
         description: isReservation
-          ? `Reserva de ${selectedProduct!.name} criada até ${paymentDueDate.split("-").reverse().join("/")}.`
+          ? `Reserva de ${selectedProduct!.name} criada até ${(finalPaymentRows.find((payment) => payment.status === "pending")?.due_date || today).split("-").reverse().join("/")}.`
           : `Venda de ${selectedProduct!.name} concluída com sucesso. Recibo e garantia emitidos.`,
         type: "success",
       })
@@ -1603,29 +1681,108 @@ function NewSaleContent() {
       warrantyMonths: Number(warrantyMonths || 0),
     })
   }, [selectedProduct, quantity, warrantyMonths])
+
+  const tradeInPaymentAmount = hasTradeIn ? Math.min(tradeInValue, finalTotal) : 0
+  const editablePaymentsTotal = useMemo(() => {
+    return salePayments.reduce((sum, payment) => sum + parseCurrencyLike(payment.amount), 0)
+  }, [salePayments])
+  const distributedPaymentsTotal = roundCurrency(tradeInPaymentAmount + editablePaymentsTotal)
+  const paymentDifference = roundCurrency(finalTotal - distributedPaymentsTotal)
+  const editablePaymentRows = useMemo<SalePayment[]>(() => {
+    return salePayments.map((payment): SalePayment => {
+      const method = normalizeSalePaymentMethod(payment.payment_method)
+      return {
+        id: payment.id,
+        payment_method: method,
+        amount: parseCurrencyLike(payment.amount),
+        status: isReservation || isCreditSalePayment(method) ? "pending" : "received",
+        due_date: payment.due_date,
+        financial_account_id: payment.financial_account_id || null,
+        notes: payment.notes || null,
+      }
+    })
+  }, [salePayments, isReservation])
+  const tradeInPaymentRow = useMemo<SalePayment | null>(() => {
+    if (tradeInPaymentAmount <= 0) return null
+    return {
+      payment_method: "trade_in_credit",
+      amount: tradeInPaymentAmount,
+      status: "received",
+      due_date: todayISO(),
+      received_date: todayISO(),
+      financial_account_id: null,
+      notes: "Abatimento por trade-in",
+    }
+  }, [tradeInPaymentAmount])
+  const paymentDraftRows = useMemo<SalePayment[]>(() => {
+    return [
+      ...(tradeInPaymentRow ? [tradeInPaymentRow] : []),
+      ...editablePaymentRows.filter((payment) => payment.amount > 0 && payment.payment_method),
+    ]
+  }, [editablePaymentRows, tradeInPaymentRow])
+  const paymentValidationRows = useMemo<SalePayment[]>(() => {
+    return [
+      ...(tradeInPaymentRow ? [tradeInPaymentRow] : []),
+      ...editablePaymentRows.filter((payment) => (
+        payment.amount > 0 ||
+        Boolean(payment.payment_method) ||
+        Boolean(payment.financial_account_id)
+      )),
+    ]
+  }, [editablePaymentRows, tradeInPaymentRow])
+
   const saleEconomics = useMemo(() => {
-    return calculateSaleEconomics({
+    return calculateSplitPaymentEconomics({
       saleRevenue: finalTotal,
-      cashAmountDue: customerAmountDue,
-      paymentMethod,
+      payments: paymentDraftRows.length > 0 ? paymentDraftRows : [{
+        payment_method: "pix",
+        amount: customerAmountDue,
+        status: "received",
+      }],
       settings: fees,
       costTotal: totalCost,
       riskReserve,
     })
-  }, [finalTotal, customerAmountDue, paymentMethod, fees, totalCost, riskReserve])
-  const selectedPaymentLabel = paymentMethod
-    ? getPaymentMethodLabel(paymentMethod)
+  }, [finalTotal, customerAmountDue, paymentDraftRows, fees, totalCost, riskReserve])
+  const selectedPaymentLabel = paymentDraftRows.length > 0
+    ? paymentDraftRows.map((payment) => formatPaymentMethod(payment.payment_method)).join(" + ")
     : storeAmountDue > 0
       ? "Downgrade / troco ao cliente"
       : customerAmountDue === 0 && hasTradeIn
         ? "Trade-in cobre a venda"
-      : "Não escolhido"
+        : "Não escolhido"
   const creditMethods = PAYMENT_METHODS.filter((item) => item.value.startsWith("credit_"))
-  const quickPaymentMethods = PAYMENT_METHODS.filter((item) => ["cash", "pix", "debit"].includes(item.value))
-  const isCreditPayment = paymentMethod.startsWith("credit_")
-  const amountAfterTradeIn = customerAmountDue
-  const creditPaymentMethod = isCreditPayment ? paymentMethod : "credit_12x"
-  const creditPayment = calculatePaymentPrice(amountAfterTradeIn, creditPaymentMethod, fees)
+  const paymentMethodOptions = Array.from(
+    new Map(
+      SPLIT_PAYMENT_METHODS
+        .filter((item) => !item.value.startsWith("credit_") || item.value === "credit_1x")
+        .map((item) => [item.value, item])
+    ).values()
+  )
+  const hasCreditPayment = paymentDraftRows.some((payment) => isCreditSalePayment(payment.payment_method))
+  const paymentSummaryRows = useMemo(() => {
+    const today = todayISO()
+    return paymentDraftRows.map((payment, index) => {
+      const method = normalizeSalePaymentMethod(payment.payment_method)
+      const amount = roundCurrency(Number(payment.amount || 0))
+      const paymentInfo = calculatePaymentPrice(amount, method, fees)
+      const feeAmount = roundCurrency(Math.max(0, paymentInfo.price - amount))
+      const isTradeInCredit = method === "trade_in_credit"
+      const isCredit = isCreditSalePayment(method)
+      return {
+        key: payment.id || `${method || "payment"}-${payment.due_date || "sem-data"}-${index}`,
+        label: isCredit ? `Crédito ${paymentInfo.installments}x` : formatPaymentMethod(method),
+        amount,
+        dueLabel: isTradeInCredit ? "Não financeiro" : payment.due_date === today ? "Hoje" : formatDate(payment.due_date),
+        detail: isTradeInCredit
+          ? "Crédito/Trade-in aplicado"
+          : feeAmount > 0
+            ? `Cliente paga ${formatBRL(paymentInfo.price)}`
+            : "Sem taxa",
+        isTradeInCredit,
+      }
+    })
+  }, [paymentDraftRows, fees])
 
   const additionalCandidates = useMemo(() => {
     const term = additionalSearchTerm.trim().toLowerCase()
@@ -1789,12 +1946,117 @@ function NewSaleContent() {
     return rows
   }, [selectedProduct, supplierCostInput, quantity, productIdentity, unitPrice, totalBasePrice, additionalSaleItems])
 
-  const hasPaymentReady = Boolean(selectedProduct && (paymentMethod || customerAmountDue === 0))
+  const remainingPaymentTargets = useMemo(() => {
+    return salePayments.flatMap((payment, index) => {
+      const method = normalizeSalePaymentMethod(payment.payment_method)
+      if (!method) return []
+
+      const currentAmount = parseCurrencyLike(payment.amount)
+      const othersTotal = salePayments
+        .filter((item) => item.id !== payment.id)
+        .reduce((sum, item) => sum + parseCurrencyLike(item.amount), 0)
+      const recalculatedAmount = roundCurrency(Math.max(0, finalTotal - tradeInPaymentAmount - othersTotal))
+      const paymentInfo = calculatePaymentPrice(currentAmount, method, fees)
+      const label = isCreditSalePayment(method)
+        ? `Crédito ${paymentInfo.installments}x`
+        : formatPaymentMethod(method)
+
+      return [{
+        id: payment.id,
+        label,
+        index: index + 1,
+        currentAmount,
+        recalculatedAmount,
+      }]
+    })
+  }, [salePayments, finalTotal, tradeInPaymentAmount, fees])
+
+  const updateSalePayment = useCallback((paymentId: string, partial: Partial<SalePaymentDraft>) => {
+    setSalePayments((previous) => previous.map((payment) => {
+      if (payment.id !== paymentId) return payment
+      const next = { ...payment, ...partial }
+      if (partial.payment_method !== undefined) {
+        next.payment_method = normalizeSalePaymentMethod(partial.payment_method)
+        next.due_date = defaultPaymentDueDate(next.payment_method)
+        if (!isFinancialPayment(next.payment_method)) next.financial_account_id = ""
+        if (isFinancialPayment(next.payment_method) && !next.financial_account_id) next.financial_account_id = receiptAccountId
+      }
+      return next
+    }))
+  }, [receiptAccountId])
+
+  const addSalePayment = useCallback(() => {
+    if (paymentDifference <= 0) {
+      toast({
+        title: "A venda já está com pagamento fechado",
+        description: paymentDifference < 0 ? "Reduza um pagamento antes de adicionar outro." : "Edite um valor existente para abrir espaço para outro pagamento.",
+        type: "error",
+      })
+      return
+    }
+    setSalePayments((previous) => [
+      ...previous,
+      {
+        ...newPaymentDraft(),
+        amount: paymentDifference > 0 ? paymentAmountInput(paymentDifference) : "",
+        financial_account_id: receiptAccountId,
+      },
+    ])
+  }, [paymentDifference, receiptAccountId, toast])
+
+  const removeSalePayment = useCallback((paymentId: string) => {
+    setSalePayments((previous) => previous.length <= 1 ? previous : previous.filter((payment) => payment.id !== paymentId))
+  }, [])
+
+  const fillRemainingForPayment = useCallback((paymentId?: string) => {
+    if (!paymentId) return
+    setRemainingTargetPickerOpen(false)
+    setSalePayments((previous) => {
+      const othersTotal = previous
+        .filter((payment) => payment.id !== paymentId)
+        .reduce((sum, payment) => sum + parseCurrencyLike(payment.amount), 0)
+      const remaining = roundCurrency(Math.max(0, finalTotal - tradeInPaymentAmount - othersTotal))
+      return previous.map((payment) => payment.id === paymentId ? { ...payment, amount: paymentAmountInput(remaining) } : payment)
+    })
+  }, [finalTotal, tradeInPaymentAmount])
+
+  const handleUseRemaining = useCallback(() => {
+    if (remainingPaymentTargets.length > 1) {
+      setRemainingTargetPickerOpen(true)
+      return
+    }
+
+    fillRemainingForPayment(remainingPaymentTargets[0]?.id || salePayments[salePayments.length - 1]?.id)
+  }, [fillRemainingForPayment, remainingPaymentTargets, salePayments])
+
+  useEffect(() => {
+    if (remainingPaymentTargets.length <= 1) setRemainingTargetPickerOpen(false)
+  }, [remainingPaymentTargets.length])
+
+  const paymentValidation = validateSalePayments({
+    payments: paymentValidationRows.map((payment) => ({
+      payment_method: payment.payment_method,
+      amount: String(payment.amount),
+      due_date: payment.due_date || "",
+      financial_account_id: payment.financial_account_id || "",
+    })),
+    expectedTotal: finalTotal,
+    requireAccount: !isReservation,
+  })
+  const paymentSummaryStatusLabel = paymentValidation.ok
+    ? "Pagamento válido"
+    : paymentDifference < 0
+      ? "Pagamento excedente"
+      : paymentDifference > 0
+        ? "Pagamento incompleto"
+        : "Revisar dados"
+  const paymentValidationTone = paymentValidation.ok ? "success" : paymentDifference < 0 ? "danger" : "warning"
+  const hasPaymentReady = Boolean(selectedProduct && paymentValidation.ok)
   const saleSteps = [
     { label: "Produto", done: Boolean(selectedProduct) },
     { label: "Cliente", done: Boolean(customer.name && validateCPF(customer.cpf)) },
     { label: "Itens e adicionais", done: Boolean(selectedProduct) },
-    { label: "Pagamento", done: Boolean(hasPaymentReady && (!isReservation || paymentDueDate)) },
+    { label: "Pagamento", done: hasPaymentReady },
     { label: "Revisão", done: false },
   ]
   const currentStepIndex = saleSteps.findIndex((step) => !step.done)
@@ -1802,10 +2064,9 @@ function NewSaleContent() {
   const pendingChecklist = [
     { label: "Selecionar produto principal", done: Boolean(selectedProduct) },
     { label: "Informar cliente válido", done: Boolean(customer.name && validateCPF(customer.cpf)) },
-    { label: "Definir forma de pagamento", done: hasPaymentReady },
-    ...(isReservation ? [{ label: "Informar previsão de pagamento", done: Boolean(paymentDueDate) }] : []),
+    { label: "Fechar pagamentos", done: hasPaymentReady },
     ...(selectedProduct?.type === "supplier" ? [{ label: "Informar custo do fornecedor", done: Boolean(supplierCostInput) }] : []),
-    ...(!isReservation && saleEconomics.storeCashReceives > 0 ? [{ label: "Selecionar conta de recebimento", done: Boolean(receiptAccountId) }] : []),
+    ...(!paymentValidation.ok ? [{ label: paymentValidation.message || "Revisar pagamentos", done: false }] : []),
     ...(hasTradeIn ? [{ label: "Preencher dados mínimos do trade-in", done: hasValidTradeIn }] : []),
     ...(tradeInOverageNeedsDecision ? [{ label: "Decidir diferença do trade-in", done: canResolveTradeInOverage }] : []),
   ]
@@ -1816,8 +2077,6 @@ function NewSaleContent() {
     validateCPF(customer.cpf) &&
     salePrice &&
     hasPaymentReady &&
-    (!isReservation || paymentDueDate) &&
-    (isReservation || saleEconomics.storeCashReceives <= 0 || receiptAccountId) &&
     (selectedProduct?.type !== "supplier" || supplierCostInput) &&
     hasValidTradeIn &&
     canResolveTradeInOverage
@@ -1841,14 +2100,14 @@ function NewSaleContent() {
               {isReservation ? "Reserva" : "Venda imediata"}
             </Badge>
             {hasTradeIn && <Badge variant="blue" dot>Trade-in ativo</Badge>}
-            {!paymentMethod && customerAmountDue > 0 && <Badge variant="gray" dot>Pagamento pendente</Badge>}
+            {!paymentValidation.ok && customerAmountDue > 0 && <Badge variant="gray" dot>Pagamento pendente</Badge>}
           </div>
         </div>
         <SaleStepper steps={saleSteps} currentStep={normalizedCurrentStep} />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_400px] 2xl:grid-cols-[minmax(0,1fr)_420px]">
-        <div className="space-y-5">
+      <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_390px]">
+        <div className="min-w-0 space-y-5">
           <SectionCard eyebrow="1. Produto" title="Produto principal" description="Busque por nome, IMEI ou número de série.">
             <Input
               placeholder="Buscar no estoque..."
@@ -2134,7 +2393,7 @@ function NewSaleContent() {
             </div>
           </SectionCard>
 
-          <SectionCard eyebrow="4. Pagamento" title="Forma de pagamento" description="Escolha a forma de pagamento e defina a condição.">
+          <SectionCard eyebrow="4. Pagamentos" title="Pagamentos" description="Distribua como essa venda será paga.">
             {storeAmountDue > 0 && (
               <div className="mb-4 rounded-[20px] border border-warning-500/30 bg-warning-100/40 p-4">
                 <div className="flex items-start gap-3">
@@ -2146,6 +2405,11 @@ function NewSaleContent() {
                     <p className="mt-1 text-sm text-gray-600">
                       O aparelho recebido ficou {formatBRL(storeAmountDue)} acima desta venda. Escolha a decisão operacional antes de concluir.
                     </p>
+                    {tradeInOverageDecision === "change" && (
+                      <p className="mt-2 text-xs font-semibold text-amber-800">
+                        Ao concluir, o troco será registrado como conta a pagar pendente, sem conciliação e sem categoria do DRE.
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="mt-3 grid gap-2 sm:grid-cols-3">
@@ -2161,109 +2425,306 @@ function NewSaleContent() {
                 </div>
               </div>
             )}
-            <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
-              {quickPaymentMethods.map((method) => {
-                const payment = calculatePaymentPrice(amountAfterTradeIn, method.value, fees)
-                const MethodIcon = method.value === "cash" ? Banknote : method.value === "pix" ? PixBrandIcon : CreditCard
-                return (
-                  <PaymentMethodCard
-                    key={method.value}
-                    icon={MethodIcon}
-                    label={method.label}
-                    selected={paymentMethod === method.value}
-                    customerPays={formatBRL(payment.price)}
-                    storeReceives={formatBRL(amountAfterTradeIn)}
-                    onClick={() => setPaymentMethod(method.value)}
-                  />
-                )
-              })}
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => setPaymentMethod(creditPaymentMethod)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") setPaymentMethod(creditPaymentMethod)
-                }}
-                className={`relative min-h-[168px] rounded-[20px] border p-4 text-left shadow-sm transition-all duration-200 ${
-                  isCreditPayment
-                    ? "border-royal-500 bg-white shadow-[0_16px_45px_rgba(58,107,196,0.14)] ring-2 ring-royal-500/10"
-                    : "border-gray-200 bg-white hover:border-royal-400 hover:shadow-[0_14px_34px_rgba(13,27,46,0.08)]"
-                }`}
-              >
-                {isCreditPayment && (
-                  <span className="absolute right-4 top-4 flex h-7 w-7 items-center justify-center rounded-full bg-royal-500 text-white">
-                    <Check className="h-4 w-4" />
-                  </span>
-                )}
-                <div className="flex items-center gap-3">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-100 text-purple-700">
-                    <CreditCard className="h-5 w-5" />
-                  </span>
-                  <p className="text-sm font-bold text-navy-900">Crédito</p>
-                </div>
-                <div className="mt-5 grid gap-2 text-sm">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-gray-500">Cliente paga</span>
-                    <span className="font-bold text-navy-900">{formatBRL(creditPayment.price)}</span>
+            <div className="rounded-[20px] border border-gray-100 bg-white p-4 shadow-sm">
+              <div className="mb-5">
+                <h3 className="text-sm font-bold text-navy-900">Resumo dos pagamentos</h3>
+                <div className="mt-4 grid overflow-hidden rounded-2xl border border-gray-200 bg-white md:grid-cols-3">
+                  <div className="border-b border-gray-100 p-4 text-center md:border-b-0 md:border-r">
+                    <p className="text-xs font-medium text-gray-500">Total da venda</p>
+                    <p className="mt-1 text-lg font-extrabold text-navy-900">{formatBRL(finalTotal)}</p>
                   </div>
-                  <p className="text-xs font-medium text-gray-500">
-                    {creditPayment.installments}x de {formatBRL(creditPayment.installmentValue)}
-                  </p>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-gray-500">Loja recebe</span>
-                    <span className="font-bold text-navy-900">{formatBRL(amountAfterTradeIn)}</span>
+                  <div className="border-b border-gray-100 p-4 text-center md:border-b-0 md:border-r">
+                    <p className="text-xs font-medium text-gray-500">Distribuído</p>
+                    <p className="mt-1 text-lg font-extrabold text-success-500">{formatBRL(distributedPaymentsTotal)}</p>
+                  </div>
+                  <div className="p-4 text-center">
+                    <p className="text-xs font-medium text-gray-500">Restante</p>
+                    <p className={`mt-1 text-lg font-extrabold ${paymentValidation.ok ? "text-success-500" : paymentDifference < 0 ? "text-danger-500" : "text-warning-500"}`}>
+                      {formatBRL(Math.abs(paymentDifference))}
+                    </p>
+                    <p className={`mt-1 text-xs font-bold ${paymentValidation.ok ? "text-green-700" : paymentDifference < 0 ? "text-red-700" : "text-amber-700"}`}>
+                      {paymentSummaryStatusLabel}
+                    </p>
                   </div>
                 </div>
-                <div className="mt-4 flex items-center justify-between gap-3">
-                  <select
-                    value={creditPaymentMethod}
-                    onClick={(event) => event.stopPropagation()}
-                    onChange={(event) => setPaymentMethod(event.target.value)}
-                    className="h-10 rounded-xl border border-gray-200 bg-white px-3 text-xs font-semibold text-navy-900 outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
-                  >
-                    {creditMethods.map((method) => (
-                      <option key={method.value} value={method.value}>
-                        {method.label.replace("Crédito ", "")}
-                      </option>
-                    ))}
-                  </select>
-                  <button
+              </div>
+
+              {tradeInPaymentAmount > 0 && (
+                <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                    <span className="font-semibold text-amber-900">Crédito / trade-in</span>
+                    <span className="font-bold text-amber-900">{formatBRL(tradeInPaymentAmount)}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-amber-800">Abatimento comercial da venda. Não gera entrada no extrato.</p>
+                </div>
+              )}
+
+              <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <h3 className="text-sm font-bold text-navy-900">Formas de pagamento</h3>
+                <div className="flex flex-wrap gap-2">
+                  <Button
                     type="button"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      setShowFeeTable((value) => !value)
-                    }}
-                    className="text-xs font-semibold text-royal-600 hover:text-royal-500"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleUseRemaining}
+                    aria-expanded={remainingTargetPickerOpen}
+                    aria-controls="remaining-payment-targets"
                   >
-                    Ver tabela de taxas
-                  </button>
+                    Usar restante
+                  </Button>
+                  <Button type="button" variant="primary" size="sm" onClick={addSalePayment}>
+                    <Plus className="h-4 w-4" /> Adicionar pagamento
+                  </Button>
                 </div>
+              </div>
+
+              {remainingTargetPickerOpen && remainingPaymentTargets.length > 1 && (
+                <div id="remaining-payment-targets" className="mt-3 rounded-2xl border border-royal-100 bg-royal-50/50 p-3 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-bold text-navy-900">Onde usar o restante?</p>
+                      <p className="mt-0.5 text-xs font-medium text-gray-500">
+                        {paymentDifference > 0
+                          ? `Restante atual: ${formatBRL(paymentDifference)}`
+                          : paymentDifference < 0
+                            ? `Excesso atual: ${formatBRL(Math.abs(paymentDifference))}`
+                            : "Escolha uma forma para recalcular o fechamento."}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setRemainingTargetPickerOpen(false)}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-gray-400 transition hover:bg-white hover:text-navy-900"
+                      aria-label="Fechar escolha"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {remainingPaymentTargets.map((target) => (
+                      <button
+                        key={target.id}
+                        type="button"
+                        onClick={() => fillRemainingForPayment(target.id)}
+                        className="rounded-xl border border-white bg-white p-3 text-left shadow-sm transition hover:border-royal-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-royal-500/20"
+                      >
+                        <span className="flex items-center justify-between gap-3">
+                          <span className="text-sm font-bold text-navy-900">{target.label}</span>
+                          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-bold text-gray-500">
+                            Pagamento {target.index}
+                          </span>
+                        </span>
+                        <span className="mt-2 block text-xs font-medium text-gray-500">
+                          Atual {formatBRL(target.currentAmount)} · ficará {formatBRL(target.recalculatedAmount)}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-4 space-y-3">
+                {salePayments.map((payment, index) => {
+                  const method = normalizeSalePaymentMethod(payment.payment_method)
+                  const isFinancial = isFinancialPayment(method)
+                  const appliedAmount = parseCurrencyLike(payment.amount)
+                  const methodInfo = method ? calculatePaymentPrice(appliedAmount, method, fees) : null
+                  const feeAmount = methodInfo ? roundCurrency(Math.max(0, methodInfo.price - appliedAmount)) : 0
+                  const isCreditRow = isCreditSalePayment(method)
+                  const isDebitWithFee = method === "debit" && feeAmount > 0
+                  const rowBadge = method
+                    ? method === "trade_in_credit"
+                      ? "Não financeiro"
+                      : feeAmount > 0
+                        ? `Taxa ${formatBRL(feeAmount)}`
+                        : isFinancial
+                          ? "Sem taxa"
+                          : "Não gera caixa"
+                    : "Escolha a forma"
+                  const rowBadgeClass = !method
+                    ? "bg-gray-100 text-gray-500"
+                    : method === "trade_in_credit"
+                      ? "bg-amber-50 text-amber-700 ring-1 ring-amber-100"
+                      : feeAmount > 0
+                        ? "bg-purple-50 text-purple-700 ring-1 ring-purple-100"
+                        : "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100"
+                  return (
+                    <div key={payment.id} className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs font-bold uppercase tracking-wide text-gray-400">Pagamento {index + 1}</p>
+                        <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-bold ${rowBadgeClass}`}>
+                          {rowBadge}
+                        </span>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-[minmax(170px,1fr)_minmax(150px,.75fr)_minmax(180px,.9fr)_minmax(210px,1fr)_80px] 2xl:items-end">
+                        <label className="block">
+                          <span className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-gray-400">Forma de pagamento</span>
+                          <select
+                            value={isCreditRow ? "credit_1x" : payment.payment_method}
+                            onChange={(event) => updateSalePayment(payment.id, { payment_method: event.target.value })}
+                            className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm font-semibold text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                          >
+                            <option value="">Selecione</option>
+                            {paymentMethodOptions.map((methodOption) => (
+                              <option key={methodOption.value} value={methodOption.value}>
+                                {paymentMethodOptionLabel(methodOption.value, methodOption.label)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-gray-400">Valor na venda</span>
+                          <input
+                            id={`payment-amount-${payment.id}`}
+                            inputMode="numeric"
+                            autoComplete="off"
+                            value={payment.amount}
+                            onChange={(event) => updateSalePayment(payment.id, { amount: formatCurrencyMaskInput(event.target.value) })}
+                            onFocus={(event) => event.currentTarget.select()}
+                            onBlur={(event) => updateSalePayment(payment.id, { amount: paymentAmountInput(parseCurrencyLike(event.target.value)) })}
+                            placeholder="R$ 0,00"
+                            className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-right text-sm font-semibold tabular-nums text-navy-900 outline-none transition placeholder:text-gray-300 focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-gray-400">Previsão</span>
+                          <input
+                            type="date"
+                            value={payment.due_date}
+                            onChange={(event) => updateSalePayment(payment.id, { due_date: event.target.value })}
+                            className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm font-semibold text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-gray-400">Conta de destino</span>
+                          <select
+                            value={payment.financial_account_id}
+                            onChange={(event) => updateSalePayment(payment.id, { financial_account_id: event.target.value })}
+                            disabled={!isFinancial}
+                            className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm font-semibold text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10 disabled:bg-gray-100 disabled:text-gray-400"
+                          >
+                            <option value="">{isFinancial ? "Selecione a conta" : "Não gera caixa"}</option>
+                            {financeAccounts.map((account) => (
+                              <option key={account.id} value={account.id}>
+                                {account.institution ? `${account.name} · ${account.institution}` : account.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <div className="flex items-end justify-end gap-1 md:col-span-2 2xl:col-span-1">
+                          <Button type="button" variant="ghost" size="icon" title="Usar restante" onClick={() => fillRemainingForPayment(payment.id)}>
+                            <Check className="h-4 w-4" />
+                          </Button>
+                          <Button type="button" variant="ghost" size="icon" title="Remover pagamento" onClick={() => removeSalePayment(payment.id)} disabled={salePayments.length <= 1}>
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+
+                      {isCreditRow && (
+                        <div className="mt-4 rounded-2xl border border-purple-100 bg-purple-50/30 p-4">
+                          <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-[minmax(260px,1.4fr)_repeat(3,minmax(120px,.8fr))]">
+                            <label className="block">
+                              <span className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-gray-400">Parcelas</span>
+                            <select
+                              value={payment.payment_method || "credit_1x"}
+                              onChange={(event) => updateSalePayment(payment.id, { payment_method: event.target.value })}
+                              className="h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm font-semibold text-navy-900 outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                            >
+                              {creditMethods.map((creditMethod) => {
+                                const paymentInfo = calculatePaymentPrice(appliedAmount, creditMethod.value, fees)
+                                return (
+                                  <option key={creditMethod.value} value={creditMethod.value}>
+                                    {paymentInfo.installments}x de {formatBRL(paymentInfo.installmentValue)} — total {formatBRL(paymentInfo.price)}
+                                  </option>
+                                )
+                              })}
+                            </select>
+                          </label>
+                            <div>
+                              <p className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Cliente paga</p>
+                              <p className="mt-1 text-sm font-extrabold text-navy-900">{formatBRL(methodInfo?.price || 0)}</p>
+                            </div>
+                            <div>
+                              <p className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Taxa</p>
+                              <p className="mt-1 text-sm font-extrabold text-navy-900">{formatBRL(feeAmount)}</p>
+                            </div>
+                            <div>
+                              <p className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Loja recebe</p>
+                              <p className="mt-1 text-sm font-extrabold text-success-500">{formatBRL(appliedAmount)}</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {isDebitWithFee && (
+                        <div className="mt-4 grid gap-3 rounded-2xl border border-gray-100 bg-gray-50 p-3 text-xs sm:grid-cols-3">
+                          <span className="text-gray-500">Cliente paga <strong className="ml-1 text-navy-900">{formatBRL(methodInfo?.price || 0)}</strong></span>
+                          <span className="text-gray-500">Taxa <strong className="ml-1 text-navy-900">{formatBRL(feeAmount)}</strong></span>
+                          <span className="text-gray-500">Loja recebe <strong className="ml-1 text-success-500">{formatBRL(appliedAmount)}</strong></span>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+
+              <button
+                type="button"
+                onClick={addSalePayment}
+                className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-dashed border-royal-300 bg-white text-sm font-bold text-royal-600 transition hover:border-royal-500 hover:bg-royal-50"
+              >
+                <Plus className="h-4 w-4" /> Adicionar novo pagamento
+              </button>
+
+              <div className={`mt-4 rounded-2xl border px-4 py-3 ${
+                paymentValidationTone === "success"
+                  ? "border-emerald-200 bg-emerald-50/70"
+                  : paymentValidationTone === "danger"
+                    ? "border-red-200 bg-red-50/70"
+                    : "border-amber-200 bg-amber-50/70"
+              }`}>
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div className="flex items-start gap-3">
+                    <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
+                      paymentValidationTone === "success"
+                        ? "bg-emerald-100 text-emerald-700"
+                        : paymentValidationTone === "danger"
+                          ? "bg-red-100 text-red-700"
+                          : "bg-amber-100 text-amber-700"
+                    }`}>
+                      {paymentValidation.ok ? <Check className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-navy-900">Validação do pagamento</p>
+                      <p className="mt-1 text-sm text-gray-600">
+                        {paymentValidation.ok
+                          ? "Tudo certo! A soma dos pagamentos está igual ao total da venda."
+                          : paymentValidation.message || (paymentDifference < 0
+                            ? `Os pagamentos ultrapassam o total da venda em ${formatBRL(Math.abs(paymentDifference))}.`
+                            : `Falta distribuir ${formatBRL(paymentDifference)} para fechar a venda.`)}
+                      </p>
+                    </div>
+                  </div>
+                  <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold ${
+                    paymentValidationTone === "success"
+                      ? "bg-emerald-100 text-emerald-700"
+                      : paymentValidationTone === "danger"
+                        ? "bg-red-100 text-red-700"
+                        : "bg-amber-100 text-amber-700"
+                  }`}>
+                    <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                    {paymentSummaryStatusLabel}
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-4 flex justify-end">
+                <Button type="button" variant="success" size="sm" disabled={!paymentValidation.ok} onClick={() => document.getElementById("sale-review-panel")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+                  Continuar para revisão
+                </Button>
               </div>
             </div>
-
-            {(isCreditPayment || showFeeTable) && (
-              <div className="mt-4 rounded-[18px] border border-gray-100 bg-surface p-3">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Tabela de taxas do crédito</p>
-                <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-                  {creditMethods.map((method) => {
-                    const payment = calculatePaymentPrice(amountAfterTradeIn, method.value, fees)
-                    return (
-                      <button
-                        key={method.value}
-                        type="button"
-                        onClick={() => setPaymentMethod(method.value)}
-                        className={`rounded-xl border p-2 text-center transition-all ${
-                          paymentMethod === method.value ? "border-royal-500 bg-white ring-2 ring-royal-500/10" : "border-gray-100 bg-white"
-                        }`}
-                      >
-                        <p className="text-xs font-bold text-navy-900">{method.label.replace("Crédito ", "")}</p>
-                        <p className="text-[11px] text-gray-500">{formatBRL(payment.installmentValue)}</p>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
 
             <div className="mt-4 grid gap-3 md:grid-cols-2">
               <div className="rounded-[20px] border border-warning-500/25 bg-gradient-to-br from-warning-100/60 to-white p-4 shadow-sm">
@@ -2279,32 +2740,18 @@ function NewSaleContent() {
                     label="Previsão de pagamento"
                     type="date"
                     value={paymentDueDate}
-                    onChange={(event) => setPaymentDueDate(event.target.value)}
+                    onChange={(event) => {
+                      setPaymentDueDate(event.target.value)
+                      setSalePayments((previous) => previous.map((payment) => ({ ...payment, due_date: event.target.value })))
+                    }}
                     icon={<CalendarDays className="h-4 w-4" />}
                     className="mt-3"
                   />
                 )}
                 {!isReservation && saleEconomics.storeCashReceives > 0 && (
-                  <label className="mt-3 block text-sm font-semibold text-gray-600">
-                    {isCreditPayment ? "Conta prevista de recebimento" : "Conta de recebimento"}
-                    <select
-                      value={receiptAccountId}
-                      onChange={(event) => setReceiptAccountId(event.target.value)}
-                      className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
-                    >
-                      <option value="">Selecione a conta</option>
-                      {financeAccounts.map((account) => (
-                        <option key={account.id} value={account.id}>
-                          {account.institution ? `${account.name} · ${account.institution}` : account.name}
-                        </option>
-                      ))}
-                    </select>
-                    {isCreditPayment && (
-                      <span className="mt-1 block text-xs font-medium text-gray-500">
-                        Crédito fica pendente e só entra no extrato quando for recebido.
-                      </span>
-                    )}
-                  </label>
+                  <p className="mt-3 text-xs font-medium text-gray-500">
+                    A conta de destino agora fica em cada linha de pagamento.
+                  </p>
                 )}
               </div>
 
@@ -2662,7 +3109,7 @@ function NewSaleContent() {
           </SectionCard>
         </div>
 
-        <aside className="xl:sticky xl:top-20 xl:self-start">
+        <aside id="sale-review-panel" className="min-w-0 xl:sticky xl:top-20 xl:self-start">
           <div className="overflow-hidden rounded-[24px] border border-gray-100 bg-card shadow-[0_22px_60px_rgba(13,27,46,0.10)]">
             <div className="bg-navy-950 px-5 py-4 text-white">
               <div className="flex items-center justify-between gap-3">
@@ -2739,22 +3186,40 @@ function NewSaleContent() {
               </SummarySection>
 
               <SummarySection title="Forma de pagamento">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-royal-100 text-royal-600">
-                      {isCreditPayment ? <CreditCard className="h-4 w-4" /> : paymentMethod === "cash" ? <Banknote className="h-4 w-4" /> : paymentMethod === "pix" ? <PixBrandIcon className="h-4 w-4" /> : <CreditCard className="h-4 w-4" />}
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <p className="text-xs font-semibold text-gray-500">
+                    {paymentSummaryRows.length === 1 ? "1 forma" : `${paymentSummaryRows.length} formas`}
+                  </p>
+                  <Badge variant={paymentValidation.ok ? "green" : "yellow"} dot>
+                    {paymentValidation.ok ? "Fechado" : "Pendente"}
+                  </Badge>
+                </div>
+                <div className="space-y-2">
+                  {paymentSummaryRows.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-gray-200 p-3 text-sm text-gray-400">
+                      Nenhuma forma de pagamento adicionada.
                     </div>
-                    <div>
-                      <p className="text-sm font-bold text-navy-900">{selectedPaymentLabel}</p>
-                      <p className="text-xs text-gray-500">{saleEconomics.installments > 1 ? `${saleEconomics.installments}x de ${formatBRL(saleEconomics.installmentValue)}` : "À vista"}</p>
-                    </div>
-                  </div>
-                  <div className="text-right text-xs text-gray-500">
-                    <p>Cliente paga</p>
-                    <p className="text-sm font-bold text-navy-900">{formatBRL(saleEconomics.customerCashPays)}</p>
-                    <p className="mt-1">Loja recebe em caixa</p>
-                    <p className="text-sm font-bold text-navy-900">{formatBRL(saleEconomics.storeCashReceives)}</p>
-                  </div>
+                  ) : (
+                    paymentSummaryRows.map((payment) => (
+                      <div key={payment.key} className="rounded-2xl border border-gray-100 bg-white p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex min-w-0 items-start gap-3">
+                            <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${payment.isTradeInCredit ? "bg-amber-100 text-amber-700" : "bg-royal-100 text-royal-600"}`}>
+                              {payment.isTradeInCredit ? <Smartphone className="h-4 w-4" /> : <CreditCard className="h-4 w-4" />}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-bold text-navy-900">{payment.label}</p>
+                              <p className="text-xs text-gray-500">{payment.detail}</p>
+                            </div>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p className="text-sm font-extrabold text-navy-900">{formatBRL(payment.amount)}</p>
+                            <p className="text-xs text-gray-500">{payment.dueLabel}</p>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </SummarySection>
 
@@ -2774,7 +3239,7 @@ function NewSaleContent() {
 
                 <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-3">
                   <ImpactCard icon={Box} label="Estoque" value={isReservation ? "Será bloqueado" : "Será baixado"} />
-                  <ImpactCard icon={ReceiptText} label="Financeiro" value={isReservation ? "Conta a receber" : isCreditPayment ? "Recebimento previsto" : "Recebimento à vista"} />
+                  <ImpactCard icon={ReceiptText} label="Financeiro" value={isReservation ? "Conta a receber" : hasCreditPayment ? "Recebimento previsto" : "Recebimento à vista"} />
                   <ImpactCard icon={ShieldCheck} label="Garantia" value={isReservation ? "Depois do recebimento" : "Ao concluir"} />
                 </div>
 

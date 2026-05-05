@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { LabelPreviewModal, VerifiedPurchaseCustomerLabel } from "@/components/labels/label-preview-modal"
 import { supabase } from "@/lib/supabase"
-import { formatBRL, formatDate, getAdditionalItemDisplayName, getTradeInDisplayName, getTradeInSummaryStatus, getInventoryStatusMeta, isPendingInventoryStatus, getProductName } from "@/lib/helpers"
+import { formatBRL, formatDate, getAdditionalItemDisplayName, getTradeInDisplayName, getTradeInSummaryStatus, getInventoryStatusMeta, isPendingInventoryStatus, getProductName, formatPaymentMethod } from "@/lib/helpers"
+import { paymentMethodSummary, salePaymentStatusSummary, type SalePayment } from "@/lib/sale-payments"
 import { buildPublicPurchaseUrl, buildPurchaseCode, getFirstName, normalizePin, verifiedPurchaseLabelText, type VerifiedPurchaseCustomerLabelData } from "@/lib/label-utils"
 import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
 import { calculateSaleEconomics, estimateRiskReserve } from "@/lib/sale-economics"
@@ -92,6 +93,7 @@ export default function SaleDetailPage() {
   const [additionalItems, setAdditionalItems] = useState<any[]>([])
   const [tradeInData, setTradeInData] = useState<any>(null)
   const [tradeInInventory, setTradeInInventory] = useState<any>(null)
+  const [salePayments, setSalePayments] = useState<SalePayment[]>([])
 
   const [auditLogs, setAuditLogs] = useState<any[]>([])
   const [isEditModalOpen, setIsEditModalOpen] = useState(false)
@@ -200,6 +202,12 @@ export default function SaleDetailPage() {
             .eq("sale_id", id)
           if (addItems) setAdditionalItems(addItems)
 
+          const { data: payments } = await (supabase.from("sale_payments") as any)
+            .select("id, sale_id, payment_method, amount, status, due_date, received_date, financial_account_id, transaction_id, notes")
+            .eq("sale_id", id)
+            .order("created_at", { ascending: true })
+          if (payments) setSalePayments(payments.map((payment: any) => ({ ...payment, amount: Number(payment.amount || 0) })))
+
           const { data: logs } = await (supabase
             .from("audit_logs") as any)
             .select("*")
@@ -231,17 +239,7 @@ export default function SaleDetailPage() {
   }, [id])
 
   const paymentLabel = () => {
-    if (!sale?.payment_method) return "—"
-    const map: Record<string, string> = {
-      pix: "PIX", cash: "Dinheiro", debit: "Débito",
-      credit_1x: "Crédito 1x", credit_2x: "Crédito 2x", credit_3x: "Crédito 3x",
-      credit_4x: "Crédito 4x", credit_5x: "Crédito 5x", credit_6x: "Crédito 6x",
-      credit_7x: "Crédito 7x", credit_8x: "Crédito 8x", credit_9x: "Crédito 9x",
-      credit_10x: "Crédito 10x", credit_11x: "Crédito 11x", credit_12x: "Crédito 12x",
-      credit_13x: "Crédito 13x", credit_14x: "Crédito 14x", credit_15x: "Crédito 15x",
-      credit_16x: "Crédito 16x", credit_17x: "Crédito 17x", credit_18x: "Crédito 18x",
-    }
-    return map[sale.payment_method] || sale.payment_method
+    return paymentMethodSummary(salePayments, sale?.payment_method)
   }
 
   // Compute totals early (safe: sale/product may be null during loading)
@@ -282,6 +280,13 @@ export default function SaleDetailPage() {
   const publicPurchaseUrl = sale?.public_access_token
     ? buildPublicPurchaseUrl(sale.public_access_token)
     : ""
+  const paymentSummary = salePaymentStatusSummary(salePayments)
+  const paymentDocumentLines = salePayments
+    .filter((payment) => payment.status !== "cancelled")
+    .map((payment) => ({
+      method: formatPaymentMethod(payment.payment_method),
+      amount: Number(payment.amount || 0),
+    }))
 
   const copyToClipboard = async (value: string, label: string) => {
     if (!value) return
@@ -384,6 +389,7 @@ export default function SaleDetailPage() {
         customerCpf: customer?.cpf || null,
         customerPhone: customer?.phone || null,
         paymentMethod: paymentLabel(),
+        payments: paymentDocumentLines,
         saleNotes: sale?.notes || product?.condition_notes || null,
         additionalItems: additionalItemsSummary,
         item: {
@@ -452,6 +458,7 @@ export default function SaleDetailPage() {
         customerCpf: customer?.cpf || null,
         customerPhone: customer?.phone || null,
         paymentMethod: paymentLabel(),
+        payments: paymentDocumentLines,
         saleNotes: sale?.notes || product?.condition_notes || null,
         additionalItems: additionalItemsSummary,
         item: {
@@ -982,18 +989,42 @@ export default function SaleDetailPage() {
     setIsSubmitting(true)
     try {
       const { data: { user } } = await supabase.auth.getUser()
-      const { data: saleTransactions, error: txError } = await (supabase.from("transactions") as any)
+      const paymentIds = salePayments.map((payment) => payment.id).filter(Boolean)
+      const { data: saleTransactionsBySale, error: saleTxError } = await (supabase.from("transactions") as any)
         .select("id, status")
         .eq("source_type", "sale")
         .eq("source_id", id)
         .neq("status", "cancelled")
-      if (txError) throw txError
+      if (saleTxError) throw saleTxError
+
+      const { data: saleTransactionsByPayment, error: paymentTxError } = paymentIds.length > 0
+        ? await (supabase.from("transactions") as any)
+          .select("id, status")
+          .eq("source_type", "sale_payment")
+          .in("source_id", paymentIds)
+          .neq("status", "cancelled")
+        : { data: [], error: null }
+      if (paymentTxError) throw paymentTxError
+
+      const saleTransactions = Array.from(
+        new Map(
+          [...(saleTransactionsBySale || []), ...(saleTransactionsByPayment || [])]
+            .map((transaction: any) => [transaction.id, transaction])
+        ).values()
+      )
 
       if ((saleTransactions || []).length > 0) {
         const { error } = await (supabase.from("transactions") as any)
           .update({ status: "cancelled", account_id: null, reconciled_at: null })
-          .eq("source_type", "sale")
-          .eq("source_id", id)
+          .in("id", (saleTransactions || []).map((transaction: any) => transaction.id))
+          .neq("status", "cancelled")
+        if (error) throw error
+      }
+
+      if (salePayments.length > 0) {
+        const { error } = await (supabase.from("sale_payments") as any)
+          .update({ status: "cancelled" })
+          .eq("sale_id", id)
           .neq("status", "cancelled")
         if (error) throw error
       }
@@ -1172,6 +1203,47 @@ export default function SaleDetailPage() {
             <p className="mt-1 text-xs text-white/65">
               Estimativa para garantia/defeito. Não muda caixa nem DRE; serve para enxergar o lucro conservador de {formatBRL(saleEconomics.conservativeProfit)}.
             </p>
+          </div>
+        )}
+      </div>
+
+      <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
+        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="font-display font-bold text-navy-900 font-syne">Pagamentos</h3>
+            <p className="text-xs text-gray-500">Recebimentos vinculados a esta venda.</p>
+          </div>
+          <Badge variant={paymentSummary.status === "paid" ? "green" : paymentSummary.status === "partially_paid" ? "yellow" : "gray"} dot>
+            {paymentSummary.label}
+          </Badge>
+        </div>
+        {salePayments.length === 0 ? (
+          <p className="rounded-xl bg-surface p-3 text-sm text-gray-500">Pagamento legado: {paymentLabel()}</p>
+        ) : (
+          <div className="space-y-2">
+            {salePayments.filter((payment) => payment.status !== "cancelled").map((payment) => (
+              <div key={payment.id} className="flex flex-col gap-2 rounded-xl border border-gray-100 bg-surface p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-navy-900">{formatPaymentMethod(payment.payment_method)}</p>
+                  <p className="text-xs text-gray-500">
+                    {payment.status === "received"
+                      ? `Recebido em ${formatDate(payment.received_date || payment.due_date || sale?.sale_date)}`
+                      : `Previsto para ${formatDate(payment.due_date || sale?.payment_due_date || sale?.sale_date)}`}
+                  </p>
+                </div>
+                <p className="text-sm font-bold text-navy-900">{formatBRL(Number(payment.amount || 0))}</p>
+              </div>
+            ))}
+            <div className="grid gap-2 border-t border-gray-100 pt-3 text-sm sm:grid-cols-2">
+              <div className="flex items-center justify-between gap-3 rounded-xl bg-success-50 p-3">
+                <span className="font-semibold text-green-800">Total pago</span>
+                <span className="font-bold text-green-900">{formatBRL(paymentSummary.received / 100)}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3 rounded-xl bg-amber-50 p-3">
+                <span className="font-semibold text-amber-800">Total a receber</span>
+                <span className="font-bold text-amber-900">{formatBRL(paymentSummary.pending / 100)}</span>
+              </div>
+            </div>
           </div>
         )}
       </div>

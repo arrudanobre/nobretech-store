@@ -79,6 +79,17 @@ type Sale = {
   sales_additional_items?: { type: "upsell" | "free"; cost_price: number; sale_price?: number | null; profit?: number | null }[]
 }
 
+type SalePayment = {
+  id: string
+  sale_id: string
+  payment_method?: string | null
+  amount: number
+  status?: "pending" | "received" | "cancelled" | null
+  due_date?: string | null
+  received_date?: string | null
+  transaction_id?: string | null
+}
+
 type InventoryItem = {
   id: string
   purchase_price: number
@@ -161,6 +172,7 @@ export default function FinanceiroPage() {
   const [accountMovements, setAccountMovements] = useState<FinancialAccountMovement[]>([])
   const [projectionTransactions, setProjectionTransactions] = useState<Transaction[]>([])
   const [projectionSales, setProjectionSales] = useState<Sale[]>([])
+  const [projectionSalePayments, setProjectionSalePayments] = useState<SalePayment[]>([])
   const [sales, setSales] = useState<Sale[]>([])
   const [inventory, setInventory] = useState<InventoryItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -188,7 +200,7 @@ export default function FinanceiroPage() {
     setLoading(true)
     try {
       const { start, end, endOfDay } = monthRangeISO(month)
-      const [accountsRes, chartAccountsRes, transactionsRes, accountMovementsRes, projectionTransactionsRes, projectionSalesRes, salesRes, inventoryRes] = await Promise.all([
+      const [accountsRes, chartAccountsRes, transactionsRes, accountMovementsRes, projectionTransactionsRes, projectionSalesRes, projectionSalePaymentsRes, salesRes, inventoryRes] = await Promise.all([
         (supabase.from("finance_accounts") as any).select("*").eq("is_active", true).order("created_at", { ascending: true }),
         (supabase.from("finance_chart_accounts") as any).select("*").eq("is_active", true).order("sort_order", { ascending: true }),
         (supabase.from("transactions") as any).select("*").gte("date", start).lte("date", end).order("date", { ascending: false }),
@@ -198,6 +210,10 @@ export default function FinanceiroPage() {
           .select("id, sale_date, payment_due_date, sale_status, sale_price, net_amount, payment_method, inventory:inventory_id(catalog:catalog_id(model))")
           .neq("sale_status", "cancelled")
           .order("payment_due_date", { ascending: true }),
+        (supabase.from("sale_payments") as any)
+          .select("id, sale_id, payment_method, amount, status, due_date, received_date, transaction_id")
+          .neq("status", "cancelled")
+          .order("due_date", { ascending: true }),
         (supabase.from("sales") as any)
           .select("*, inventory:inventory_id(*, catalog:catalog_id(model)), sales_additional_items(*)")
           .gte("sale_date", start)
@@ -214,6 +230,7 @@ export default function FinanceiroPage() {
       if (accountMovementsRes.error) throw new Error(accountMovementsRes.error.message)
       if (projectionTransactionsRes.error) throw new Error(projectionTransactionsRes.error.message)
       if (projectionSalesRes.error) throw new Error(projectionSalesRes.error.message)
+      if (projectionSalePaymentsRes.error) throw new Error(projectionSalePaymentsRes.error.message)
       if (salesRes.error) throw new Error(salesRes.error.message)
       if (inventoryRes.error) throw new Error(inventoryRes.error.message)
 
@@ -236,6 +253,12 @@ export default function FinanceiroPage() {
         .filter((item: any) => item.source_type !== "sale" || validProjectionSaleIds.has(String(item.source_id)))
         .map((item: any) => ({ ...item, amount: Number(item.amount || 0) })))
       setProjectionSales(projectionSalesData)
+      setProjectionSalePayments((projectionSalePaymentsRes.data || []).map((payment: any) => ({
+        ...payment,
+        amount: Number(payment.amount || 0),
+        due_date: toDateOnly(payment.due_date),
+        received_date: toDateOnly(payment.received_date),
+      })))
       setSales(salesRes.data || [])
       setInventory((inventoryRes.data || []).map((item: any) => ({
         ...item,
@@ -253,6 +276,10 @@ export default function FinanceiroPage() {
   const reconciledSaleIds = useMemo(() => {
     return new Set(transactions.filter((t) => t.source_type === "sale" && t.source_id).map((t) => String(t.source_id)))
   }, [transactions])
+
+  const saleIdsWithSplitPayments = useMemo(() => {
+    return new Set(projectionSalePayments.map((payment) => String(payment.sale_id)))
+  }, [projectionSalePayments])
 
   const accountBalances = useMemo(() => {
     const unassignedLedger =
@@ -335,7 +362,7 @@ export default function FinanceiroPage() {
     const completedSales = sales.filter((sale) => (sale.sale_status || "completed") === "completed")
     const activeTransactions = transactions.filter((t) => t.status !== "cancelled")
     const reconciledTransactions = transactions.filter((t) => t.status === "reconciled")
-    const manualIncome = reconciledTransactions.filter((t) => t.source_type !== "sale" && isRevenueIncome(t)).reduce((sum, t) => sum + Number(t.amount), 0)
+    const manualIncome = reconciledTransactions.filter((t) => t.source_type !== "sale" && t.source_type !== "sale_payment" && isRevenueIncome(t)).reduce((sum, t) => sum + Number(t.amount), 0)
     const cashInflows = reconciledTransactions.filter((t) => t.type === "income").reduce((sum, t) => sum + Number(t.amount), 0)
     const cashOutflows = reconciledTransactions.filter((t) => t.type === "expense").reduce((sum, t) => sum + Number(t.amount), 0)
     const reconciledInventoryPurchases = reconciledTransactions.filter(isInventoryCashOut).reduce((sum, t) => sum + Number(t.amount), 0)
@@ -363,10 +390,12 @@ export default function FinanceiroPage() {
     const averageTicket = completedSales.length > 0 ? salesRevenue / completedSales.length : 0
     const salesNeeded = averageTicket > 0 ? Math.ceil(breakEvenGap / averageTicket) : 0
     const accountTotal = statementBalance
-    const pendingSales = sales.filter((sale) => (sale.sale_status || "completed") !== "cancelled" && !reconciledSaleIds.has(sale.id))
-    const pendingTransactions = transactions.filter((t) => t.source_type !== "sale" && t.status !== "reconciled" && t.status !== "cancelled")
+    const pendingSales = sales.filter((sale) => (sale.sale_status || "completed") !== "cancelled" && !reconciledSaleIds.has(sale.id) && !saleIdsWithSplitPayments.has(sale.id))
+    const pendingSalePayments = projectionSalePayments.filter((payment) => payment.status === "pending")
+    const pendingTransactions = transactions.filter((t) => t.source_type !== "sale" && t.source_type !== "sale_payment" && t.status !== "reconciled" && t.status !== "cancelled")
     const pendingAmount =
       pendingSales.reduce((sum, sale) => sum + saleNetRevenue(sale), 0) +
+      pendingSalePayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) +
       pendingTransactions.reduce((sum, t) => sum + Number(t.amount), 0)
 
     return {
@@ -399,18 +428,30 @@ export default function FinanceiroPage() {
       salesNeeded,
       accountTotal,
       pendingSales,
+      pendingSalePayments,
       pendingTransactions,
       pendingAmount,
     }
-  }, [chartAccountById, chartAccountByName, reconciledSaleIds, sales, statementBalance, transactions])
+  }, [chartAccountById, chartAccountByName, projectionSalePayments, reconciledSaleIds, saleIdsWithSplitPayments, sales, statementBalance, transactions])
 
   const cashProjection = useMemo(() => {
     const today = todayISO()
     const horizon = addDaysISO(today, 60)
     const startingBalance = metrics.accountTotal
+    const saleById = new Map(projectionSales.map((sale) => [String(sale.id), sale]))
+    const transactionById = new Map(
+      projectionTransactions
+        .filter((transaction) => transaction.status !== "cancelled")
+        .map((transaction) => [String(transaction.id), transaction])
+    )
     const transactionBySaleId = new Map(
       projectionTransactions
         .filter((transaction) => transaction.source_type === "sale" && transaction.source_id && transaction.status !== "cancelled")
+        .map((transaction) => [String(transaction.source_id), transaction])
+    )
+    const transactionBySalePaymentId = new Map(
+      projectionTransactions
+        .filter((transaction) => transaction.source_type === "sale_payment" && transaction.source_id && transaction.status !== "cancelled")
         .map((transaction) => [String(transaction.source_id), transaction])
     )
     const transactionItems = projectionTransactions
@@ -431,10 +472,35 @@ export default function FinanceiroPage() {
           isCardInvoice: transaction.payment_method === "Cartão de Crédito" || Boolean(transaction.credit_card_id),
         }
       })
+    const salePaymentItems = projectionSalePayments
+      .filter((payment) =>
+        payment.status === "pending" &&
+        !transactionBySalePaymentId.has(String(payment.id)) &&
+        !(payment.transaction_id && transactionById.has(String(payment.transaction_id)))
+      )
+      .map((payment) => {
+        const sale = saleById.get(String(payment.sale_id))
+        const rawDate = toDateOnly(payment.due_date || sale?.payment_due_date || sale?.sale_date)
+        const dueDate = rawDate && rawDate < today ? today : rawDate
+        const amount = Number(payment.amount || 0)
+        const method = payment.payment_method ? ` · ${payment.payment_method}` : ""
+        return {
+          id: payment.id,
+          type: "income" as const,
+          date: dueDate,
+          originalDate: rawDate,
+          description: `Venda${sale?.inventory?.catalog?.model ? ` · ${sale.inventory.catalog.model}` : ""}${method}`,
+          category: "Venda",
+          amount,
+          signedAmount: amount,
+          isOverdue: Boolean(rawDate && rawDate < today),
+          isCardInvoice: false,
+        }
+      })
     const saleItems = projectionSales
       .filter((sale: Sale) => {
         const transaction = transactionBySaleId.get(String(sale.id))
-        return !transaction && (sale.sale_status || "completed") !== "cancelled"
+        return !transaction && !saleIdsWithSplitPayments.has(String(sale.id)) && (sale.sale_status || "completed") !== "cancelled"
       })
       .map((sale: Sale) => {
         const rawDate = toDateOnly(sale.payment_due_date || sale.sale_date)
@@ -453,7 +519,7 @@ export default function FinanceiroPage() {
           isCardInvoice: false,
         }
       })
-    const pendingItems = [...transactionItems, ...saleItems]
+    const pendingItems = [...transactionItems, ...salePaymentItems, ...saleItems]
       .filter((item) => item.date && item.date <= horizon)
       .sort((a, b) => a.date.localeCompare(b.date))
 
@@ -505,7 +571,7 @@ export default function FinanceiroPage() {
       nextSevenIn,
       minBalance,
     }
-  }, [metrics.accountTotal, projectionTransactions, projectionSales])
+  }, [metrics.accountTotal, projectionTransactions, projectionSalePayments, projectionSales, saleIdsWithSplitPayments])
 
   const productRecommendations = useMemo(() => {
     return inventory
@@ -585,7 +651,7 @@ export default function FinanceiroPage() {
       status: reconciledSaleIds.has(sale.id) ? "reconciled" : "pending",
     }))
     const manual = transactions
-      .filter((t) => t.source_type !== "sale")
+      .filter((t) => t.source_type !== "sale" && t.source_type !== "sale_payment")
       .slice(0, 8)
       .map((t) => ({
         id: t.id,

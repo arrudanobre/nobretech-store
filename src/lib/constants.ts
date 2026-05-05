@@ -534,6 +534,8 @@ export const PAYMENT_METHODS = [
   { value: 'credit_16x', label: 'Crédito 16x', icon: '💳', maxInstallments: 16 },
   { value: 'credit_17x', label: 'Crédito 17x', icon: '💳', maxInstallments: 17 },
   { value: 'credit_18x', label: 'Crédito 18x', icon: '💳', maxInstallments: 18 },
+  { value: 'transfer', label: 'Transferência', icon: '🏦', maxInstallments: 1 },
+  { value: 'other', label: 'Outro', icon: '💰', maxInstallments: 1 },
 ] as const
 
 /**

@@ -163,6 +163,10 @@ function isInventoryPurchaseTransaction(transaction: Transaction) {
   return transaction.source_type === "inventory_purchase" || transaction.category === STOCK_PURCHASE_CATEGORY
 }
 
+function isSaleSettlementTransaction(transaction: Transaction) {
+  return transaction.source_type === "sale" || transaction.source_type === "sale_payment"
+}
+
 function buildYearOptions() {
   const current = new Date().getFullYear()
   return Array.from({ length: 6 }, (_, index) => current - index)
@@ -317,12 +321,12 @@ export default function DrePage() {
     }
 
     for (const transaction of activeTransactions) {
-      const isPendingManualIncome = transaction.type === "income" && transaction.status !== "reconciled" && transaction.source_type !== "sale"
+      const isPendingManualIncome = transaction.type === "income" && transaction.status !== "reconciled" && !isSaleSettlementTransaction(transaction)
       if (isPendingManualIncome) continue
 
       const index = monthIndex(transaction.date)
       const account = getTransactionAccount(transaction)
-      if (transaction.source_type !== "sale") addAccountValue(account, index, Number(transaction.amount))
+      if (!isSaleSettlementTransaction(transaction)) addAccountValue(account, index, Number(transaction.amount))
     }
 
     for (const transaction of reconciledTransactions) {

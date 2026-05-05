@@ -7,12 +7,14 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { formatBRL, formatDate, daysBetween, todayISO, addDaysISO, getProductName, getAdditionalItemDisplayName, getTradeInDisplayName } from "@/lib/helpers"
+import { paymentMethodSummary } from "@/lib/sale-payments"
 import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
 import { calculateSaleEconomics } from "@/lib/sale-economics"
 import { supabase } from "@/lib/supabase"
 import { Plus, Search, TrendingUp, ShoppingCart, Calendar, CreditCard, ChevronRight } from "lucide-react"
 
 function formatPayment(method?: string) {
+  if (method === "mixed") return "Pagamento misto"
   if (!method) return "—"
   return method
     .replace("credit_", "Crédito ")
@@ -119,6 +121,18 @@ export default function SalesPage() {
         if (error) throw error
 
         const rows = data || []
+        const saleIds = rows.map((sale: any) => sale.id).filter(Boolean)
+        let paymentsBySaleId = new Map<string, any[]>()
+        if (saleIds.length > 0) {
+          const { data: payments } = await (supabase.from("sale_payments") as any)
+            .select("id, sale_id, payment_method, amount, status, due_date, received_date")
+            .in("sale_id", saleIds)
+          paymentsBySaleId = new Map()
+          for (const payment of payments || []) {
+            const saleId = String(payment.sale_id)
+            paymentsBySaleId.set(saleId, [...(paymentsBySaleId.get(saleId) || []), payment])
+          }
+        }
         const tradeInIds = rows.map((sale: any) => sale.trade_in_id).filter(Boolean)
 
         if (tradeInIds.length > 0) {
@@ -146,12 +160,13 @@ export default function SalesPage() {
             const tradeIn = (tradeInMap.get(sale.trade_in_id) || null) as any
             return {
               ...sale,
+              sale_payments: paymentsBySaleId.get(String(sale.id)) || [],
               trade_in: tradeIn,
               trade_in_inventory: tradeIn?.linked_inventory_id ? linkedInventoryMap.get(tradeIn.linked_inventory_id) || null : null,
             }
           }))
         } else {
-          setSales(rows)
+          setSales(rows.map((sale: any) => ({ ...sale, sale_payments: paymentsBySaleId.get(String(sale.id)) || [] })))
         }
       } catch (err: any) {
         console.error("Erro ao carregar vendas:", err?.message)
@@ -288,7 +303,7 @@ export default function SalesPage() {
                           {totals.quantidadeTotalItens}
                         </span>
                       </td>
-                      <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{formatPayment(s.payment_method)}</td>
+                      <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{paymentMethodSummary(s.sale_payments, s.payment_method)}</td>
                       <td className="px-3 py-3 whitespace-nowrap">
                         <Badge variant={statusMeta.variant} dot>
                           {statusMeta.label}
@@ -310,12 +325,16 @@ export default function SalesPage() {
                           <p className="text-[11px] text-gray-400">Cliente pagou {formatBRL(economics.customerCashPays)}</p>
                         )}
                       </td>
-                      <td className={`px-4 py-3 text-right font-bold whitespace-nowrap ${economics.grossProfit >= 0 ? "text-success-600" : "text-danger-500"}`}>
-                        {economics.grossProfit >= 0 ? "+" : ""}{formatBRL(economics.grossProfit)}
-                        <span className="text-xs font-normal text-gray-400 ml-1">({economics.realMarginPct.toFixed(1)}%)</span>
-                        {economics.embeddedFee > 0 && (
-                          <p className="text-[10px] font-normal text-gray-400">taxa embutida {formatBRL(economics.embeddedFee)}</p>
-                        )}
+                      <td className="px-4 py-3 text-right align-middle">
+                        <div className={`flex min-w-[112px] flex-col items-end leading-tight ${economics.grossProfit >= 0 ? "text-success-600" : "text-danger-500"}`}>
+                          <span className="whitespace-nowrap font-bold tabular-nums">
+                            {economics.grossProfit >= 0 ? "+" : ""}{formatBRL(economics.grossProfit)}
+                          </span>
+                          <span className="text-xs font-normal text-gray-400 tabular-nums">({economics.realMarginPct.toFixed(1)}%)</span>
+                          {economics.embeddedFee > 0 && (
+                            <span className="max-w-[120px] text-[10px] font-normal leading-tight text-gray-400">taxa embutida {formatBRL(economics.embeddedFee)}</span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         <Badge variant={warrantyMeta.variant} dot>
@@ -371,7 +390,7 @@ export default function SalesPage() {
                     <div className="min-w-0 flex-1">
                       <p className="font-semibold text-sm text-navy-900 truncate">{productName}</p>
                       <p className="text-xs text-gray-500 mt-0.5">
-                        {customerName} · {formatPayment(s.payment_method)} · {formatDate(s.sale_date)}
+                        {customerName} · {paymentMethodSummary(s.sale_payments, s.payment_method)} · {formatDate(s.sale_date)}
                       </p>
                       {upsellItems.length > 0 && (
                         <p className="text-xs text-royal-500 mt-0.5">

@@ -1,6 +1,9 @@
 import { randomBytes, randomInt } from "crypto"
 import { pool } from "@/lib/db"
-import { addDaysISO, formatPaymentMethod, getAdditionalItemDisplayName } from "@/lib/helpers"
+import { addDaysISO, formatPaymentMethod, getAdditionalItemDisplayName, getTradeInDisplayName } from "@/lib/helpers"
+import { calculateSplitPaymentEconomics } from "@/lib/sale-payments"
+import { parseQtyFromNotes } from "@/lib/sale-totals"
+import type { ReceiptLineItem, SaleDocumentData } from "@/lib/sale-documents"
 
 const TOKEN_PREFIX = "ntcv_"
 const TOKEN_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
@@ -27,6 +30,10 @@ export type PublicPurchaseDetails = {
     amountPaid: number
     paymentMethod: string
     remainingPaymentMethod: string
+    payments: Array<{
+      method: string
+      amount: number
+    }>
     tradeInApplied: boolean
     tradeInCreditAmount: number
     tradeInDevice: {
@@ -73,6 +80,8 @@ export type PublicPurchaseDetails = {
     receiptAvailable: boolean
     warrantyAvailable: boolean
     technicalReportUrl: string | null
+    receiptDocument: SaleDocumentData | null
+    warrantyDocument: SaleDocumentData | null
   }
   assistance: Array<{
     id: string
@@ -128,14 +137,18 @@ type SaleAccessRow = {
   public_access_failed_attempts: number | null
   sale_status: string | null
   customer_name: string | null
+  customer_cpf: string | null
+  customer_phone: string | null
   sale_date: string | Date | null
   sale_price: string | number | null
   payment_method: string | null
+  sale_notes: string | null
   packaging_type: string | null
   packaging_notes: string | null
   has_trade_in: boolean | null
   trade_in_id: string | null
   trade_in_value: string | number | null
+  trade_in_grade: string | null
   trade_in_notes: string | null
   trade_in_imei: string | null
   trade_in_serial_number: string | null
@@ -168,7 +181,9 @@ type SaleAccessRow = {
   color: string | null
   grade: string | null
   battery_health: number | null
+  inventory_suggested_price: string | number | null
   imei: string | null
+  imei2: string | null
   serial_number: string | null
   condition_notes: string | null
 }
@@ -190,6 +205,7 @@ type AdditionalSaleItemRow = {
   product_id: string | null
   type: string | null
   name: string | null
+  sale_price: string | number | null
   packaging_type: string | null
   packaging_notes: string | null
   model: string | null
@@ -199,7 +215,14 @@ type AdditionalSaleItemRow = {
   grade: string | null
   battery_health: number | null
   imei: string | null
+  imei2: string | null
   serial_number: string | null
+}
+
+type PublicPaymentLine = {
+  method: string
+  paymentMethod: string | null
+  amount: number
 }
 
 function randomTokenSuffix(length = 32) {
@@ -435,6 +458,7 @@ async function getAdditionalItemsForSale(saleId: string) {
         sai.product_id,
         sai.type,
         sai.name,
+        sai.sale_price,
         sai.packaging_type,
         sai.packaging_notes,
         pc.model,
@@ -444,6 +468,7 @@ async function getAdditionalItemsForSale(saleId: string) {
         i.grade,
         i.battery_health,
         i.imei,
+        i.imei2,
         i.serial_number
       FROM sales_additional_items sai
       LEFT JOIN inventory i ON i.id = sai.product_id
@@ -455,6 +480,25 @@ async function getAdditionalItemsForSale(saleId: string) {
   )
 
   return result.rows
+}
+
+async function getPublicPaymentsForSale(saleId: string) {
+  const result = await pool.query(
+    `
+      SELECT payment_method, amount
+      FROM sale_payments
+      WHERE sale_id = $1::uuid
+        AND COALESCE(status, 'pending') <> 'cancelled'
+      ORDER BY created_at ASC
+    `,
+    [saleId]
+  )
+
+  return result.rows.map((row) => ({
+    method: formatPaymentMethod(row.payment_method),
+    paymentMethod: row.payment_method ? String(row.payment_method) : null,
+    amount: Number(row.amount || 0),
+  }))
 }
 
 async function getProblemsByInventoryId(saleId: string, inventoryIds: string[]) {
@@ -495,6 +539,7 @@ async function getSaleByToken(token: string) {
         s.sale_date,
         s.sale_price,
         s.payment_method,
+        s.notes AS sale_notes,
         s.packaging_type,
         s.packaging_notes,
         s.has_trade_in,
@@ -506,7 +551,10 @@ async function getSaleByToken(token: string) {
         s.inventory_id,
         co.settings AS company_settings,
         c.full_name AS customer_name,
+        c.cpf AS customer_cpf,
+        c.phone AS customer_phone,
         ti.trade_in_value,
+        ti.grade AS trade_in_grade,
         ti.notes AS trade_in_notes,
         ti.imei AS trade_in_imei,
         ti.serial_number AS trade_in_serial_number,
@@ -527,7 +575,9 @@ async function getSaleByToken(token: string) {
         i.photos AS inventory_photos,
         i.grade,
         i.battery_health,
+        i.suggested_price AS inventory_suggested_price,
         i.imei,
+        i.imei2,
         i.serial_number,
         i.condition_notes,
         ps.sale_date AS previous_sale_date,
@@ -641,8 +691,152 @@ export async function verifyPublicPurchasePin(token: string, pin: string) {
   }
 }
 
+function documentItemName(...parts: Array<string | null>) {
+  return uniqueDeviceName(...parts)
+}
+
+function additionalDocumentItemName(item: AdditionalSaleItemRow) {
+  const storedName = getAdditionalItemDisplayName(item.name)
+  if (storedName !== "Item adicional") return storedName
+  return documentItemName(item.model, item.variant, item.storage, item.color)
+}
+
+function buildSaleDocuments(input: {
+  row: SaleAccessRow
+  additionalItems: AdditionalSaleItemRow[]
+  paymentLines: Array<{ method: string; amount: number }>
+  rawPaymentLines: PublicPaymentLine[]
+  purchaseAmount: number
+  tradeInCreditAmount: number
+  tradeInDeviceName: string | null
+  settings: Record<string, unknown>
+}) {
+  const warrantyMonths = Number(input.row.warranty_months || 0)
+  const quantity = parseQtyFromNotes(input.row.sale_notes)
+  const mainName = documentItemName(input.row.model, input.row.variant, input.row.storage, input.row.color)
+  const upsellTotal = input.additionalItems.reduce((sum, item) => {
+    return item.type === "upsell" ? sum + Number(item.sale_price || 0) : sum
+  }, 0)
+  const principalSaleTotal = Math.max(0, input.purchaseAmount - upsellTotal)
+  const suggestedMainTotal = Number(input.row.inventory_suggested_price || 0) * quantity
+  const officialMainTotal = suggestedMainTotal > 0 ? suggestedMainTotal : principalSaleTotal
+  const officialMainUnit = quantity > 0 ? officialMainTotal / quantity : officialMainTotal
+  const discountAmount = suggestedMainTotal > 0 ? Math.max(0, suggestedMainTotal - principalSaleTotal) : 0
+  const paymentMethod = input.paymentLines.length > 1
+    ? "Pagamento misto"
+    : input.paymentLines[0]?.method || formatPaymentMethod(input.row.payment_method)
+  const saleNotes = input.row.sale_notes || input.row.condition_notes || null
+  const additionalItemsSummary = input.additionalItems.length
+    ? input.additionalItems.map((item) => `${additionalDocumentItemName(item)}${item.type === "free" ? " (brinde)" : ""}`).join(", ")
+    : null
+  const warrantyAdditionalItemsSummary = input.additionalItems.length
+    ? input.additionalItems.map((item) => `1x ${additionalDocumentItemName(item)}${item.type === "free" ? " (brinde)" : ""}`).join(", ")
+    : null
+  const economics = calculateSplitPaymentEconomics({
+    saleRevenue: input.purchaseAmount,
+    payments: input.rawPaymentLines.map((payment) => ({
+      payment_method: payment.paymentMethod || input.row.payment_method || "other",
+      amount: payment.amount,
+      status: "received",
+    })),
+    settings: input.settings,
+    costTotal: 0,
+  })
+  const tradeInName = input.tradeInDeviceName
+    ? getTradeInDisplayName({
+        model: input.tradeInDeviceName,
+        storage: input.row.trade_in_storage || undefined,
+        color: input.row.trade_in_color || undefined,
+        fallback: "Aparelho recebido",
+      })
+    : null
+
+  const receiptItems: ReceiptLineItem[] = [
+    {
+      name: mainName,
+      imei: input.row.imei || null,
+      imei2: input.row.imei2 || null,
+      quantity,
+      unitPrice: officialMainUnit,
+      totalPrice: officialMainTotal,
+      warrantyMonths,
+      type: "principal",
+    },
+    ...input.additionalItems.map((item) => {
+      const isFree = item.type === "free"
+      const itemPrice = isFree ? 0 : Number(item.sale_price || 0)
+      return {
+        name: additionalDocumentItemName(item),
+        imei: item.imei || null,
+        imei2: item.imei2 || null,
+        quantity: 1,
+        unitPrice: itemPrice,
+        totalPrice: itemPrice,
+        warrantyMonths,
+        type: isFree ? "free" as const : "upsell" as const,
+      }
+    }),
+  ]
+
+  const baseDocument = {
+    saleId: input.row.id,
+    saleDate: dateOnly(input.row.sale_date) || new Date().toISOString().slice(0, 10),
+    customerName: input.row.customer_name || "Cliente",
+    customerCpf: input.row.customer_cpf || null,
+    customerPhone: input.row.customer_phone || null,
+    paymentMethod,
+    payments: input.paymentLines,
+  }
+
+  const receiptDocument: SaleDocumentData = {
+    ...baseDocument,
+    saleNotes,
+    additionalItems: additionalItemsSummary,
+    item: {
+      name: mainName,
+      imei: input.row.imei || null,
+      imei2: input.row.imei2 || null,
+      quantity: 1,
+      unitPrice: officialMainUnit,
+      totalPrice: officialMainTotal,
+      warrantyMonths,
+    },
+    receiptItems,
+    receiptSummary: {
+      officialProductTotal: officialMainTotal + upsellTotal,
+      saleTotal: input.purchaseAmount,
+      discountAmount,
+      tradeInName,
+      tradeInGrade: input.row.trade_in_grade || null,
+      tradeInValue: input.tradeInCreditAmount,
+      cashAmountDue: economics.storeCashReceives,
+      customerPaid: economics.customerCashPays,
+      embeddedFee: economics.embeddedFee,
+      storeReceives: economics.storeReceives,
+    },
+  }
+
+  const warrantyDocument: SaleDocumentData = {
+    ...baseDocument,
+    saleNotes,
+    additionalItems: warrantyAdditionalItemsSummary,
+    item: {
+      name: mainName,
+      imei: input.row.imei || null,
+      imei2: input.row.imei2 || null,
+      quantity: 1,
+      unitPrice: input.purchaseAmount,
+      totalPrice: input.purchaseAmount,
+      warrantyMonths,
+    },
+  }
+
+  return { receiptDocument, warrantyDocument }
+}
+
 async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPurchaseDetails> {
   const additionalItems = await getAdditionalItemsForSale(row.id)
+  const publicPayments = await getPublicPaymentsForSale(row.id)
   const inventoryIds = [
     row.inventory_id,
     ...additionalItems.map((item) => item.product_id),
@@ -650,7 +844,8 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
   const problemsByInventoryId = await getProblemsByInventoryId(row.id, inventoryIds)
   const deviceName = uniqueDeviceName(row.model, row.variant, row.storage)
   const { saleDate, warrantyStart, warrantyEnd } = warrantyPeriodFromSale(row)
-  const support = whatsappUrl(companySettings(row.company_settings).phone)
+  const settings = companySettings(row.company_settings)
+  const support = whatsappUrl(settings.phone)
   const purchaseAmount = Number(row.sale_price || 0)
   const tradeInCreditAmount = row.has_trade_in || row.trade_in_id
     ? Math.max(0, Number(row.trade_in_value || 0))
@@ -669,6 +864,13 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
       }
     : null
   const paymentMethod = formatPaymentMethod(row.payment_method)
+  const rawPaymentLines = publicPayments.length > 0
+    ? publicPayments
+    : [{ method: paymentMethod, paymentMethod: row.payment_method, amount: amountPaid }]
+  const paymentLines = rawPaymentLines.map((payment) => ({
+    method: payment.method,
+    amount: payment.amount,
+  }))
   const principalIssues = row.inventory_id ? problemsByInventoryId.get(row.inventory_id) || [] : []
   const principalItem: PublicPurchaseItem = {
     id: "principal",
@@ -719,6 +921,16 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
       itemName: item.model,
     }))
   )
+  const documents = buildSaleDocuments({
+    row,
+    additionalItems,
+    paymentLines,
+    rawPaymentLines,
+    purchaseAmount,
+    tradeInCreditAmount,
+    tradeInDeviceName: tradeInDeviceModel === "Aparelho não informado" ? null : tradeInDeviceModel,
+    settings,
+  })
 
   return {
     customerName: firstName(row.customer_name) || "cliente",
@@ -728,8 +940,9 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
       date: saleDate,
       purchaseAmount,
       amountPaid,
-      paymentMethod,
-      remainingPaymentMethod: paymentMethod,
+      paymentMethod: paymentLines.length > 1 ? "Pagamento misto" : paymentLines[0]?.method || paymentMethod,
+      remainingPaymentMethod: paymentLines.length > 1 ? "Pagamento misto" : paymentLines[0]?.method || paymentMethod,
+      payments: paymentLines,
       tradeInApplied,
       tradeInCreditAmount,
       tradeInDevice,
@@ -755,6 +968,8 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
       receiptAvailable: true,
       warrantyAvailable: Boolean(warrantyStart && warrantyEnd) || Boolean(row.warranty_pdf_url),
       technicalReportUrl: row.checklist_pdf_url || null,
+      receiptDocument: documents.receiptDocument,
+      warrantyDocument: documents.warrantyDocument,
     },
     assistance,
   }
