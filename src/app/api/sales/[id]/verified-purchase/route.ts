@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { requireApiAuthContext } from "@/lib/auth-context"
+import { canAccess, requireApiAuthContext } from "@/lib/auth-context"
 import { ensureSalePublicAccess, regenerateSalePublicPin } from "@/lib/public-purchase-access"
 
 type RouteContext = {
@@ -9,6 +9,12 @@ type RouteContext = {
 export async function POST(request: Request, context: RouteContext) {
   const authResult = await requireApiAuthContext()
   if (!authResult.ok) return authResult.response
+  if (!canAccess(authResult.context.role, "sales.edit_sensitive")) {
+    return NextResponse.json(
+      { error: { message: "Apenas owner pode gerar ou regenerar acesso público da venda." } },
+      { status: 403 }
+    )
+  }
 
   const { id } = await Promise.resolve(context.params)
   const body = await request.json().catch(() => ({}))

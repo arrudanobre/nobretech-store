@@ -549,7 +549,29 @@ async function getSaleByToken(token: string) {
         s.warranty_months,
         s.warranty_pdf_url,
         s.inventory_id,
-        co.settings AS company_settings,
+        COALESCE(co.settings, '{}'::jsonb) || jsonb_strip_nulls(jsonb_build_object(
+          'pix_fee_pct', fs.pix_fee_pct,
+          'cash_discount_pct', fs.cash_discount_pct,
+          'debit_fee_pct', fs.debit_fee_pct,
+          'credit_1x_fee_pct', fs.credit_1x_fee_pct,
+          'credit_2x_fee_pct', fs.credit_2x_fee_pct,
+          'credit_3x_fee_pct', fs.credit_3x_fee_pct,
+          'credit_4x_fee_pct', fs.credit_4x_fee_pct,
+          'credit_5x_fee_pct', fs.credit_5x_fee_pct,
+          'credit_6x_fee_pct', fs.credit_6x_fee_pct,
+          'credit_7x_fee_pct', fs.credit_7x_fee_pct,
+          'credit_8x_fee_pct', fs.credit_8x_fee_pct,
+          'credit_9x_fee_pct', fs.credit_9x_fee_pct,
+          'credit_10x_fee_pct', fs.credit_10x_fee_pct,
+          'credit_11x_fee_pct', fs.credit_11x_fee_pct,
+          'credit_12x_fee_pct', fs.credit_12x_fee_pct,
+          'credit_13x_fee_pct', fs.credit_13x_fee_pct,
+          'credit_14x_fee_pct', fs.credit_14x_fee_pct,
+          'credit_15x_fee_pct', fs.credit_15x_fee_pct,
+          'credit_16x_fee_pct', fs.credit_16x_fee_pct,
+          'credit_17x_fee_pct', fs.credit_17x_fee_pct,
+          'credit_18x_fee_pct', fs.credit_18x_fee_pct
+        )) AS company_settings,
         c.full_name AS customer_name,
         c.cpf AS customer_cpf,
         c.phone AS customer_phone,
@@ -589,6 +611,7 @@ async function getSaleByToken(token: string) {
       FROM sales s
       LEFT JOIN customers c ON c.id = s.customer_id
       LEFT JOIN companies co ON co.id = s.company_id
+      LEFT JOIN financial_settings fs ON fs.company_id = s.company_id
       LEFT JOIN trade_ins ti ON ti.id = s.trade_in_id
       LEFT JOIN inventory tii ON tii.id = ti.linked_inventory_id
       LEFT JOIN product_catalog tipc ON tipc.id = tii.catalog_id

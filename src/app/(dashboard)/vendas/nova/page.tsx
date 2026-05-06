@@ -1292,10 +1292,14 @@ function NewSaleContent() {
     }
   }, [])
 
-  const updateTradeInWithInventoryLink = useCallback(async (tradeInId: string, inventoryId?: string | null) => {
+  const updateTradeInWithInventoryLink = useCallback(async (
+    tradeInId: string,
+    inventoryId?: string | null,
+    status: "received" | "added_to_stock" = "added_to_stock"
+  ) => {
     if (!inventoryId) return
     const { error } = await (supabase.from("trade_ins") as any)
-      .update({ linked_inventory_id: inventoryId, status: "added_to_stock" })
+      .update({ linked_inventory_id: inventoryId, status })
       .eq("id", tradeInId)
 
     if (error) {
@@ -1524,7 +1528,7 @@ function NewSaleContent() {
         } else if (tradeInRow?.id) {
           await updateSaleTradeInLink(sale.id, tradeInRow.id)
 
-          const inferredStatus = getTradeInInventoryStatus()
+          const inferredStatus = isReservation ? "trade_in_received" : getTradeInInventoryStatus()
           const inventoryTradeIn = await createTradeInInventoryItem({
             companyId,
             saleId: sale.id,
@@ -1532,7 +1536,11 @@ function NewSaleContent() {
             status: inferredStatus,
           })
 
-          await updateTradeInWithInventoryLink(tradeInRow.id, inventoryTradeIn?.id)
+          await updateTradeInWithInventoryLink(
+            tradeInRow.id,
+            inventoryTradeIn?.id,
+            isReservation ? "received" : "added_to_stock"
+          )
         }
       }
 
@@ -2759,7 +2767,9 @@ function NewSaleContent() {
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-navy-900">Receber aparelho na troca (trade-in)</p>
-                    <p className="text-xs text-gray-500">Use quando tiver trade-in.</p>
+                    <p className="text-xs text-gray-500">
+                      Em reserva, o aparelho fica pendente e não entra como estoque livre.
+                    </p>
                   </div>
                   <ToggleSwitch checked={hasTradeIn} onChange={() => setHasTradeIn(!hasTradeIn)} />
                 </div>

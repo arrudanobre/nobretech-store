@@ -199,10 +199,30 @@ async function syncInventoryPurchaseMovement(client: PoolClient, tx: TxRow) {
         existingId,
       ]
     )
+  } else {
+    await client.query(
+      `INSERT INTO financial_account_movements (
+        company_id, account_id, movement_date, type, category, description,
+        amount, balance_after, payment_method, source, source_id, created_by
+      ) VALUES (
+        $1::uuid, $2::uuid, $3::date, 'expense', $4, $5,
+        $6, 0, $7, 'purchase', $8::uuid, NULL
+      )`,
+      [
+        tx.company_id,
+        tx.account_id,
+        movementDate,
+        tx.category,
+        description,
+        amount,
+        tx.payment_method || null,
+        tx.source_id,
+      ]
+    )
   }
 
   await recalculateAllMovementBalances(client)
-  return { ok: true as const, action: existingId ? "inventory_purchase_updated" as const : "inventory_purchase_missing_movement" as const }
+  return { ok: true as const, action: existingId ? "inventory_purchase_updated" as const : "inventory_purchase_inserted" as const }
 }
 
 export async function syncTransactionMovement(

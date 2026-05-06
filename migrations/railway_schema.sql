@@ -29,8 +29,10 @@ CREATE TABLE IF NOT EXISTS users (
   email      TEXT UNIQUE,
   full_name  TEXT,
   role       TEXT DEFAULT 'owner' CHECK (role IN ('owner', 'manager', 'operator')),
+  status     TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
   avatar_url TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Suppliers ------------------------------------------------------------------
@@ -540,6 +542,11 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS trg_companies_updated ON companies;
 CREATE TRIGGER trg_companies_updated
   BEFORE UPDATE ON companies
+  FOR EACH ROW EXECUTE FUNCTION trg_set_updated_at();
+
+DROP TRIGGER IF EXISTS trg_users_updated ON users;
+CREATE TRIGGER trg_users_updated
+  BEFORE UPDATE ON users
   FOR EACH ROW EXECUTE FUNCTION trg_set_updated_at();
 
 DROP TRIGGER IF EXISTS trg_inventory_updated ON inventory;

@@ -26,6 +26,10 @@ export const DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
 export const DEFAULT_USER_EMAIL = "arrudanobre@gmail.com"
 
 export async function ensureDefaultCompanyAndUser() {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("ensureDefaultCompanyAndUser cannot be used in production")
+  }
+
   await pool.query(`
     INSERT INTO companies (name, slug)
     VALUES ('NOBRETECH STORE', 'nobretech-store')

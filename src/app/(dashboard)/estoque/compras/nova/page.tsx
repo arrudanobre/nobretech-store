@@ -13,6 +13,7 @@ import { useToast } from "@/components/ui/toaster"
 import { supabase } from "@/lib/supabase"
 import { CATEGORIES, GRADES, PRODUCT_CATALOG } from "@/lib/constants"
 import { formatBRL, getComputedInventoryStatus, mapLifecycleToLegacyCompatibleStatus } from "@/lib/helpers"
+import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 
 type ProductMode = "catalog" | "manual"
 
@@ -317,6 +318,10 @@ export default function NewInventoryPurchasePage() {
       await (supabase.from("inventory_purchases") as any)
         .update({ transaction_id: transactionRow?.id || null })
         .eq("id", purchaseRow.id)
+
+      if (purchase.account_id && transactionRow?.id) {
+        await requestSyncTransactionMovement(String(transactionRow.id))
+      }
 
       const catalogIds = new Map<string, string | null>()
       for (const line of lines) {

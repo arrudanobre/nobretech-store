@@ -95,7 +95,7 @@ export default function ContasReceberPage() {
   const [quickDueDate, setQuickDueDate] = useState(todayISO())
   const [quickPayment, setQuickPayment] = useState("Pix")
   const [filter, setFilter] = useState<"open" | "today" | "week" | "received">("open")
-  const [receiptDate, setReceiptDate] = useState(todayISO())
+  const [receiptDate] = useState(todayISO())
   const { toast } = useToast()
 
   useEffect(() => {
@@ -116,8 +116,8 @@ export default function ContasReceberPage() {
           .eq("is_active", true)
           .eq("cash_flow_type", "income")
           .order("sort_order", { ascending: true }),
-        (supabase.from("sales") as any).select("id, sale_date, payment_due_date, sale_status, sale_price, net_amount, payment_method, customer_id, customer:customer_id(full_name, name), inventory:inventory_id(catalog:catalog_id(model)), sales_additional_items(id)").neq("sale_status", "cancelled").order("sale_date", { ascending: true }),
-        (supabase.from("sale_payments") as any).select("id, sale_id, payment_method, amount, status, due_date, received_date, financial_account_id, transaction_id, sale:sale_id(id, sale_date, sale_status, customer:customer_id(full_name, name), inventory:inventory_id(catalog:catalog_id(model)), sales_additional_items(id))").neq("status", "cancelled").order("due_date", { ascending: true }),
+        (supabase.from("sales") as any).select("id, sale_date, payment_due_date, sale_status, sale_price, net_amount, payment_method, customer_id, customer:customer_id(full_name), inventory:inventory_id(catalog:catalog_id(model)), sales_additional_items(id)").neq("sale_status", "cancelled").order("sale_date", { ascending: true }),
+        (supabase.from("sale_payments") as any).select("id, sale_id, payment_method, amount, status, due_date, received_date, financial_account_id, transaction_id, sale:sale_id(id, sale_date, sale_status, customer:customer_id(full_name), inventory:inventory_id(catalog:catalog_id(model)), sales_additional_items(id))").neq("status", "cancelled").order("due_date", { ascending: true }),
         (supabase.from("transactions") as any).select("*").eq("type", "income").neq("status", "cancelled").order("due_date", { ascending: true }),
       ])
       if (accountsRes.error) throw new Error(accountsRes.error.message)
@@ -142,18 +142,35 @@ export default function ContasReceberPage() {
           account_name: t.account_id ? accountNameById.get(t.account_id) || "Conta não encontrada" : null,
           source: "manual" as const,
         }))
+      const salesData = [...(salesRes.data || [])]
+      const salesById = new Map(salesData.map((sale: any) => [String(sale.id), sale]))
+      const missingPaymentSaleIds = Array.from(new Set((paymentsRes.data || [])
+        .map((payment: any) => String(payment.sale_id || ""))
+        .filter((saleId: string) => saleId && !salesById.has(saleId))))
+      if (missingPaymentSaleIds.length > 0) {
+        const { data: linkedSales, error: linkedSalesError } = await (supabase.from("sales") as any)
+          .select("id, sale_date, payment_due_date, sale_status, sale_price, net_amount, payment_method, customer_id, inventory_id, customer:customer_id(full_name), inventory:inventory_id(catalog:catalog_id(model)), sales_additional_items(id)")
+          .in("id", missingPaymentSaleIds)
+          .neq("sale_status", "cancelled")
+        if (linkedSalesError) throw new Error(linkedSalesError.message)
+        for (const sale of linkedSales || []) {
+          salesData.push(sale)
+          salesById.set(String(sale.id), sale)
+        }
+      }
+
       const saleIdsWithPayments = new Set((paymentsRes.data || []).map((payment: any) => String(payment.sale_id)))
       const splitReceivables = (paymentsRes.data || []).map((payment: any) => {
-        const sale = payment.sale || {}
+        const sale = salesById.get(String(payment.sale_id)) || payment.sale || {}
         const transaction = paymentTransactionByPaymentId.get(String(payment.id)) as any
-        const modelName = sale.inventory?.catalog?.model || "Produto"
+        const modelName = sale.inventory?.catalog?.model || "Produto da venda"
         const additionalCount = Array.isArray(sale.sales_additional_items) ? sale.sales_additional_items.length : 0
         return {
           id: payment.id,
           sale_id: payment.sale_id,
           category: "Venda",
           description: `Venda · ${modelName} · ${formatPaymentMethod(payment.payment_method)}`,
-          customer_name: sale.customer?.full_name || sale.customer?.name || null,
+          customer_name: sale.customer?.full_name || null,
           product_summary: `${modelName}${additionalCount > 0 ? ` + ${additionalCount} item${additionalCount > 1 ? "s" : ""}` : ""}`,
           additional_count: additionalCount,
           amount: Number(payment.amount || 0),
@@ -169,16 +186,16 @@ export default function ContasReceberPage() {
           source: "sale_payment" as const,
         }
       })
-      const sales = (salesRes.data || []).filter((sale: any) => !saleIdsWithPayments.has(String(sale.id))).map((sale: any) => {
+      const sales = salesData.filter((sale: any) => !saleIdsWithPayments.has(String(sale.id))).map((sale: any) => {
         const receivable = saleReceivableBySaleId.get(String(sale.id)) as any
         const dueDate = receivable?.due_date || sale.payment_due_date || sale.sale_date
-        const modelName = sale.inventory?.catalog?.model || "Produto"
+        const modelName = sale.inventory?.catalog?.model || "Produto da venda"
         const additionalCount = Array.isArray(sale.sales_additional_items) ? sale.sales_additional_items.length : 0
         return {
           id: sale.id,
           category: "Venda",
           description: `Venda · ${modelName}`,
-          customer_name: sale.customer?.full_name || sale.customer?.name || null,
+          customer_name: sale.customer?.full_name || null,
           product_summary: `${modelName}${additionalCount > 0 ? ` + ${additionalCount} item${additionalCount > 1 ? "s" : ""}` : ""}`,
           additional_count: additionalCount,
           amount: Number(sale.net_amount ?? sale.sale_price ?? 0),
@@ -404,7 +421,7 @@ export default function ContasReceberPage() {
           ? await (supabase.from("transactions") as any).update(receivablePayload).eq("id", existingReceivable.id).select("id").single()
           : await (supabase.from("transactions") as any).insert(receivablePayload).select("id").single()
         if (error) throw error
-        await completeReservedSale(item.id)
+        if (item.sale_status === "reserved") await completeReservedSale(item.id)
         const receivableTransactionId = receivableRow?.id || existingReceivable?.id
         if (receivableTransactionId) {
           const { data: { user } } = await supabase.auth.getUser()
@@ -428,50 +445,25 @@ export default function ContasReceberPage() {
   }
 
   const completeReservedSale = async (saleId: string) => {
-    const { data: sale, error: saleError } = await (supabase.from("sales") as any)
-      .select("id, company_id, inventory_id, customer_id, source_type, warranty_months, warranty_start, warranty_end, sale_date")
-      .eq("id", saleId)
-      .single()
-    if (saleError || !sale) throw new Error(saleError?.message || "Venda não encontrada")
-
-    const { error: updateSaleError } = await (supabase.from("sales") as any)
-      .update({ sale_status: "completed" })
-      .eq("id", saleId)
-    if (updateSaleError) throw updateSaleError
-
-    if ((sale as any).source_type === "own") {
-      await (supabase.from("inventory") as any).update({ status: "sold" }).eq("id", (sale as any).inventory_id)
-    }
-
-    const { data: additionalItems } = await (supabase.from("sales_additional_items") as any)
-      .select("product_id")
-      .eq("sale_id", saleId)
-    for (const item of additionalItems || []) {
-      if ((item as any).product_id) {
-        await (supabase.from("inventory") as any).update({ status: "sold" }).eq("id", (item as any).product_id)
-      }
-    }
-
-    if (Number((sale as any).warranty_months || 0) > 0) {
-      const { data: existingWarranty } = await (supabase.from("warranties") as any)
-        .select("id")
-        .eq("sale_id", saleId)
-        .maybeSingle()
-      if (!existingWarranty?.id) {
-        await (supabase.from("warranties") as any).insert({
-          company_id: (sale as any).company_id,
-          sale_id: saleId,
-          inventory_id: (sale as any).inventory_id,
-          customer_id: (sale as any).customer_id,
-          start_date: (sale as any).warranty_start || (sale as any).sale_date,
-          end_date: (sale as any).warranty_end,
-          status: "active",
-        })
-      }
+    const response = await fetch(`/api/sales/${saleId}/reservation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "complete" }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok || payload.error) {
+      throw new Error(payload.error?.message || "Não foi possível concluir a reserva.")
     }
   }
 
   const completeReservedSaleIfFullyPaid = async (saleId: string) => {
+    const { data: sale, error: saleError } = await (supabase.from("sales") as any)
+      .select("sale_status")
+      .eq("id", saleId)
+      .maybeSingle()
+    if (saleError) throw saleError
+    if ((sale?.sale_status || "completed") !== "reserved") return
+
     const { data: payments, error } = await (supabase.from("sale_payments") as any)
       .select("status")
       .eq("sale_id", saleId)
@@ -491,15 +483,6 @@ export default function ContasReceberPage() {
           <p className="text-sm text-gray-500">Vendas e receitas pendentes de entrada na conta da empresa.</p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-          <label className="flex flex-col gap-1 text-xs font-semibold text-gray-500">
-            Data do recebimento
-            <input
-              type="date"
-              value={receiptDate}
-              onChange={(event) => setReceiptDate(event.target.value)}
-              className="h-11 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-navy-900 shadow-sm outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
-            />
-          </label>
           <select value={selectedAccountId} onChange={(event) => setSelectedAccountId(event.target.value)} className="h-11 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-navy-900 shadow-sm outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10">
             <option value="">Selecione uma conta</option>
             {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.institution ? ` · ${account.institution}` : ""}</option>)}

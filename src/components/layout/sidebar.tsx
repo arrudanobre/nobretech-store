@@ -2,24 +2,39 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { SignOutButton } from "@clerk/nextjs"
 import { cn } from "@/lib/utils"
-import { BarChart3, Package, ShoppingCart, ShieldCheck, AlertTriangle, FileText, Users, Truck, DollarSign, Settings, Smartphone, Calculator, ListChecks, ChevronDown, Menu, X } from "lucide-react"
+import { BarChart3, Package, ShoppingCart, ShieldCheck, AlertTriangle, FileText, Users, Truck, DollarSign, Settings, Smartphone, Calculator, ListChecks, ChevronDown, Menu, X, LogOut, Mail } from "lucide-react"
 import { useState, useEffect, createContext, useContext, useCallback } from "react"
 import { supabase } from "@/lib/supabase"
+import { canAccess, roleLabels, type PermissionKey, type UserRole } from "@/lib/permissions"
 
 export interface NavItem {
   label: string
   href: string
   icon: any
+  permission?: PermissionKey
   badge?: {
-    count: number
+    count?: number
+    defaultCount?: number
     color: string
+    source?: "db"
+    countKey?: string
   }
   items?: {
     label: string
     href: string
     disabled?: boolean
+    permission?: PermissionKey
   }[]
+}
+
+type DashboardUser = {
+  name: string
+  email: string
+  role: UserRole
+  avatarUrl: string | null
+  companyName: string
 }
 
 export interface BadgeCountContextType {
@@ -51,6 +66,7 @@ const staticNavItems: (Omit<NavItem, "badge"> & { badge?: { count?: number; defa
     label: "Financeiro",
     href: "/financeiro",
     icon: DollarSign,
+    permission: "finance.view",
     items: [
       { label: "Painel Financeiro", href: "/financeiro" },
       { label: "Entradas e Saídas", href: "/financeiro/transacoes" },
@@ -61,16 +77,29 @@ const staticNavItems: (Omit<NavItem, "badge"> & { badge?: { count?: number; defa
       { label: "Gastos Mensais", href: "/financeiro/gastos" },
       { label: "ROI de Marketing", href: "/financeiro/marketing" },
       { label: "CRM de Leads", href: "/financeiro/marketing/leads" },
-      { label: "Taxas da Maquininha", href: "/financeiro/taxas" },
-      { label: "DRE", href: "/financeiro/dre" },
-      { label: "Plano de DRE", href: "/financeiro/plano-dre" },
+      { label: "Taxas da Maquininha", href: "/financeiro/taxas", permission: "finance.tax_settings" },
+      { label: "DRE", href: "/financeiro/dre", permission: "finance.dre" },
+      { label: "Plano de DRE", href: "/financeiro/plano-dre", permission: "finance.dre" },
     ]
   },
   { label: "Laudos", href: "/historico", icon: FileText },
-  { label: "Configurações", href: "/configuracoes", icon: Settings },
+  { label: "Configurações", href: "/configuracoes", icon: Settings, permission: "settings.view" },
 ]
 
-export function Sidebar() {
+function userInitial(name: string) {
+  return name.trim().charAt(0).toUpperCase() || "U"
+}
+
+function filterNavItems(role: UserRole): NavItem[] {
+  return staticNavItems
+    .filter((item) => !item.permission || canAccess(role, item.permission))
+    .map((item) => ({
+      ...item,
+      items: item.items?.filter((subItem) => !subItem.permission || canAccess(role, subItem.permission)),
+    })) as NavItem[]
+}
+
+export function Sidebar({ currentUser }: { currentUser: DashboardUser }) {
   const pathname = usePathname()
   const [collapsed, setCollapsed] = useState(false)
   const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({
@@ -82,7 +111,7 @@ export function Sidebar() {
     setOpenMenus(prev => ({ ...prev, [href]: !prev[href] }))
   }
 
-  const navItems: NavItem[] = staticNavItems.map((item) => {
+  const navItems: NavItem[] = filterNavItems(currentUser.role).map((item) => {
     if (item.badge?.source === "db") {
       const dbCount = counts[item.badge.countKey || "estoque"] ?? item.badge.defaultCount ?? 0
       return { ...item, badge: { count: dbCount, color: item.badge.color } } as NavItem
@@ -234,7 +263,7 @@ export function Sidebar() {
   )
 }
 
-export function MobileNav({ isOpen, onOpenChange }: { isOpen: boolean; onOpenChange: (open: boolean) => void }) {
+export function MobileNav({ isOpen, onOpenChange, currentUser }: { isOpen: boolean; onOpenChange: (open: boolean) => void; currentUser: DashboardUser }) {
   const pathname = usePathname()
   const { counts } = useBadgeCount()
 
@@ -242,7 +271,7 @@ export function MobileNav({ isOpen, onOpenChange }: { isOpen: boolean; onOpenCha
     onOpenChange(false)
   }, [pathname, onOpenChange])
 
-  const navItems: NavItem[] = staticNavItems.map((item) => {
+  const navItems: NavItem[] = filterNavItems(currentUser.role).map((item) => {
     if (item.badge?.source === "db") {
       const dbCount = counts[item.badge.countKey || "estoque"] ?? item.badge.defaultCount ?? 0
       return { ...item, badge: { count: dbCount, color: item.badge.color } } as NavItem
@@ -293,6 +322,19 @@ export function MobileNav({ isOpen, onOpenChange }: { isOpen: boolean; onOpenCha
             </div>
 
             <div className="border-b border-gray-100 p-4">
+              <div className="mb-3 flex items-center gap-3 rounded-2xl border border-gray-100 bg-gray-50 p-3">
+                {currentUser.avatarUrl ? (
+                  <img src={currentUser.avatarUrl} alt="" className="h-10 w-10 rounded-xl object-cover" />
+                ) : (
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-navy-900 text-sm font-bold text-white">
+                    {userInitial(currentUser.name)}
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-bold text-navy-900">{currentUser.name}</p>
+                  <p className="text-xs font-semibold text-royal-600">{roleLabels[currentUser.role]}</p>
+                </div>
+              </div>
               <Link
                 href="/avaliacao"
                 onClick={() => onOpenChange(false)}
@@ -326,7 +368,7 @@ export function MobileNav({ isOpen, onOpenChange }: { isOpen: boolean; onOpenCha
                       >
                         <item.icon className="h-5 w-5 shrink-0" />
                         <span className="font-medium">{item.label}</span>
-                        {item.badge && item.badge.count > 0 && (
+                        {item.badge && (item.badge.count || 0) > 0 && (
                           <span className={cn("ml-auto rounded-full px-2 py-0.5 text-xs font-bold text-white", item.badge.color)}>
                             {item.badge.count}
                           </span>
@@ -413,7 +455,66 @@ export function MobileNav({ isOpen, onOpenChange }: { isOpen: boolean; onOpenCha
   )
 }
 
-export function DashboardLayout({ children, title }: { children: React.ReactNode; title: string }) {
+function UserHeader({ currentUser }: { currentUser: DashboardUser }) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex items-center gap-2 rounded-2xl border border-gray-100 bg-white/80 p-1.5 pr-3 text-left shadow-sm transition hover:border-royal-100 hover:bg-white"
+      >
+        {currentUser.avatarUrl ? (
+          <img src={currentUser.avatarUrl} alt="" className="h-8 w-8 rounded-xl object-cover" />
+        ) : (
+          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-navy-900 text-sm font-bold text-white">
+            {userInitial(currentUser.name)}
+          </div>
+        )}
+        <div className="hidden min-w-0 sm:block">
+          <p className="max-w-40 truncate text-xs font-bold leading-tight text-navy-900">{currentUser.name}</p>
+          <p className="text-[11px] font-semibold leading-tight text-royal-600">{roleLabels[currentUser.role]}</p>
+        </div>
+        <ChevronDown className={cn("hidden h-3.5 w-3.5 text-gray-400 transition sm:block", open ? "rotate-180" : "")} />
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-12 z-50 w-72 overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-2xl shadow-navy-900/10">
+          <div className="border-b border-gray-100 p-4">
+            <div className="flex items-center gap-3">
+              {currentUser.avatarUrl ? (
+                <img src={currentUser.avatarUrl} alt="" className="h-11 w-11 rounded-xl object-cover" />
+              ) : (
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-navy-900 text-base font-bold text-white">
+                  {userInitial(currentUser.name)}
+                </div>
+              )}
+              <div className="min-w-0">
+                <p className="truncate text-sm font-bold text-navy-900">{currentUser.name}</p>
+                <p className="text-xs font-semibold text-royal-600">{roleLabels[currentUser.role]}</p>
+              </div>
+            </div>
+            <div className="mt-3 flex items-center gap-2 rounded-xl bg-gray-50 px-3 py-2 text-xs text-gray-500">
+              <Mail className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">{currentUser.email}</span>
+            </div>
+          </div>
+          <div className="p-2">
+            <SignOutButton redirectUrl="/login">
+              <button className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-50">
+                <LogOut className="h-4 w-4" />
+                Sair
+              </button>
+            </SignOutButton>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function DashboardLayout({ children, title, currentUser }: { children: React.ReactNode; title: string; currentUser: DashboardUser }) {
   const [counts, setCounts] = useState<Record<string, number>>({ estoque: 0, garantias: 0 })
   const [refreshKey, setRefreshKey] = useState(0)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
@@ -471,8 +572,8 @@ export function DashboardLayout({ children, title }: { children: React.ReactNode
   return (
     <BadgeCountContext.Provider value={{ counts, refresh }}>
       <div className="min-h-screen bg-surface font-inter">
-        <Sidebar />
-        <MobileNav isOpen={mobileMenuOpen} onOpenChange={setMobileMenuOpen} />
+        <Sidebar currentUser={currentUser} />
+        <MobileNav isOpen={mobileMenuOpen} onOpenChange={setMobileMenuOpen} currentUser={currentUser} />
         {/* Main content */}
         <main className="md:ml-64 pb-20 md:pb-0 min-h-screen">
           {/* Top bar */}
@@ -496,9 +597,7 @@ export function DashboardLayout({ children, title }: { children: React.ReactNode
                 {title}
               </h1>
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-navy-900 text-white flex items-center justify-center text-sm font-bold">
-                  V
-                </div>
+                <UserHeader currentUser={currentUser} />
               </div>
             </div>
           </header>

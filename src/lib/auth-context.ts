@@ -2,6 +2,15 @@ import { auth, currentUser } from "@clerk/nextjs/server"
 import { redirect } from "next/navigation"
 import { NextResponse } from "next/server"
 import { pool } from "@/lib/db"
+import {
+  canAccess,
+  canDeleteSensitiveRecords,
+  canEditFinance,
+  canManageUsers,
+  normalizeRole,
+  type PermissionKey,
+  type UserRole,
+} from "@/lib/permissions"
 
 export type AuthorizedAuthContext = {
   status: "authorized"
@@ -9,7 +18,8 @@ export type AuthorizedAuthContext = {
   appUserId: string
   email: string
   fullName: string | null
-  role: string
+  role: UserRole
+  avatarUrl: string | null
   companyId: string
   companyName: string
   companySlug: string
@@ -35,9 +45,34 @@ type UserRow = {
   email: string
   full_name: string | null
   role: string
+  user_status: string
+  avatar_url: string | null
   company_id: string
   company_name: string
   company_slug: string
+}
+
+let usersStatusColumnPromise: Promise<boolean> | null = null
+
+function hasUsersStatusColumn() {
+  if (!usersStatusColumnPromise) {
+    usersStatusColumnPromise = pool
+      .query<{ exists: boolean }>(
+        `
+          SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'users'
+              AND column_name = 'status'
+          ) AS exists
+        `
+      )
+      .then((result) => Boolean(result.rows[0]?.exists))
+      .catch(() => false)
+  }
+
+  return usersStatusColumnPromise
 }
 
 function getPrimaryEmail(user: Awaited<ReturnType<typeof currentUser>>) {
@@ -66,6 +101,9 @@ export async function getCurrentAuthContext(): Promise<AuthContext> {
     return { status: "unauthorized", clerkUserId: userId, email: null }
   }
 
+  const hasStatus = await hasUsersStatusColumn()
+  const statusSelect = hasStatus ? "u.status AS user_status" : "'active' AS user_status"
+
   const result = await pool.query<UserRow>(
     `
       SELECT
@@ -73,6 +111,8 @@ export async function getCurrentAuthContext(): Promise<AuthContext> {
         u.email,
         u.full_name,
         u.role,
+        ${statusSelect},
+        u.avatar_url,
         u.company_id,
         c.name AS company_name,
         c.slug AS company_slug
@@ -90,13 +130,18 @@ export async function getCurrentAuthContext(): Promise<AuthContext> {
     return { status: "unauthorized", clerkUserId: userId, email }
   }
 
+  if (row.user_status === "inactive") {
+    return { status: "unauthorized", clerkUserId: userId, email }
+  }
+
   return {
     status: "authorized",
     clerkUserId: userId,
     appUserId: row.app_user_id,
     email: row.email,
     fullName: row.full_name,
-    role: row.role,
+    role: normalizeRole(row.role),
+    avatarUrl: clerkUser?.imageUrl || row.avatar_url || null,
     companyId: row.company_id,
     companyName: row.company_name,
     companySlug: row.company_slug,
@@ -144,4 +189,27 @@ export async function requireApiAuthContext(): Promise<
   }
 
   return { ok: true, context }
+}
+
+export { canAccess, canDeleteSensitiveRecords, canEditFinance, canManageUsers }
+
+export async function requireRole(roles: UserRole | UserRole[]) {
+  const context = await requireAuthContext()
+  const allowedRoles = Array.isArray(roles) ? roles : [roles]
+
+  if (!allowedRoles.includes(context.role)) {
+    redirect("/unauthorized")
+  }
+
+  return context
+}
+
+export async function requirePermission(permission: PermissionKey) {
+  const context = await requireAuthContext()
+
+  if (!canAccess(context.role, permission)) {
+    redirect("/unauthorized")
+  }
+
+  return context
 }

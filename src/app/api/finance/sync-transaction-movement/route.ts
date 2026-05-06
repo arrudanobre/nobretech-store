@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { pool } from "@/lib/db"
-import { requireApiAuthContext } from "@/lib/auth-context"
+import { canEditFinance, requireApiAuthContext } from "@/lib/auth-context"
 import {
   reverseMovementForDeletedTransaction,
   syncTransactionMovement,
@@ -12,6 +12,12 @@ export async function POST(request: Request) {
   try {
     const authResult = await requireApiAuthContext()
     if (!authResult.ok) return authResult.response
+    if (!canEditFinance(authResult.context.role)) {
+      return NextResponse.json(
+        { error: { message: "Apenas owner pode sincronizar movimentos financeiros." } },
+        { status: 403 }
+      )
+    }
 
     const body = await request.json()
     const transactionId = String(body.transactionId || "")

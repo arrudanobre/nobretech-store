@@ -34,6 +34,7 @@ import { formatBRL, getComputedInventoryStatus, getProductName, mapLifecycleToLe
 const STATUS_OPTIONS = [
   { value: "active", label: "Ativo" },
   { value: "pending", label: "Cadastro incompleto" },
+  { value: "trade_in_received", label: "Trade-in recebido" },
   { value: "reserved", label: "Reservado" },
   { value: "sold", label: "Vendido" },
   { value: "under_repair", label: "Em reparo" },
@@ -54,6 +55,16 @@ type LinkedPurchaseInfo = {
   id: string
   purchase_date: string
   transaction_id?: string | null
+}
+
+type SourceSaleInfo = {
+  id: string
+  sale_date?: string | null
+  payment_due_date?: string | null
+  sale_status?: string | null
+  customer?: {
+    full_name?: string | null
+  } | null
 }
 
 type SectionCardProps = {
@@ -111,6 +122,8 @@ export default function EditProductPage() {
   const [catalogId, setCatalogId] = useState<string | null>(null)
   const [linkedSale, setLinkedSale] = useState<LinkedSaleInfo | null>(null)
   const [linkedPurchase, setLinkedPurchase] = useState<LinkedPurchaseInfo | null>(null)
+  const [itemOrigin, setItemOrigin] = useState("purchase")
+  const [sourceSale, setSourceSale] = useState<SourceSaleInfo | null>(null)
   const [saleDate, setSaleDate] = useState("")
   const [adjustFinancialDate, setAdjustFinancialDate] = useState(false)
   const [notes, setNotes] = useState("")
@@ -153,7 +166,16 @@ export default function EditProductPage() {
   const marginPct = cost > 0 && suggested > 0 ? Math.round(((suggested / cost) - 1) * 100) : 0
   const markupPct = suggested > 0 ? Math.round((profit / suggested) * 100) : 0
   const hasCoreId = isAccessory ? true : Boolean(formData.imei || formData.serial_number)
-  const isSupplierItem = formData.type === "supplier"
+  const isTradeInItem = itemOrigin === "trade_in"
+  const isSupplierItem = !isTradeInItem && formData.type === "supplier"
+  const sourceSaleStatus = sourceSale?.sale_status || null
+  const sourceSaleLabel = sourceSaleStatus === "reserved"
+    ? "Reserva pendente"
+    : sourceSaleStatus === "completed"
+      ? "Venda concluída"
+      : sourceSaleStatus === "cancelled"
+        ? "Venda cancelada"
+        : "Negociação vinculada"
 
   const inferCatalogSelection = (item: any, catalog?: any | null) => {
     const rawName = getProductName({ ...item, catalog }).toLowerCase()
@@ -196,6 +218,8 @@ export default function EditProductPage() {
 
       setCatalogId(item.catalog_id || null)
       setNotes(item.notes || "")
+      setItemOrigin(item.origin || "purchase")
+      setSourceSale(null)
       setLinkedSale(null)
       setLinkedPurchase(null)
       setSaleDate("")
@@ -216,9 +240,27 @@ export default function EditProductPage() {
         ios_version: item.ios_version || "",
         condition_notes: item.condition_notes || "",
         quantity: item.quantity?.toString() || "1",
-        type: item.type || "own",
-        supplier_name: item.supplier_name || "",
+        type: item.origin === "trade_in" ? "own" : item.type || "own",
+        supplier_name: item.origin === "trade_in" ? "" : item.supplier_name || "",
       })
+
+      if (item.source_sale_id) {
+        const { data: sourceSales, error: sourceSaleError } = await (supabase.from("sales") as any)
+          .select("id, customer_id, sale_date, payment_due_date, sale_status")
+          .eq("id", item.source_sale_id)
+          .limit(1)
+        if (sourceSaleError) throw sourceSaleError
+        const source = sourceSales?.[0] || null
+        if (source?.customer_id) {
+          const { data: sourceCustomer } = await (supabase.from("customers") as any)
+            .select("full_name")
+            .eq("id", source.customer_id)
+            .limit(1)
+          setSourceSale({ ...source, customer: sourceCustomer?.[0] || null })
+        } else {
+          setSourceSale(source)
+        }
+      }
 
       if (item.catalog_id) {
         const { data: catData } = await (supabase.from("product_catalog") as any)
@@ -317,6 +359,7 @@ export default function EditProductPage() {
   }, [fetchProduct])
 
   const updateField = (field: string, value: string) => {
+    if (isTradeInItem && field === "type" && value === "supplier") return
     setFormData((prev) => ({ ...prev, [field]: value }))
   }
 
@@ -377,22 +420,26 @@ export default function EditProductPage() {
         notes: mode === "manual" ? (trimmedProductName || notes || formData.condition_notes || null) : (customCatalogName || null),
         condition_notes: formData.condition_notes || null,
       })
+      const resolvedType = isTradeInItem ? "own" : formData.type
+      const resolvedStatus = isTradeInItem && sourceSaleStatus === "reserved"
+        ? "trade_in_received"
+        : mapLifecycleToLegacyCompatibleStatus(computedLifecycleStatus)
 
       const updateData: Record<string, any> = {
         catalog_id: nextCatalogId,
         imei: formData.imei || null,
         serial_number: formData.serial_number || null,
         grade: formData.grade || null,
-        status: mapLifecycleToLegacyCompatibleStatus(computedLifecycleStatus),
+        status: resolvedStatus,
         purchase_price: parseFloat(formData.purchase_price) || 0,
         suggested_price: formData.suggested_price ? parseFloat(formData.suggested_price) : null,
         purchase_date: formData.purchase_date,
         battery_health: isSealed && !isAccessory ? 100 : formData.battery_health ? parseInt(formData.battery_health) : null,
         ios_version: formData.ios_version || null,
         condition_notes: formData.condition_notes || null,
-        quantity: formData.type === "own" ? Math.max(1, parseInt(formData.quantity) || 1) : 1,
-        type: formData.type,
-        supplier_name: formData.type === "supplier" ? (formData.supplier_name || null) : null,
+        quantity: resolvedType === "own" ? Math.max(1, parseInt(formData.quantity) || 1) : 1,
+        type: resolvedType,
+        supplier_name: resolvedType === "supplier" ? (formData.supplier_name || null) : null,
         notes: mode === "manual" ? (trimmedProductName || null) : (customCatalogName ? `Nome: ${customCatalogName}` : null),
       }
 
@@ -485,7 +532,7 @@ export default function EditProductPage() {
               ) : null}
               <span className="inline-flex items-center gap-1.5 rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold text-gray-600">
                 <Store className="h-3.5 w-3.5" />
-                {isSupplierItem ? "Fornecedor" : "Estoque próprio"}
+                {isTradeInItem ? "Trade-in" : isSupplierItem ? "Fornecedor" : "Estoque próprio"}
               </span>
             </div>
           </div>
@@ -654,75 +701,129 @@ export default function EditProductPage() {
 
           <SectionCard
             title="Origem e estoque"
-            description="Defina se o item é próprio ou de fornecedor e como ele aparece no estoque."
+            description={isTradeInItem ? "Procedência e disponibilidade do item recebido em troca." : "Defina se o item é próprio ou de fornecedor e como ele aparece no estoque."}
             icon={Boxes}
           >
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-              <Select
-                label="Origem do produto"
-                value={formData.type}
-                onChange={(e) => updateField("type", e.target.value)}
-                options={[
-                  { label: "Estoque próprio", value: "own" },
-                  { label: "Fornecedor", value: "supplier" },
-                ]}
-              />
-              {formData.type === "supplier" ? (
-                <Input
-                  label="Nome do fornecedor"
-                  placeholder="Opcional"
-                  value={formData.supplier_name}
-                  onChange={(e) => updateField("supplier_name", e.target.value)}
-                />
-              ) : (
-                <Input
-                  label="Quantidade em estoque"
-                  type="number"
-                  min="1"
-                  value={formData.quantity}
-                  onChange={(e) => updateField("quantity", Math.max(1, parseInt(e.target.value) || 1).toString())}
-                />
-              )}
-              <Input
-                label="Data de aquisição"
-                type="date"
-                value={formData.purchase_date}
-                onChange={(e) => updateField("purchase_date", e.target.value)}
-              />
-            </div>
-            <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
-              <Input
-                label="Data de venda"
-                type="date"
-                value={saleDate}
-                disabled={!linkedSale}
-                onChange={(e) => setSaleDate(e.target.value)}
-              />
-              <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 text-sm lg:col-span-2">
-                <p className="font-semibold text-navy-900">
-                  {linkedSale ? `Venda ${linkedSale.linkType === "principal" ? "principal" : "como item adicional"}` : "Sem venda vinculada"}
-                </p>
-                <p className="mt-1 text-gray-500">
-                  {linkedSale
-                    ? "Ao salvar, a data operacional da venda será atualizada. A data financeira só muda se a opção abaixo estiver marcada."
-                    : "A data de venda aparece aqui quando o item já possui uma venda registrada."}
-                </p>
+            {isTradeInItem ? (
+              <div className="space-y-4">
+                <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
+                  <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4">
+                    <p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Procedência</p>
+                    <p className="mt-1 text-lg font-bold text-navy-900">Trade-in realizado na Nobretech</p>
+                    <div className="mt-4 grid gap-3 text-sm text-emerald-950 sm:grid-cols-2">
+                      <div className="min-w-0 rounded-lg bg-white/55 p-3">
+                        <span className="block text-xs font-bold uppercase text-emerald-700">Negociação vinculada</span>
+                        <span className="mt-1 block break-words font-semibold">{sourceSale ? `${sourceSaleLabel} #${sourceSale.id.slice(0, 8)}` : "Sem reserva/venda vinculada"}</span>
+                      </div>
+                      <div className="min-w-0 rounded-lg bg-white/55 p-3">
+                        <span className="block text-xs font-bold uppercase text-emerald-700">Cliente</span>
+                        <span className="mt-1 block break-words font-semibold">{sourceSale?.customer?.full_name || "Não informado"}</span>
+                      </div>
+                      <div className="min-w-0 rounded-lg bg-white/55 p-3">
+                        <span className="block text-xs font-bold uppercase text-emerald-700">Situação</span>
+                        <span className="mt-1 block break-words font-semibold">{sourceSaleStatus === "reserved" ? "Aguardando conclusão financeira" : sourceSaleLabel}</span>
+                      </div>
+                      <div className="min-w-0 rounded-lg bg-white/55 p-3">
+                        <span className="block text-xs font-bold uppercase text-emerald-700">Tipo de estoque</span>
+                        <span className="mt-1 block break-words font-semibold">Próprio obrigatório</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+                    <Input
+                      label="Quantidade em estoque"
+                      type="number"
+                      min="1"
+                      value={formData.quantity}
+                      onChange={(e) => updateField("quantity", Math.max(1, parseInt(e.target.value) || 1).toString())}
+                    />
+                    <Input
+                      label="Data de aquisição"
+                      type="date"
+                      value={formData.purchase_date}
+                      onChange={(e) => updateField("purchase_date", e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="rounded-xl border border-gray-100 bg-gray-50 p-4 text-sm">
+                  <p className="font-semibold text-navy-900">Vínculo operacional</p>
+                  <p className="mt-1 text-gray-500">
+                    {sourceSale
+                      ? "Este aparelho permanece rastreado pela negociação de trade-in. Ele não pode ser marcado como fornecedor."
+                      : "Este aparelho está marcado como trade-in, mas não possui reserva ou venda de origem registrada."}
+                  </p>
+                </div>
               </div>
-            </div>
-            <label className="mt-4 flex items-start gap-3 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-900">
-              <input
-                type="checkbox"
-                checked={adjustFinancialDate}
-                onChange={(event) => setAdjustFinancialDate(event.target.checked)}
-                className="mt-0.5 h-5 w-5 shrink-0 accent-royal-500"
-              />
-              <span>
-                <span className="block font-semibold">Também ajustar a data financeira/extrato</span>
-                <span className="mt-1 block text-amber-800/80">
-                  Use apenas quando a entrada ou saída real do caixa também aconteceu nessa data. Desmarcado, o sistema preserva a data de conciliação em `transactions.date`.
-                </span>
-              </span>
-            </label>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                  <Select
+                    label="Origem do produto"
+                    value={formData.type}
+                    onChange={(e) => updateField("type", e.target.value)}
+                    options={[
+                      { label: "Estoque próprio", value: "own" },
+                      { label: "Fornecedor", value: "supplier" },
+                    ]}
+                  />
+                  {formData.type === "supplier" ? (
+                    <Input
+                      label="Nome do fornecedor"
+                      placeholder="Opcional"
+                      value={formData.supplier_name}
+                      onChange={(e) => updateField("supplier_name", e.target.value)}
+                    />
+                  ) : (
+                    <Input
+                      label="Quantidade em estoque"
+                      type="number"
+                      min="1"
+                      value={formData.quantity}
+                      onChange={(e) => updateField("quantity", Math.max(1, parseInt(e.target.value) || 1).toString())}
+                    />
+                  )}
+                  <Input
+                    label="Data de aquisição"
+                    type="date"
+                    value={formData.purchase_date}
+                    onChange={(e) => updateField("purchase_date", e.target.value)}
+                  />
+                </div>
+                <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+                  <Input
+                    label="Data de venda"
+                    type="date"
+                    value={saleDate}
+                    disabled={!linkedSale}
+                    onChange={(e) => setSaleDate(e.target.value)}
+                  />
+                  <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 text-sm lg:col-span-2">
+                    <p className="font-semibold text-navy-900">
+                      {linkedSale ? `Venda ${linkedSale.linkType === "principal" ? "principal" : "como item adicional"}` : "Sem venda vinculada"}
+                    </p>
+                    <p className="mt-1 text-gray-500">
+                      {linkedSale
+                        ? "Ao salvar, a data operacional da venda será atualizada. A data financeira só muda se a opção abaixo estiver marcada."
+                        : "A data de venda aparece aqui quando o item já possui uma venda registrada."}
+                    </p>
+                  </div>
+                </div>
+                <label className="mt-4 flex items-start gap-3 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-900">
+                  <input
+                    type="checkbox"
+                    checked={adjustFinancialDate}
+                    onChange={(event) => setAdjustFinancialDate(event.target.checked)}
+                    className="mt-0.5 h-5 w-5 shrink-0 accent-royal-500"
+                  />
+                  <span>
+                    <span className="block font-semibold">Também ajustar a data financeira/extrato</span>
+                    <span className="mt-1 block text-amber-800/80">
+                      Use apenas quando a entrada ou saída real do caixa também aconteceu nessa data. Desmarcado, o sistema preserva a data de conciliação em `transactions.date`.
+                    </span>
+                  </span>
+                </label>
+              </>
+            )}
           </SectionCard>
 
           <SectionCard
@@ -879,7 +980,7 @@ export default function EditProductPage() {
                 <div className="rounded-2xl bg-gray-50 p-3">
                   <WalletCards className="mb-2 h-4 w-4 text-royal-600" />
                   <p className="text-xs text-gray-500">Origem</p>
-                  <p className="font-bold text-navy-900">{isSupplierItem ? "Fornecedor" : "Próprio"}</p>
+                  <p className="font-bold text-navy-900">{isTradeInItem ? "Trade-in" : isSupplierItem ? "Fornecedor" : "Próprio"}</p>
                 </div>
                 <div className="rounded-2xl bg-gray-50 p-3">
                   <UserRound className="mb-2 h-4 w-4 text-royal-600" />

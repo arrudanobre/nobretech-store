@@ -231,13 +231,6 @@ export default function AddProductPage() {
       const { data: company, error: companyError } = await (supabase.from("companies") as any).select("id").limit(1).single()
       if (companyError || !company?.id) throw new Error("Não foi possível identificar sua empresa.")
 
-      await (supabase.from("users") as any).upsert({
-        id: session.user.id,
-        company_id: company.id,
-        role: "owner",
-        full_name: session.user.email,
-      } as any, { onConflict: "id" })
-
       const catalogId = await findOrCreateCatalog()
       let checklistId = null
       if (requiresChecklist) {

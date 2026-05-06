@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { pool } from "@/lib/db"
 import { requireApiAuthContext } from "@/lib/auth-context"
+import { canAccess, canDeleteSensitiveRecords, canEditFinance, canManageUsers } from "@/lib/permissions"
 
 type Filter = { op: "eq" | "neq" | "gte" | "lte" | "in" | "match" | "or"; column?: string; value: unknown }
 type Order = { column: string; ascending?: boolean }
@@ -30,6 +31,56 @@ const TABLES_WITH_COMPANY = new Set([
   "audit_logs",
   "transactions",
   "financial_account_movements",
+  "users",
+])
+
+const COMPANY_SELF_SCOPED_TABLES = new Set(["companies"])
+const SENSITIVE_AUDIT_TABLES = new Set([
+  "companies",
+  "users",
+  "financial_settings",
+  "finance_accounts",
+  "finance_credit_cards",
+  "finance_chart_accounts",
+  "transactions",
+  "financial_account_movements",
+  "inventory",
+  "inventory_purchases",
+  "inventory_purchase_items",
+  "sales",
+  "sales_additional_items",
+  "sale_payments",
+])
+
+const FINANCE_TABLES = new Set([
+  "financial_settings",
+  "finance_accounts",
+  "finance_credit_cards",
+  "finance_chart_accounts",
+  "transactions",
+  "financial_account_movements",
+])
+
+const OWNER_ONLY_FINANCE_TABLES = new Set([
+  "financial_settings",
+  "finance_chart_accounts",
+])
+
+const INVENTORY_COST_COLUMNS = new Set([
+  "purchase_price",
+  "suggested_price",
+  "supplier_cost",
+  "unit_cost",
+  "landed_unit_cost",
+  "cost_price",
+])
+
+const SENSITIVE_SALE_COLUMNS = new Set([
+  "sale_price",
+  "net_amount",
+  "supplier_cost",
+  "sale_status",
+  "inventory_id",
 ])
 
 const JSON_COLUMNS: Record<string, Set<string>> = {
@@ -245,10 +296,189 @@ function addFilter(where: string[], params: unknown[], filter: Filter) {
 }
 
 function addCompanyScope(table: string, companyId: string, where: string[], params: unknown[]) {
+  if (COMPANY_SELF_SCOPED_TABLES.has(table)) {
+    params.push(companyId)
+    where.push(`${ident("id")} = $${params.length}`)
+    return
+  }
+
   if (!TABLES_WITH_COMPANY.has(table)) return
 
   params.push(companyId)
   where.push(`${ident("company_id")} = $${params.length}`)
+}
+
+function isCompanyScoped(table: string) {
+  return TABLES_WITH_COMPANY.has(table) || COMPANY_SELF_SCOPED_TABLES.has(table)
+}
+
+function forbidden(message: string) {
+  return NextResponse.json({ data: null, error: { message } }, { status: 403 })
+}
+
+function valuesArray(values: unknown): Record<string, unknown>[] {
+  return (Array.isArray(values) ? values : [values]).filter(Boolean) as Record<string, unknown>[]
+}
+
+function normalizeAuditAction(action: unknown) {
+  if (action === "created" || action === "updated" || action === "deleted" || action === "exported" || action === "logged_in") {
+    return action
+  }
+
+  const raw = String(action || "updated")
+  if (raw.toLowerCase().includes("delete") || raw.toLowerCase().includes("remove")) return "deleted"
+  if (raw.toLowerCase().includes("create") || raw.toLowerCase().includes("add")) return "created"
+  return "updated"
+}
+
+function normalizeAuditLogRow(row: Record<string, unknown>) {
+  if (!row || typeof row !== "object") return row
+  const rawAction = row.action
+  const nextRow: Record<string, unknown> = { ...row, action: normalizeAuditAction(rawAction) }
+  if (rawAction && rawAction !== nextRow.action) {
+    nextRow.new_data = {
+      ...((nextRow.new_data && typeof nextRow.new_data === "object") ? nextRow.new_data as Record<string, unknown> : {}),
+      audit_action: rawAction,
+    }
+  }
+  return nextRow
+}
+
+function hasAnyColumn(values: Record<string, unknown>[], columns: Set<string>) {
+  return values.some((row) => Object.keys(row || {}).some((column) => columns.has(column)))
+}
+
+function isSensitiveSaleChange(values: Record<string, unknown>[]) {
+  return values.some((row) => {
+    if (row.sale_status === "cancelled") return true
+    return Object.keys(row || {}).some((column) => SENSITIVE_SALE_COLUMNS.has(column))
+  })
+}
+
+function normalizeInventoryTradeInRow(row: Record<string, unknown>) {
+  if (row.origin !== "trade_in") return row
+  if (row.type === "supplier") {
+    throw new Error("Estoque origin=trade_in deve ser sempre do tipo own.")
+  }
+
+  return {
+    ...row,
+    type: "own",
+    supplier_id: null,
+    supplier_name: null,
+  }
+}
+
+function validateInventoryTradeInUpdate(values: Record<string, unknown>, oldRows: Record<string, unknown>[]) {
+  const isChangingToTradeIn = values.origin === "trade_in"
+  const touchesTradeInRows = oldRows.some((row) => row.origin === "trade_in")
+  if (!isChangingToTradeIn && !touchesTradeInRows) return null
+
+  if (values.type === "supplier") {
+    return "Estoque origin=trade_in deve ser sempre do tipo own."
+  }
+
+  return null
+}
+
+function assertMutationAllowed(table: string, action: string, values: Record<string, unknown>[], role: string) {
+  if (action === "select") {
+    if (table === "financial_settings" && !canAccess(role, "finance.tax_settings")) {
+      return "Acesso negado às configurações financeiras."
+    }
+    if (FINANCE_TABLES.has(table) && !canAccess(role, "finance.view")) {
+      return "Acesso negado ao financeiro."
+    }
+    return null
+  }
+
+  if (table === "users") {
+    if (action === "delete") return "Usuários não podem ser excluídos fisicamente."
+    if (!canManageUsers(role)) return "Apenas owner pode gerenciar equipe."
+  }
+
+  if (table === "companies") {
+    if (action !== "select" && !canAccess(role, "settings.edit")) {
+      return "Apenas owner pode editar dados da empresa."
+    }
+    if (action !== "select" && action !== "update") {
+      return "Empresas não podem ser criadas ou removidas por este endpoint."
+    }
+  }
+
+  if (OWNER_ONLY_FINANCE_TABLES.has(table) && action !== "select" && !canAccess(role, "finance.tax_settings")) {
+    return "Apenas owner pode alterar configurações financeiras críticas."
+  }
+
+  if (FINANCE_TABLES.has(table) && action !== "select" && !canEditFinance(role)) {
+    return "Apenas owner pode alterar registros financeiros sensíveis."
+  }
+
+  if (action === "delete" && ["inventory", "sales", "sales_additional_items"].includes(table) && !canDeleteSensitiveRecords(role)) {
+    return "Apenas owner pode excluir registros sensíveis."
+  }
+
+  if (table === "inventory" && action === "update" && hasAnyColumn(values, INVENTORY_COST_COLUMNS) && !canAccess(role, "inventory.edit_cost")) {
+    return "Apenas owner pode alterar custos ou preços de compra."
+  }
+
+  if (table === "sales" && action === "update" && isSensitiveSaleChange(values) && !canAccess(role, "sales.edit_sensitive")) {
+    return "Apenas owner pode cancelar ou editar dados sensíveis de venda."
+  }
+
+  if (table === "sales_additional_items" && action !== "select" && hasAnyColumn(values, INVENTORY_COST_COLUMNS) && !canAccess(role, "sales.edit_sensitive")) {
+    return "Apenas owner pode alterar custos de itens da venda."
+  }
+
+  return null
+}
+
+async function selectRowsForAudit(table: string, where: string[], params: unknown[]) {
+  if (!SENSITIVE_AUDIT_TABLES.has(table)) return []
+  if (where.length === 0) return []
+
+  const result = await pool.query(`SELECT * FROM ${ident(table)} WHERE ${where.join(" AND ")}`, params)
+  return result.rows as Record<string, unknown>[]
+}
+
+async function writeAuditLogs(input: {
+  companyId: string
+  userId: string
+  table: string
+  action: "created" | "updated" | "deleted"
+  oldRows?: Record<string, unknown>[]
+  newRows?: Record<string, unknown>[]
+}) {
+  if (!SENSITIVE_AUDIT_TABLES.has(input.table) || input.table === "audit_logs") return
+
+  const oldById = new Map((input.oldRows || []).map((row) => [String(row.id || ""), row]))
+  const rows = input.newRows?.length ? input.newRows : input.oldRows || []
+  if (rows.length === 0) return
+
+  try {
+    for (const row of rows) {
+      const recordId = typeof row.id === "string" ? row.id : null
+      if (!recordId) continue
+
+      await pool.query(
+        `
+          INSERT INTO audit_logs (company_id, user_id, action, table_name, record_id, old_data, new_data)
+          VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb)
+        `,
+        [
+          input.companyId,
+          input.userId,
+          input.action,
+          input.table,
+          recordId,
+          input.action === "created" ? null : JSON.stringify(oldById.get(recordId) || null),
+          input.action === "deleted" ? null : JSON.stringify(row),
+        ]
+      )
+    }
+  } catch (error) {
+    console.warn("Failed to write audit log", error)
+  }
 }
 
 async function hydrate(table: string, rows: Record<string, unknown>[], companyId: string) {
@@ -384,7 +614,7 @@ export async function POST(request: Request) {
     const action = String(body.action || "select")
     if (!SIMPLE_IDENTIFIER.test(table)) throw new Error("Invalid table")
 
-    const companyId = authResult.context.companyId
+    const { companyId, role, appUserId } = authResult.context
 
     if (action === "rpc") {
       const rpcName = String(body.rpc || "")
@@ -412,6 +642,8 @@ export async function POST(request: Request) {
     const tableHasCompany = TABLES_WITH_COMPANY.has(table)
 
     if (action === "select") {
+      const permissionError = assertMutationAllowed(table, action, [], role)
+      if (permissionError) return forbidden(permissionError)
       addCompanyScope(table, companyId, where, params)
 
       const columns = parseColumns(body.select)
@@ -434,10 +666,15 @@ export async function POST(request: Request) {
 
     if (action === "insert" || action === "upsert") {
       const inputRows = (Array.isArray(body.values) ? body.values : [body.values]) as Record<string, unknown>[]
+      const permissionError = assertMutationAllowed(table, action, inputRows, role)
+      if (permissionError) return forbidden(permissionError)
       const rows: Record<string, unknown>[] = inputRows.map((row) => ({
         ...(row || {}),
         ...(tableHasCompany ? { company_id: companyId } : {}),
+        ...(table === "audit_logs" ? { user_id: appUserId } : {}),
       }))
+        .map((row) => table === "audit_logs" ? normalizeAuditLogRow(row) : row)
+        .map((row) => table === "inventory" ? normalizeInventoryTradeInRow(row) : row)
       if (rows.length === 0) return NextResponse.json({ data: [], error: null })
 
       const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))) as string[]
@@ -463,11 +700,18 @@ export async function POST(request: Request) {
 
       const result = await pool.query(sql, values)
       const data = await hydrate(table, result.rows, companyId)
+      await writeAuditLogs({
+        companyId,
+        userId: appUserId,
+        table,
+        action: action === "insert" ? "created" : "updated",
+        newRows: result.rows,
+      })
       return NextResponse.json({ data: finalizeRows(data, body), error: null })
     }
 
     if (action === "update") {
-      if (tableHasCompany && userFilterCount === 0) {
+      if (isCompanyScoped(table) && userFilterCount === 0) {
         return NextResponse.json(
           { data: null, error: { message: "Update requires at least one filter" } },
           { status: 400 }
@@ -475,9 +719,37 @@ export async function POST(request: Request) {
       }
 
       const valuesObject = { ...(body.values || {}) }
-      if (tableHasCompany) delete valuesObject.company_id
+      const permissionError = assertMutationAllowed(table, action, valuesArray(valuesObject), role)
+      if (permissionError) return forbidden(permissionError)
+      if (isCompanyScoped(table)) delete valuesObject.company_id
       const columns = Object.keys(valuesObject)
       if (columns.length === 0) return NextResponse.json({ data: [], error: null })
+
+      const auditWhere = [...where]
+      const auditParams = [...params]
+      addCompanyScope(table, companyId, auditWhere, auditParams)
+      const oldRows = await selectRowsForAudit(table, auditWhere, auditParams)
+
+      if (table === "inventory") {
+        const inventoryTradeInError = validateInventoryTradeInUpdate(valuesObject, oldRows)
+        if (inventoryTradeInError) {
+          return NextResponse.json({ data: null, error: { message: inventoryTradeInError } }, { status: 400 })
+        }
+
+        if (valuesObject.origin === "trade_in" || oldRows.some((row) => row.origin === "trade_in")) {
+          valuesObject.type = "own"
+          valuesObject.supplier_id = null
+          valuesObject.supplier_name = null
+        }
+      }
+
+      if (
+        table === "users" &&
+        valuesObject.status === "inactive" &&
+        oldRows.some((row) => row.id === appUserId)
+      ) {
+        return forbidden("Você não pode inativar o próprio usuário logado.")
+      }
 
       const sets = columns.map((column) => {
         params.push(normalizeValue(table, column, valuesObject[column]))
@@ -489,11 +761,21 @@ export async function POST(request: Request) {
       sql += " RETURNING *"
       const result = await pool.query(sql, params)
       const data = await hydrate(table, result.rows, companyId)
+      await writeAuditLogs({
+        companyId,
+        userId: appUserId,
+        table,
+        action: "updated",
+        oldRows,
+        newRows: result.rows,
+      })
       return NextResponse.json({ data: finalizeRows(data, body), error: null })
     }
 
     if (action === "delete") {
-      if (tableHasCompany && userFilterCount === 0) {
+      const permissionError = assertMutationAllowed(table, action, [], role)
+      if (permissionError) return forbidden(permissionError)
+      if (isCompanyScoped(table) && userFilterCount === 0) {
         return NextResponse.json(
           { data: null, error: { message: "Delete requires at least one filter" } },
           { status: 400 }
@@ -501,10 +783,18 @@ export async function POST(request: Request) {
       }
 
       addCompanyScope(table, companyId, where, params)
+      const oldRows = await selectRowsForAudit(table, where, params)
       let sql = `DELETE FROM ${ident(table)}`
       if (where.length) sql += ` WHERE ${where.join(" AND ")}`
       sql += " RETURNING *"
       const result = await pool.query(sql, params)
+      await writeAuditLogs({
+        companyId,
+        userId: appUserId,
+        table,
+        action: "deleted",
+        oldRows,
+      })
       return NextResponse.json({ data: finalizeRows(result.rows, body), error: null })
     }
 

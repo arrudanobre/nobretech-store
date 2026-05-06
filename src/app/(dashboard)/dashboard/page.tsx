@@ -4,6 +4,8 @@ import { useEffect, useState } from "react"
 import { supabase } from "@/lib/supabase"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Select } from "@/components/ui/select"
 import { daysBetween, formatBRL, getProductName } from "@/lib/helpers"
 import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
 import {
@@ -27,6 +29,7 @@ import {
   CircleDollarSign,
   ClipboardList,
   Sparkles,
+  CalendarDays,
 } from "lucide-react"
 import {
   BarChart,
@@ -54,8 +57,17 @@ const CATEGORY_COLORS: Record<string, string> = {
 }
 
 const MONTHS_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
-const CACHE_KEY = "dashboard_data_v5"
+const CACHE_KEY = "dashboard_data_v6"
 const CACHE_TTL = 3 * 60 * 1000 // 3 minutos
+
+type DashboardPeriodPreset = "current_month" | "previous_month" | "last_30_days" | "custom"
+
+const DASHBOARD_PERIOD_OPTIONS: Array<{ label: string; value: DashboardPeriodPreset }> = [
+  { label: "Este mês", value: "current_month" },
+  { label: "Mês passado", value: "previous_month" },
+  { label: "Últimos 30 dias", value: "last_30_days" },
+  { label: "Personalizado", value: "custom" },
+]
 
 type SalesComparisonPoint = {
   label: string
@@ -124,6 +136,66 @@ function daysUntil(dateStr: string): number {
 
 function dateKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
+}
+
+function addDays(date: Date, days: number) {
+  const next = new Date(date)
+  next.setDate(next.getDate() + days)
+  return next
+}
+
+function getPresetRange(preset: DashboardPeriodPreset) {
+  const today = new Date()
+
+  if (preset === "previous_month") {
+    const previousMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1)
+    return {
+      start: dateKey(previousMonth),
+      end: dateKey(new Date(previousMonth.getFullYear(), previousMonth.getMonth() + 1, 0)),
+    }
+  }
+
+  if (preset === "last_30_days") {
+    return {
+      start: dateKey(addDays(today, -29)),
+      end: dateKey(today),
+    }
+  }
+
+  return {
+    start: dateKey(new Date(today.getFullYear(), today.getMonth(), 1)),
+    end: dateKey(today),
+  }
+}
+
+function normalizeDateRange(start: string, end: string) {
+  const fallback = getPresetRange("current_month")
+  const safeStart = /^\d{4}-\d{2}-\d{2}$/.test(start) ? start : fallback.start
+  const safeEnd = /^\d{4}-\d{2}-\d{2}$/.test(end) ? end : fallback.end
+
+  return safeStart <= safeEnd
+    ? { start: safeStart, end: safeEnd }
+    : { start: safeEnd, end: safeStart }
+}
+
+function formatDateBR(date: string) {
+  const [year, month, day] = date.split("-")
+  if (!year || !month || !day) return date
+  return `${day}/${month}/${year}`
+}
+
+function formatPeriodLabel(start: string, end: string) {
+  if (start === end) return formatDateBR(start)
+  return `${formatDateBR(start)} até ${formatDateBR(end)}`
+}
+
+function saleDateDayLabel(saleDate?: string, createdAt?: string) {
+  if (saleDate && /^\d{4}-\d{2}-\d{2}/.test(saleDate)) return saleDate.slice(8, 10)
+  return String(new Date(createdAt || Date.now()).getDate()).padStart(2, "0")
+}
+
+function isCompletedSale(sale: { sale_status?: string | null }) {
+  return (sale.sale_status || "completed") === "completed"
 }
 
 function formatChartLabel(value: number) {
@@ -278,11 +350,15 @@ function QuickLinkCard({
 
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
+  const initialPeriod = getPresetRange("current_month")
+  const [periodPreset, setPeriodPreset] = useState<DashboardPeriodPreset>("current_month")
+  const [periodStart, setPeriodStart] = useState(initialPeriod.start)
+  const [periodEnd, setPeriodEnd] = useState(initialPeriod.end)
 
   const [totalInvested, setTotalInvested] = useState(0)
-  const [monthlySales, setMonthlySales] = useState(0)
-  const [monthlyProfit, setMonthlyProfit] = useState(0)
-  const [avgMargin, setAvgMargin] = useState(0)
+  const [periodSales, setPeriodSales] = useState(0)
+  const [periodProfit, setPeriodProfit] = useState(0)
+  const [periodAvgMargin, setPeriodAvgMargin] = useState(0)
 
   const [salesChartData, setSalesChartData] = useState<{ month: string; value: number }[]>([])
   const [salesComparisonMode, setSalesComparisonMode] = useState<"day" | "month">("day")
@@ -307,24 +383,26 @@ export default function DashboardPage() {
   useEffect(() => {
     async function load() {
       setLoading(true)
+      const selectedRange = normalizeDateRange(periodStart, periodEnd)
+      const cacheKey = `${CACHE_KEY}:${selectedRange.start}:${selectedRange.end}`
 
-      const cached = localStorage.getItem(CACHE_KEY)
+      const cached = localStorage.getItem(cacheKey)
       if (cached) {
         const { data, timestamp } = JSON.parse(cached)
         if (Date.now() - timestamp < CACHE_TTL) {
           setTotalInvested(data.totalInvested)
-          setMonthlySales(data.monthlySales)
-          setMonthlyProfit(data.monthlyProfit)
-          setAvgMargin(data.avgMargin)
+          setPeriodSales(data.periodSales)
+          setPeriodProfit(data.periodProfit)
+          setPeriodAvgMargin(data.periodAvgMargin)
           setSalesChartData(data.salesChartData)
           const cachedDailyComparison = data.dailySalesComparison || []
           const cachedMonthlyComparison = data.monthlySalesComparison || []
           const hasComparisonData =
             [...cachedDailyComparison, ...cachedMonthlyComparison].some((point: SalesComparisonPoint) => point.gross > 0 || point.net > 0) ||
-            !data.monthlySales
+            !data.periodSales
 
           if (!hasComparisonData) {
-            localStorage.removeItem(CACHE_KEY)
+            localStorage.removeItem(cacheKey)
           } else {
             setDailySalesComparison(cachedDailyComparison)
             setMonthlySalesComparison(cachedMonthlyComparison)
@@ -346,10 +424,12 @@ export default function DashboardPage() {
 
       const now = new Date()
       const startOfMonth = dateKey(new Date(now.getFullYear(), now.getMonth(), 1))
+      const today = dateKey(now)
       const in30Days = dateKey(new Date(now.getTime() + 30 * 86400000))
 
       const [
         inventoryRes,
+        salesPeriodRes,
         salesMonthRes,
         salesLast6Res,
         salesCategoryRes,
@@ -375,21 +455,31 @@ export default function DashboardPage() {
           .in("status", ["active", "in_stock"] as any),
 
         (supabase.from("sales") as any)
-          .select("sale_price, net_amount, sale_date, created_at, source_type, supplier_cost, notes, inventory:inventory_id(purchase_price, type), sales_additional_items(*)")
-          .gte("sale_date", startOfMonth),
+          .select("sale_price, net_amount, sale_date, created_at, source_type, sale_status, supplier_cost, notes, inventory:inventory_id(purchase_price, type), sales_additional_items(*)")
+          .gte("sale_date", selectedRange.start)
+          .lte("sale_date", selectedRange.end),
 
         (supabase.from("sales") as any)
-          .select("sale_price, net_amount, sale_date, source_type, supplier_cost, notes, inventory:inventory_id(purchase_price, type), sales_additional_items(*)")
+          .select("sale_price, net_amount, sale_date, created_at, source_type, sale_status, supplier_cost, notes, inventory:inventory_id(purchase_price, type), sales_additional_items(*)")
+          .gte("sale_date", startOfMonth)
+          .lte("sale_date", today),
+
+        (supabase.from("sales") as any)
+          .select("sale_price, net_amount, sale_date, source_type, sale_status, supplier_cost, notes, inventory:inventory_id(purchase_price, type), sales_additional_items(*)")
           .gte("sale_date", dateKey(new Date(now.getFullYear(), now.getMonth() - 5, 1)))
+          .lte("sale_date", today)
           .order("sale_date", { ascending: true })
           .limit(200),
 
         (supabase.from("sales") as any)
-          .select("inventory:inventory_id(catalog:catalog_id(category))")
-          .gte("sale_date", new Date(now.getFullYear(), now.getMonth() - 2, 1).toISOString().split("T")[0]),
+          .select("source_type, sale_status, inventory:inventory_id(catalog:catalog_id(category))")
+          .gte("sale_date", dateKey(new Date(now.getFullYear(), now.getMonth() - 2, 1)))
+          .lte("sale_date", today),
 
         (supabase.from("sales") as any)
           .select(`
+            source_type,
+            sale_status,
             sale_date,
             inventory:inventory_id(
               id,
@@ -403,7 +493,8 @@ export default function DashboardPage() {
               catalog:catalog_id(category, model, brand, storage, color)
             )
           `)
-          .gte("sale_date", new Date(now.getFullYear(), now.getMonth() - 2, 1).toISOString().split("T")[0])
+          .gte("sale_date", dateKey(new Date(now.getFullYear(), now.getMonth() - 2, 1)))
+          .lte("sale_date", today)
           .order("sale_date", { ascending: false })
           .limit(200),
 
@@ -460,6 +551,7 @@ export default function DashboardPage() {
       const watchItems = activeTurnoverItems.filter((item) => item.tone === "watch")
 
       const soldTurnoverRows = ((turnoverSalesRes.data as any[]) ?? [])
+        .filter((sale) => (sale.source_type || "own") === "own" && isCompletedSale(sale))
         .map((sale) => {
           const item = sale.inventory
           if (!item || (item.type || "own") !== "own") return null
@@ -492,10 +584,6 @@ export default function DashboardPage() {
       }
       setTurnoverSummary(nextTurnoverSummary)
 
-      const salesMonth = ((salesMonthRes.data as any[]) ?? []).filter((s) => (s.source_type || "own") === "own")
-      const totalSales = salesMonth.reduce((acc, s) => acc + (s.sale_price ?? 0), 0)
-      setMonthlySales(totalSales)
-
       const getSaleProfit = (s: any) => {
         const cost = (s.inventory as any)?.purchase_price ?? 0
         const revenue = s.sale_price ?? s.net_amount ?? 0
@@ -510,15 +598,25 @@ export default function DashboardPage() {
         return totals.lucroTotal
       }
 
-      const profits = salesMonth.map(getSaleProfit)
+      const salesPeriod = ((salesPeriodRes.data as any[]) ?? []).filter(
+        (s) => (s.source_type || "own") === "own" && isCompletedSale(s)
+      )
+      const totalSales = salesPeriod.reduce((acc, s) => acc + (s.sale_price ?? 0), 0)
+      setPeriodSales(totalSales)
+
+      const profits = salesPeriod.map(getSaleProfit)
       const totalProfit = profits.reduce((a, b) => a + b, 0)
-      setMonthlyProfit(totalProfit)
+      setPeriodProfit(totalProfit)
 
-      if (totalSales > 0) {
-        setAvgMargin(Math.round((totalProfit / totalSales) * 100 * 10) / 10)
-      }
+      const nextPeriodAvgMargin = totalSales > 0 ? Math.round((totalProfit / totalSales) * 100 * 10) / 10 : 0
+      setPeriodAvgMargin(nextPeriodAvgMargin)
 
-      const salesLast6 = (salesLast6Res.data as any[]) ?? []
+      const salesMonth = ((salesMonthRes.data as any[]) ?? []).filter(
+        (s) => (s.source_type || "own") === "own" && isCompletedSale(s)
+      )
+      const salesLast6 = ((salesLast6Res.data as any[]) ?? []).filter(
+        (s) => (s.source_type || "own") === "own" && isCompletedSale(s)
+      )
       const monthMap: Record<string, number> = {}
       for (let i = 5; i >= 0; i--) {
         const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
@@ -542,7 +640,7 @@ export default function DashboardPage() {
         dayMap[label] = { label, gross: 0, net: 0 }
       }
       salesMonth.forEach((s: any) => {
-        const day = String(new Date(s.sale_date || s.created_at).getDate()).padStart(2, "0")
+        const day = saleDateDayLabel(s.sale_date, s.created_at)
         if (!dayMap[day]) dayMap[day] = { label: day, gross: 0, net: 0 }
         dayMap[day].gross += Number(s.sale_price || 0)
         dayMap[day].net += getSaleProfit(s)
@@ -558,14 +656,12 @@ export default function DashboardPage() {
           net: 0,
         }
       })
-      salesLast6
-        .filter((s: any) => (s.source_type || "own") === "own")
-        .forEach((s: any) => {
-          const key = s.sale_date.slice(0, 7)
-          if (!monthComparisonMap[key]) return
-          monthComparisonMap[key].gross += Number(s.sale_price || 0)
-          monthComparisonMap[key].net += getSaleProfit(s)
-        })
+      salesLast6.forEach((s: any) => {
+        const key = s.sale_date.slice(0, 7)
+        if (!monthComparisonMap[key]) return
+        monthComparisonMap[key].gross += Number(s.sale_price || 0)
+        monthComparisonMap[key].net += getSaleProfit(s)
+      })
 
       const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
       if (
@@ -573,13 +669,15 @@ export default function DashboardPage() {
         monthComparisonMap[currentMonthKey] &&
         monthComparisonMap[currentMonthKey].gross === 0
       ) {
-        monthComparisonMap[currentMonthKey].gross = totalSales
-        monthComparisonMap[currentMonthKey].net = totalProfit
+        monthComparisonMap[currentMonthKey].gross = salesMonth.reduce((acc, sale) => acc + Number(sale.sale_price || 0), 0)
+        monthComparisonMap[currentMonthKey].net = salesMonth.reduce((acc, sale) => acc + getSaleProfit(sale), 0)
       }
       const nextMonthlyComparison = Object.values(monthComparisonMap)
       setMonthlySalesComparison(nextMonthlyComparison)
 
-      const catRaw = (salesCategoryRes.data as any[]) ?? []
+      const catRaw = ((salesCategoryRes.data as any[]) ?? []).filter(
+        (s) => (s.source_type || "own") === "own" && isCompletedSale(s)
+      )
       const catCount: Record<string, number> = {}
       
       const formatCat = (c: string) => {
@@ -640,12 +738,12 @@ export default function DashboardPage() {
         }))
       )
 
-      localStorage.setItem(CACHE_KEY, JSON.stringify({
+      localStorage.setItem(cacheKey, JSON.stringify({
         data: {
           totalInvested: invested,
-          monthlySales: totalSales,
-          monthlyProfit: totalProfit,
-          avgMargin: totalSales > 0 ? Math.round((totalProfit / totalSales) * 100 * 10) / 10 : 0,
+          periodSales: totalSales,
+          periodProfit: totalProfit,
+          periodAvgMargin: nextPeriodAvgMargin,
           salesChartData: nextSalesChartData,
           dailySalesComparison: nextDailyComparison,
           monthlySalesComparison: nextMonthlyComparison,
@@ -682,7 +780,7 @@ export default function DashboardPage() {
     }
 
     load()
-  }, [])
+  }, [periodEnd, periodStart])
 
   if (loading) {
     return (
@@ -693,8 +791,20 @@ export default function DashboardPage() {
     )
   }
 
+  const selectedRange = normalizeDateRange(periodStart, periodEnd)
+  const selectedPeriodLabel = formatPeriodLabel(selectedRange.start, selectedRange.end)
+  const chartHasSales = [...dailySalesComparison, ...monthlySalesComparison].some((point) => point.gross > 0 || point.net > 0)
+  const handlePeriodPresetChange = (value: DashboardPeriodPreset) => {
+    setPeriodPreset(value)
+    if (value === "custom") return
+
+    const range = getPresetRange(value)
+    setPeriodStart(range.start)
+    setPeriodEnd(range.end)
+  }
+
   const healthTone: "green" | "yellow" | "red" =
-    monthlyProfit < 0 || problemsCount > 0 ? "red" : turnoverSummary.watchCount > 0 || turnoverSummary.stuckCount > 0 ? "yellow" : "green"
+    periodProfit < 0 || problemsCount > 0 ? "red" : turnoverSummary.watchCount > 0 || turnoverSummary.stuckCount > 0 ? "yellow" : "green"
   const healthLabel =
     healthTone === "red" ? "Atenção" : healthTone === "yellow" ? "Monitorar" : "Operação saudável"
   const topCategory = categoryData[0]
@@ -720,6 +830,52 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6 animate-fade-in">
+      <section className="rounded-2xl border border-gray-100 bg-card p-4 shadow-sm sm:p-5">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-royal-100">
+              <CalendarDays className="h-5 w-5 text-royal-500" />
+            </div>
+            <div className="min-w-0">
+              <h2 className="font-syne text-lg font-semibold tracking-normal text-navy-900">Indicadores comerciais</h2>
+              <p className="mt-1 text-sm leading-relaxed text-gray-500">
+                Filtra vendas, lucro e margem. Capital em estoque, giro e gráficos seguem a visão operacional atual.
+              </p>
+              <Badge variant="blue" className="mt-3">
+                {selectedPeriodLabel}
+              </Badge>
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[620px]">
+            <Select
+              label="Período"
+              value={periodPreset}
+              onChange={(event) => handlePeriodPresetChange(event.target.value as DashboardPeriodPreset)}
+              options={DASHBOARD_PERIOD_OPTIONS}
+            />
+            <Input
+              label="De"
+              type="date"
+              value={periodStart}
+              onChange={(event) => {
+                setPeriodPreset("custom")
+                setPeriodStart(event.target.value)
+              }}
+            />
+            <Input
+              label="Até"
+              type="date"
+              value={periodEnd}
+              onChange={(event) => {
+                setPeriodPreset("custom")
+                setPeriodEnd(event.target.value)
+              }}
+            />
+          </div>
+        </div>
+      </section>
+
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_1fr]">
         <div className="overflow-hidden rounded-2xl border border-gray-100 bg-gradient-to-br from-navy-950 via-navy-900 to-navy-800 text-white shadow-sm">
           <div className="flex flex-col gap-4 p-5 sm:p-6 lg:flex-row lg:items-start lg:justify-between">
@@ -738,8 +894,8 @@ export default function DashboardPage() {
             <div className="grid grid-cols-2 gap-3 sm:min-w-[360px]">
               <div className="rounded-2xl bg-white/10 p-4">
                 <p className="text-xs font-bold uppercase tracking-wider text-white/45">Resultado</p>
-                <p className="mt-2 text-2xl font-semibold tracking-normal">{formatBRL(monthlyProfit)}</p>
-                <p className="mt-1 text-xs text-white/55">{avgMargin}% margem no mês</p>
+                <p className="mt-2 text-2xl font-semibold tracking-normal">{formatBRL(periodProfit)}</p>
+                <p className="mt-1 text-xs text-white/55">{periodAvgMargin}% margem no período</p>
               </div>
               <div className="rounded-2xl bg-white/10 p-4">
                 <p className="text-xs font-bold uppercase tracking-wider text-white/45">Estoque</p>
@@ -768,22 +924,22 @@ export default function DashboardPage() {
           />
           <DashboardMetricCard
             title="Vendas"
-            value={formatBRL(monthlySales)}
-            subtitle="faturamento do mês"
+            value={formatBRL(periodSales)}
+            subtitle="faturamento no período"
             icon={ShoppingCart}
             tone="green"
           />
           <DashboardMetricCard
             title="Lucro"
-            value={formatBRL(monthlyProfit)}
-            subtitle="resultado das vendas"
+            value={formatBRL(periodProfit)}
+            subtitle="resultado no período"
             icon={TrendingUp}
-            tone={monthlyProfit >= 0 ? "green" : "red"}
+            tone={periodProfit >= 0 ? "green" : "red"}
           />
           <DashboardMetricCard
             title="Margem"
-            value={`${avgMargin}%`}
-            subtitle="média no mês"
+            value={`${periodAvgMargin}%`}
+            subtitle="média no período"
             icon={Percent}
             tone="yellow"
           />
@@ -935,7 +1091,7 @@ export default function DashboardPage() {
         title="Performance comercial"
         description="Faturamento recente e concentração de categorias vendidas."
         icon={BarChart3}
-        action={<Badge variant={monthlySales > 0 ? "green" : "gray"}>{monthlySales > 0 ? "Com vendas" : "Sem vendas"}</Badge>}
+        action={<Badge variant={chartHasSales ? "green" : "gray"}>{chartHasSales ? "Com vendas" : "Sem vendas"}</Badge>}
       >
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.1fr_0.9fr]">
           <div className="rounded-2xl border border-gray-100 bg-white p-4">

@@ -12,7 +12,6 @@ import { paymentMethodSummary, salePaymentStatusSummary, type SalePayment } from
 import { buildPublicPurchaseUrl, buildPurchaseCode, getFirstName, normalizePin, verifiedPurchaseLabelText, type VerifiedPurchaseCustomerLabelData } from "@/lib/label-utils"
 import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
 import { calculateSaleEconomics, estimateRiskReserve } from "@/lib/sale-economics"
-import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 import { CHECKLIST_TEMPLATES } from "@/lib/constants"
 import { generateWarrantyPDF as generateWarrantyTermDocument, generateReceiptPDF, type SaleDocumentData, type ReceiptLineItem } from "@/lib/sale-documents"
 import jsPDF from "jspdf"
@@ -77,6 +76,17 @@ const packagingLabel = (type?: string | null, notes?: string | null) => {
 const auditField = (data: unknown, key: string) => {
   if (!data || typeof data !== "object") return undefined
   return (data as Record<string, unknown>)[key]
+}
+
+const saleStatusMeta = (status?: string | null) => {
+  switch (status || "completed") {
+    case "reserved":
+      return { label: "Pendente de pagamento", badge: "yellow" as const }
+    case "cancelled":
+      return { label: "Cancelada", badge: "red" as const }
+    default:
+      return { label: "Venda concluída", badge: "green" as const }
+  }
 }
 
 export default function SaleDetailPage() {
@@ -276,7 +286,11 @@ export default function SaleDetailPage() {
     fallback: "Aparelho recebido",
   }) : ""
   const tradeInGrade = tradeInInventory?.grade || tradeInData?.grade || null
-  const isCompletedSale = (sale?.sale_status || "completed") === "completed"
+  const saleStatus = sale?.sale_status || "completed"
+  const isCompletedSale = saleStatus === "completed"
+  const isReservedSale = saleStatus === "reserved"
+  const isCancelledSale = saleStatus === "cancelled"
+  const statusMeta = saleStatusMeta(saleStatus)
   const publicPurchaseUrl = sale?.public_access_token
     ? buildPublicPurchaseUrl(sale.public_access_token)
     : ""
@@ -375,6 +389,10 @@ export default function SaleDetailPage() {
   }
 
   const handleDownloadWarrantyTermPDF = async () => {
+    if (!isCompletedSale) {
+      toast({ title: "Garantia disponível apenas após concluir a venda", type: "error" })
+      return
+    }
     setGenerating("warranty")
     try {
       const catalog = product?.catalog || {}
@@ -415,6 +433,10 @@ export default function SaleDetailPage() {
 
   const handleDownloadReceiptPDF = async () => {
     if (generating) return
+    if (!isCompletedSale) {
+      toast({ title: "Recibo final disponível apenas após concluir a venda", type: "error" })
+      return
+    }
 
     setGenerating("receipt")
     try {
@@ -496,6 +518,10 @@ export default function SaleDetailPage() {
   /** Generate warranty PDF for a specific item (main product or additional) */
   const handleDownloadItemWarrantyPDF = async (itemProduct: any, itemName: string, warrantyMonths: number) => {
     if (generating) return
+    if (!isCompletedSale) {
+      toast({ title: "Garantia disponível apenas após concluir a venda", type: "error" })
+      return
+    }
 
     setGenerating(`warranty-${itemProduct?.id || itemName}`)
     try {
@@ -915,6 +941,7 @@ export default function SaleDetailPage() {
     setIsSubmitting(true)
     try {
       const price = parseFloat(newItemSalePrice) || 0
+      const chargedPrice = newItemType === "upsell" ? price : 0
       const cost = parseFloat(newItemCost) || 0
       let finalName = newItemName
 
@@ -930,7 +957,7 @@ export default function SaleDetailPage() {
         type: newItemType,
         name: finalName,
         cost_price: cost,
-        sale_price: price
+        sale_price: chargedPrice
       }).select("*, inventory:product_id(id, imei, imei2, serial_number, grade, catalog:catalog_id(*))").single()
 
       if (error) throw error
@@ -939,13 +966,13 @@ export default function SaleDetailPage() {
         await (supabase.from("inventory") as any).update({ status: "sold" }).eq("id", selectedInventoryItemId)
       }
 
-      const newTotal = Number(sale.sale_price || 0) + price
+      const newTotal = Number(sale.sale_price || 0) + chargedPrice
       await (supabase.from("sales") as any).update({ sale_price: newTotal }).eq("id", id)
       setSale({ ...sale, sale_price: newTotal })
       setAdditionalItems([...additionalItems, newItem])
 
       const imeiLog = newItem.inventory?.imei || newItem.inventory?.serial_number
-      await logAudit("ADD_ITEM", null, { item: finalName, price, type: newItemType, imei: imeiLog })
+      await logAudit("ADD_ITEM", null, { item: finalName, price: chargedPrice, realPrice: price, type: newItemType, imei: imeiLog })
 
       setNewItemName("")
       setSelectedInventoryItemId("")
@@ -970,7 +997,8 @@ export default function SaleDetailPage() {
         await (supabase.from("inventory") as any).update({ status: "in_stock" }).eq("id", item.product_id)
       }
 
-      const newTotal = Number(sale.sale_price || 0) - (Number(item.sale_price) || 0)
+      const itemRevenue = item.type === "upsell" ? Number(item.sale_price || 0) : 0
+      const newTotal = Number(sale.sale_price || 0) - itemRevenue
       await (supabase.from("sales") as any).update({ sale_price: newTotal }).eq("id", id)
 
       setSale({ ...sale, sale_price: newTotal })
@@ -988,84 +1016,15 @@ export default function SaleDetailPage() {
   const handleDeleteSale = async () => {
     setIsSubmitting(true)
     try {
-      const { data: { user } } = await supabase.auth.getUser()
-      const paymentIds = salePayments.map((payment) => payment.id).filter(Boolean)
-      const { data: saleTransactionsBySale, error: saleTxError } = await (supabase.from("transactions") as any)
-        .select("id, status")
-        .eq("source_type", "sale")
-        .eq("source_id", id)
-        .neq("status", "cancelled")
-      if (saleTxError) throw saleTxError
-
-      const { data: saleTransactionsByPayment, error: paymentTxError } = paymentIds.length > 0
-        ? await (supabase.from("transactions") as any)
-          .select("id, status")
-          .eq("source_type", "sale_payment")
-          .in("source_id", paymentIds)
-          .neq("status", "cancelled")
-        : { data: [], error: null }
-      if (paymentTxError) throw paymentTxError
-
-      const saleTransactions = Array.from(
-        new Map(
-          [...(saleTransactionsBySale || []), ...(saleTransactionsByPayment || [])]
-            .map((transaction: any) => [transaction.id, transaction])
-        ).values()
-      )
-
-      if ((saleTransactions || []).length > 0) {
-        const { error } = await (supabase.from("transactions") as any)
-          .update({ status: "cancelled", account_id: null, reconciled_at: null })
-          .in("id", (saleTransactions || []).map((transaction: any) => transaction.id))
-          .neq("status", "cancelled")
-        if (error) throw error
+      const response = await fetch(`/api/sales/${id}/reservation`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "cancel" }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error?.message || "Não foi possível cancelar a venda com segurança.")
       }
-
-      if (salePayments.length > 0) {
-        const { error } = await (supabase.from("sale_payments") as any)
-          .update({ status: "cancelled" })
-          .eq("sale_id", id)
-          .neq("status", "cancelled")
-        if (error) throw error
-      }
-
-      for (const transaction of saleTransactions || []) {
-        await requestSyncTransactionMovement(String(transaction.id), {
-          createdBy: user?.id ?? null,
-        })
-      }
-
-      // Revert main product inventory
-      if (sale.inventory_id) {
-        const { error } = await (supabase.from("inventory") as any)
-          .update({ status: "in_stock" })
-          .eq("id", sale.inventory_id)
-        if (error) throw error
-      }
-
-      // Revert additional items
-      for (const item of additionalItems) {
-        if (item.product_id) {
-          const { error } = await (supabase.from("inventory") as any)
-            .update({ status: "in_stock" })
-            .eq("id", item.product_id)
-          if (error) throw error
-        }
-      }
-
-      const { error: saleError } = await (supabase.from("sales") as any)
-        .update({ sale_status: "cancelled" })
-        .eq("id", id)
-      if (saleError) throw saleError
-
-      const { error: warrantyError } = await supabase
-        .from("warranties")
-        .update({ status: "voided" })
-        .eq("sale_id", id)
-        .neq("status", "voided")
-      if (warrantyError) throw warrantyError
-
-      await logAudit("updated", { sale_status: sale.sale_status || "completed" }, { sale_status: "cancelled" })
 
       toast({ title: "Venda cancelada com segurança", description: "Histórico preservado, garantias anuladas e recebimentos conciliados estornados quando necessário.", type: "success" })
       router.replace("/vendas")
@@ -1104,15 +1063,30 @@ export default function SaleDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Badge variant="green">Concluída</Badge>
+          <Badge variant={statusMeta.badge}>{statusMeta.label}</Badge>
           <Button variant="outline" size="sm" onClick={openEditModal} className="gap-2 shrink-0">
             <Edit className="w-4 h-4" /> <span className="hidden sm:inline">Editar</span>
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setIsDeleteModalOpen(true)} className="text-danger-500 border-danger-200 hover:bg-danger-50 gap-2 shrink-0">
+          <Button variant="outline" size="sm" onClick={() => setIsDeleteModalOpen(true)} disabled={isCancelledSale} className="text-danger-500 border-danger-200 hover:bg-danger-50 gap-2 shrink-0">
             <Trash className="w-4 h-4" /> <span className="hidden sm:inline">Excluir</span>
           </Button>
         </div>
       </div>
+
+      {!isCompletedSale && (
+        <div className={`rounded-2xl border p-4 text-sm ${
+          isReservedSale
+            ? "border-amber-200 bg-amber-50 text-amber-900"
+            : "border-red-100 bg-red-50 text-red-900"
+        }`}>
+          <p className="font-bold">{isReservedSale ? "Reserva pendente de pagamento" : "Venda cancelada"}</p>
+          <p className="mt-1">
+            {isReservedSale
+              ? "Documentos finais, etiqueta do cliente, garantia definitiva e lucro realizado ficam bloqueados até o pagamento ser recebido."
+              : "Esta venda não deve gerar documentos finais, garantia ativa ou lucro realizado."}
+          </p>
+        </div>
+      )}
 
       {/* ── Resumo Financeiro ── */}
       <div className="bg-gradient-to-br from-navy-900 to-royal-700 rounded-2xl p-4 sm:p-6 shadow-lg text-white">
@@ -1152,14 +1126,14 @@ export default function SaleDetailPage() {
             <p className="text-xs text-white/60 mt-0.5">Caixa líquido após trade-in/taxa</p>
           </div>
           <div>
-            <p className="text-xs text-white/60 mb-0.5">Lucro real</p>
+            <p className="text-xs text-white/60 mb-0.5">{isCompletedSale ? "Lucro real" : "Lucro previsto"}</p>
             <p className={`text-xl font-bold ${saleEconomics.grossProfit >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
               {saleEconomics.grossProfit >= 0 ? '+' : ''}{formatBRL(saleEconomics.grossProfit)}
             </p>
             <p className="text-xs text-white/60 mt-0.5">Custo total {formatBRL(saleEconomics.costTotal)}</p>
           </div>
           <div>
-            <p className="text-xs text-white/60 mb-0.5">Margem real</p>
+            <p className="text-xs text-white/60 mb-0.5">{isCompletedSale ? "Margem real" : "Margem prevista"}</p>
             <p className={`text-xl font-bold ${saleEconomics.realMarginPct >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
               {saleEconomics.realMarginPct.toFixed(1)}%
             </p>
@@ -1188,7 +1162,9 @@ export default function SaleDetailPage() {
               </div>
             </div>
             <p className="mt-2 text-xs text-white/60">
-              O trade-in entra como bem recebido no estoque e reduz o valor em dinheiro que o cliente precisa pagar nesta venda.
+              {isReservedSale
+                ? "O trade-in recebido fica pendente e não entra como estoque livre até a conclusão financeira."
+                : "O trade-in entra como bem recebido no estoque e reduz o valor em dinheiro que o cliente precisa pagar nesta venda."}
             </p>
           </div>
         )}
@@ -1700,6 +1676,8 @@ export default function SaleDetailPage() {
       )}
 
 
+      {isCompletedSale ? (
+        <>
       {/* ── Seção A: Documentos da Venda ── */}
       <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
         <div className="flex items-center gap-2 mb-4">
@@ -1864,6 +1842,24 @@ export default function SaleDetailPage() {
           })}
         </div>
       </div>
+        </>
+      ) : (
+        <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 sm:p-6">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+              <FileText className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="font-display font-bold text-navy-900 font-syne">Documentos finais indisponíveis</h3>
+              <p className="mt-1 text-sm text-amber-900">
+                {isReservedSale
+                  ? "Recibo final, garantia por produto e etiqueta do cliente serão liberados quando a reserva for concluída."
+                  : "Venda cancelada não gera recibo final, garantia por produto ou etiqueta do cliente."}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* History Section */}
       <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
@@ -2203,8 +2199,19 @@ export default function SaleDetailPage() {
 
                   <div className="grid grid-cols-2 gap-3">
                     <Input label="Custo (R$)" type="number" value={newItemCost} onChange={(e) => setNewItemCost(e.target.value)} disabled={!!selectedInventoryItemId} />
-                    <Input label="Valor Venda (R$)" type="number" value={newItemSalePrice} onChange={(e) => setNewItemSalePrice(e.target.value)} />
+                    <Input
+                      label={newItemType === "free" ? "Valor cobrado (R$)" : "Valor venda (R$)"}
+                      type="number"
+                      value={newItemType === "free" ? "0" : newItemSalePrice}
+                      onChange={(e) => setNewItemSalePrice(e.target.value)}
+                      disabled={newItemType === "free"}
+                    />
                   </div>
+                  {newItemType === "free" && (
+                    <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
+                      Brinde sai por R$ 0,00: não altera o total da venda, mas o custo reduz o lucro.
+                    </p>
+                  )}
 
                   <div>
                     <label className="block text-xs font-medium text-navy-900 mb-1">Tipo</label>
@@ -2231,11 +2238,15 @@ export default function SaleDetailPage() {
             <div className="w-12 h-12 rounded-full bg-danger-100 flex items-center justify-center mx-auto mb-4">
               <AlertTriangle className="w-6 h-6 text-danger-500" />
             </div>
-            <h2 className="text-xl font-bold text-navy-900 mb-2">Cancelar venda?</h2>
-            <p className="text-sm text-gray-500 mb-6">A venda será marcada como cancelada, o estoque será liberado e recebimentos já conciliados serão estornados no extrato. O histórico financeiro e os registros da venda serão preservados.</p>
+            <h2 className="text-xl font-bold text-navy-900 mb-2">{isReservedSale ? "Cancelar reserva?" : "Cancelar venda?"}</h2>
+            <p className="text-sm text-gray-500 mb-6">
+              {isReservedSale
+                ? "A reserva será marcada como cancelada, o estoque principal será liberado e recebíveis pendentes serão cancelados. Trade-in já recebido fica preservado para decisão operacional."
+                : "A venda será marcada como cancelada, o estoque será liberado e recebimentos já conciliados serão estornados no extrato. O histórico financeiro e os registros da venda serão preservados."}
+            </p>
             <div className="flex gap-3">
               <Button variant="outline" className="flex-1" onClick={() => setIsDeleteModalOpen(false)}>Cancelar</Button>
-              <Button variant="primary" className="flex-1 bg-danger-500 border-danger-500 hover:bg-danger-600" onClick={handleDeleteSale} isLoading={isSubmitting}>Cancelar venda</Button>
+              <Button variant="primary" className="flex-1 bg-danger-500 border-danger-500 hover:bg-danger-600" onClick={handleDeleteSale} isLoading={isSubmitting}>{isReservedSale ? "Cancelar reserva" : "Cancelar venda"}</Button>
             </div>
           </div>
         </div>

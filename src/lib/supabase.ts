@@ -1,9 +1,25 @@
-const DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
-const DEFAULT_USER_EMAIL = "arrudanobre@gmail.com"
-
 type Filter = { op: string; column?: string; value: unknown }
 type Order = { column: string; ascending?: boolean }
 type RailwayResult = { data: unknown; error: { message: string } | null }
+
+async function fetchAuthContext() {
+  try {
+    const response = await fetch("/api/auth/context", {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    })
+    const result = await response.json()
+    if (!response.ok || result.error) {
+      return { data: { user: null }, error: result.error || { message: "Sessão não autorizada" } }
+    }
+    return result
+  } catch (error) {
+    return {
+      data: { user: null },
+      error: { message: error instanceof Error ? error.message : "Erro ao buscar usuário autenticado" },
+    }
+  }
+}
 
 class RailwayQuery {
   private action = "select"
@@ -171,10 +187,14 @@ const railwaySupabase = {
   },
   auth: {
     async getSession() {
-      return { data: { session: { user: { id: DEFAULT_USER_ID, email: DEFAULT_USER_EMAIL } } }, error: null }
+      const result = await fetchAuthContext()
+      return {
+        data: { session: result.data?.user ? { user: result.data.user } : null },
+        error: result.error,
+      }
     },
     async getUser() {
-      return { data: { user: { id: DEFAULT_USER_ID, email: DEFAULT_USER_EMAIL } }, error: null }
+      return fetchAuthContext()
     },
     async signInWithOtp() {
       return { data: null, error: null }
@@ -183,7 +203,9 @@ const railwaySupabase = {
       return { data: null, error: null }
     },
     onAuthStateChange(callback: (event: string, session: unknown) => void) {
-      setTimeout(() => callback("SIGNED_IN", { user: { id: DEFAULT_USER_ID, email: DEFAULT_USER_EMAIL } }), 0)
+      fetchAuthContext().then((result) => {
+        callback(result.data?.user ? "SIGNED_IN" : "SIGNED_OUT", result.data?.user ? { user: result.data.user } : null)
+      })
       return { data: { subscription: { unsubscribe() {} } } }
     },
   },

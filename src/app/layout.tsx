@@ -52,12 +52,12 @@ const clerkLocalization = {
 }
 
 export const metadata: Metadata = {
-  title: "NOBRETECH STORE — Sistema de Gestão",
+  title: "Nobretech Store",
   description: "Gestão completa de dispositivos Apple e Garmin seminovos",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "NOBRETECH",
+    title: "Nobretech Store",
   },
 }
 
