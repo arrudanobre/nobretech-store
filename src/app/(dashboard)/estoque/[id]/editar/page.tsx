@@ -7,8 +7,10 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Select } from "@/components/ui/select"
 import { useToast } from "@/components/ui/toaster"
+import { ProductImageManager } from "@/components/products/product-image-manager"
 import { supabase } from "@/lib/supabase"
 import { CATEGORIES, GRADES, PRODUCT_CATALOG } from "@/lib/constants"
+import { fetchProductImageMap, type ProductImageRecord } from "@/lib/product-images"
 import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 import {
   ArrowLeft,
@@ -122,6 +124,7 @@ export default function EditProductPage() {
   const [catalogId, setCatalogId] = useState<string | null>(null)
   const [linkedSale, setLinkedSale] = useState<LinkedSaleInfo | null>(null)
   const [linkedPurchase, setLinkedPurchase] = useState<LinkedPurchaseInfo | null>(null)
+  const [productImage, setProductImage] = useState<ProductImageRecord | null>(null)
   const [itemOrigin, setItemOrigin] = useState("purchase")
   const [sourceSale, setSourceSale] = useState<SourceSaleInfo | null>(null)
   const [saleDate, setSaleDate] = useState("")
@@ -215,6 +218,8 @@ export default function EditProductPage() {
       }
 
       const item = items[0]
+      const imageMap: Record<string, ProductImageRecord | null> = await fetchProductImageMap([item.id]).catch(() => ({}))
+      setProductImage(imageMap[item.id] || null)
 
       setCatalogId(item.catalog_id || null)
       setNotes(item.notes || "")
@@ -924,6 +929,16 @@ export default function EditProductPage() {
         </div>
 
         <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
+          <ProductImageManager
+            productId={productId}
+            image={productImage}
+            brand={["iphone", "ipad", "applewatch", "airpods", "macbook"].includes(category) ? "Apple" : category}
+            category={category}
+            model={selectedModel?.name || generatedCatalogName || catalogName}
+            color={formData.color || null}
+            onImageChange={setProductImage}
+          />
+
           <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
             <div className="bg-navy-900 p-5 text-white">
               <div className="mb-4 flex items-start justify-between gap-3">

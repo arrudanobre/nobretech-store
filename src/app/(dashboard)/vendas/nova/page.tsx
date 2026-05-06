@@ -6,7 +6,9 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
+import { ProductAssetImage } from "@/components/products/product-asset-image"
 import { calculatePaymentPrice, formatBRL, maskCPF, formatPhone, validateCPF, getProductName, getAdditionalItemDisplayName, calculateDeviceValue, formatTradeInSuggestedRange, getTradeInSummaryStatus, getComputedInventoryStatus, normalizePaymentFeePct, todayISO, addDaysISO, formatPaymentMethod, formatDate } from "@/lib/helpers"
+import { fetchProductImageMap, type ProductImageRecord } from "@/lib/product-images"
 import { atualizarStatusEstoque } from "@/services/vendaService"
 import { PAYMENT_METHODS, CATEGORIES, PRODUCT_CATALOG, GRADES, SIDEPAY_FEE_PCTS } from "@/lib/constants"
 import { estimateRiskReserve } from "@/lib/sale-economics"
@@ -40,6 +42,12 @@ import {
 type InventoryProduct = {
   id: string
   name: string
+  brand?: string | null
+  category?: string | null
+  model?: string | null
+  storage?: string | null
+  color?: string | null
+  productImage?: ProductImageRecord | null
   imei: string
   imei2?: string
   serial_number?: string
@@ -96,6 +104,11 @@ type SupplierPrice = {
 type AdditionalSaleItem = {
   itemId: string
   name: string
+  brand?: string | null
+  category?: string | null
+  model?: string | null
+  color?: string | null
+  productImage?: ProductImageRecord | null
   cost: number
   suggested: number
   type: "upsell" | "free"
@@ -739,16 +752,23 @@ function NewSaleContent() {
       try {
         const { data, error } = await supabase
           .from("inventory")
-          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, grade, status, quantity, condition_notes, notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color)")
+          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, grade, status, quantity, condition_notes, notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color, brand, category)")
           .in("status", ["active", "in_stock"] as any)
           .order("created_at", { ascending: false })
 
         if (error) throw error
 
+        const imageMap: Record<string, ProductImageRecord | null> = await fetchProductImageMap((data || []).map((item: any) => item.id)).catch(() => ({}))
         const products = (data || []).map((item: any) => {
           return {
             id: item.id,
             name: getProductName(item),
+            brand: item.catalog?.brand || null,
+            category: item.catalog?.category || null,
+            model: item.catalog?.model || null,
+            storage: item.catalog?.storage || null,
+            color: item.catalog?.color || null,
+            productImage: imageMap[item.id] || null,
             imei: item.imei || "",
             imei2: item.imei2 || "",
             serial_number: item.serial_number || "",
@@ -795,7 +815,7 @@ function NewSaleContent() {
     const fetchProduct = async () => {
       try {
         const { data: items, error } = await (supabase.from("inventory") as any)
-          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, grade, status, quantity, condition_notes, notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color)")
+          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, grade, status, quantity, condition_notes, notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color, brand, category)")
           .eq("id", preselectId)
           .single()
 
@@ -809,9 +829,15 @@ function NewSaleContent() {
           return
         }
 
-        const product = {
+        const product: InventoryProduct = {
           id: items.id,
           name: getProductName(items),
+          brand: items.catalog?.brand || null,
+          category: items.catalog?.category || null,
+          model: items.catalog?.model || null,
+          storage: items.catalog?.storage || null,
+          color: items.catalog?.color || null,
+          productImage: null,
           imei: items.imei || "",
           imei2: items.imei2 || "",
           serial_number: items.serial_number || "",
@@ -825,6 +851,8 @@ function NewSaleContent() {
           supplier_name: items.supplier_name || null,
           quantity: Math.max(1, Number(items.quantity || 1)),
         }
+        const imageMap: Record<string, ProductImageRecord | null> = await fetchProductImageMap([product.id]).catch(() => ({}))
+        product.productImage = imageMap[product.id] || null
         const initialPrice = product.suggested.toString()
         setSelectedProduct(product)
         setSalePrice(initialPrice)
@@ -1008,6 +1036,11 @@ function NewSaleContent() {
         {
           itemId: item.id,
           name: item.name,
+          brand: item.brand || null,
+          category: item.category || null,
+          model: item.model || null,
+          color: item.color || null,
+          productImage: item.productImage || null,
           cost: item.cost,
           suggested: item.suggested,
           type: "upsell",
@@ -1891,6 +1924,11 @@ function NewSaleContent() {
     const rows: Array<{
       id: string
       name: string
+      brand?: string | null
+      category?: string | null
+      model?: string | null
+      color?: string | null
+      productImage?: ProductImageRecord | null
       identity: string
       type: "Principal" | "Upsell" | "Brinde" | "Acessório"
       quantity: number
@@ -1908,6 +1946,11 @@ function NewSaleContent() {
       rows.push({
         id: selectedProduct.id,
         name: selectedProduct.name,
+        brand: selectedProduct.brand,
+        category: selectedProduct.category,
+        model: selectedProduct.model,
+        color: selectedProduct.color,
+        productImage: selectedProduct.productImage,
         identity: productIdentity || "Sem IMEI/serial informado",
         type: "Principal",
         quantity,
@@ -1936,6 +1979,11 @@ function NewSaleContent() {
       rows.push({
         id: additionalItem.itemId,
         name: getAdditionalItemDisplayName(additionalItem.name),
+        brand: additionalItem.brand,
+        category: additionalItem.category,
+        model: additionalItem.model,
+        color: additionalItem.color,
+        productImage: additionalItem.productImage,
         identity: [additionalItem.imei ? `IMEI ${additionalItem.imei}` : null, additionalItem.serialNumber ? `Serial ${additionalItem.serialNumber}` : null]
           .filter(Boolean)
           .join(" · ") || "Item vinculado à venda",
@@ -2128,16 +2176,28 @@ function NewSaleContent() {
             {selectedProduct && (
               <div className="mb-3 rounded-2xl border border-royal-500/20 bg-royal-100/20 p-4">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-royal-700">Selecionado</p>
-                    <h3 className="truncate text-lg font-bold text-navy-900">{selectedProduct.name}</h3>
-                    <p className="text-sm text-gray-500">{productIdentity || "Sem IMEI/serial informado"}</p>
-                    <p className="mt-1 text-xs font-semibold text-royal-700">
-                      {maxAvailableQty} unidade(s) disponível(is) no estoque
-                    </p>
-                    {selectedProduct?.type === "supplier" && selectedProduct.supplier_name && (
-                      <p className="mt-1 text-xs text-gray-500">Fornecedor: {selectedProduct.supplier_name}</p>
-                    )}
+                  <div className="flex min-w-0 items-center gap-3">
+                    <ProductAssetImage
+                      brand={selectedProduct.brand}
+                      category={selectedProduct.category}
+                      model={selectedProduct.model || selectedProduct.name}
+                      color={selectedProduct.color}
+                      uploadedImageUrl={selectedProduct.productImage?.image_url || null}
+                      uploadedThumbnailUrl={selectedProduct.productImage?.thumbnail_url || null}
+                      size={68}
+                      className="bg-white shadow-sm"
+                    />
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-royal-700">Selecionado</p>
+                      <h3 className="truncate text-lg font-bold text-navy-900">{selectedProduct.name}</h3>
+                      <p className="text-sm text-gray-500">{productIdentity || "Sem IMEI/serial informado"}</p>
+                      <p className="mt-1 text-xs font-semibold text-royal-700">
+                        {maxAvailableQty} unidade(s) disponível(is) no estoque
+                      </p>
+                      {selectedProduct?.type === "supplier" && selectedProduct.supplier_name && (
+                        <p className="mt-1 text-xs text-gray-500">Fornecedor: {selectedProduct.supplier_name}</p>
+                      )}
+                    </div>
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="text-right">
@@ -2211,11 +2271,23 @@ function NewSaleContent() {
                     }`}
                   >
                     <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-navy-900">{product.name}</p>
-                        <p className="mt-0.5 truncate text-xs text-gray-500">
-                          {[product.imei ? `IMEI ${product.imei}` : null, product.serial_number ? `Serial ${product.serial_number}` : null, product.battery ? `${product.battery}% bateria` : null].filter(Boolean).join(" · ") || "Sem identificação"}
-                        </p>
+                      <div className="flex min-w-0 items-center gap-3">
+                        <ProductAssetImage
+                          brand={product.brand}
+                          category={product.category}
+                          model={product.model || product.name}
+                          color={product.color}
+                          uploadedImageUrl={product.productImage?.image_url || null}
+                          uploadedThumbnailUrl={product.productImage?.thumbnail_url || null}
+                          size={56}
+                          className="bg-gray-50"
+                        />
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-navy-900">{product.name}</p>
+                          <p className="mt-0.5 truncate text-xs text-gray-500">
+                            {[product.imei ? `IMEI ${product.imei}` : null, product.serial_number ? `Serial ${product.serial_number}` : null, product.battery ? `${product.battery}% bateria` : null].filter(Boolean).join(" · ") || "Sem identificação"}
+                          </p>
+                        </div>
                       </div>
                       <Badge variant={classifyAdditionalItem(product) === "accessory" ? "blue" : "gray"}>
                         {classifyAdditionalItem(product) === "accessory" ? "Acessório" : "Aparelho"}
@@ -2318,11 +2390,23 @@ function NewSaleContent() {
                         className="rounded-xl border border-gray-100 bg-white p-3 text-left transition-all hover:border-royal-500 hover:ring-2 hover:ring-royal-500/10"
                       >
                         <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-navy-900">{getAdditionalItemDisplayName(item.name)}</p>
-                            <p className="truncate text-xs text-gray-500">
-                              {item.imei || item.serial_number || "Item de estoque"} · {getAvailableQty(item)} disp.
-                            </p>
+                          <div className="flex min-w-0 items-center gap-3">
+                            <ProductAssetImage
+                              brand={item.brand}
+                              category={item.category}
+                              model={item.model || item.name}
+                              color={item.color}
+                              uploadedImageUrl={item.productImage?.image_url || null}
+                              uploadedThumbnailUrl={item.productImage?.thumbnail_url || null}
+                              size={48}
+                              className="rounded-lg bg-gray-50"
+                            />
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-navy-900">{getAdditionalItemDisplayName(item.name)}</p>
+                              <p className="truncate text-xs text-gray-500">
+                                {item.imei || item.serial_number || "Item de estoque"} · {getAvailableQty(item)} disp.
+                              </p>
+                            </div>
                           </div>
                           <p className="shrink-0 text-sm font-bold text-navy-900">{formatBRL(item.suggested)}</p>
                         </div>
@@ -3077,9 +3161,16 @@ function NewSaleContent() {
                         <tr key={item.id} className="transition hover:bg-royal-100/20">
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-3">
-                              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-gray-100 bg-gray-50 text-gray-500">
-                                {item.type === "Brinde" ? <Gift className="h-4 w-4" /> : <Smartphone className="h-4 w-4" />}
-                              </div>
+                              <ProductAssetImage
+                                brand={item.brand}
+                                category={item.category}
+                                model={item.model || item.name}
+                                color={item.color}
+                                uploadedImageUrl={item.productImage?.image_url || null}
+                                uploadedThumbnailUrl={item.productImage?.thumbnail_url || null}
+                                size={48}
+                                className="rounded-xl bg-gray-50"
+                              />
                               <div className="min-w-0">
                                 <p className="truncate font-bold text-navy-900">{item.name}</p>
                                 <p className="truncate text-xs text-gray-500">{item.identity}</p>

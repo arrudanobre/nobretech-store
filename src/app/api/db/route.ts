@@ -28,6 +28,7 @@ const TABLES_WITH_COMPANY = new Set([
   "supplier_prices",
   "sales_additional_items",
   "sale_payments",
+  "product_images",
   "audit_logs",
   "transactions",
   "financial_account_movements",

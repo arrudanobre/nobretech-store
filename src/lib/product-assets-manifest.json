@@ -1,0 +1,344 @@
+[
+  {
+    "original": "Imagens iPhone/13/13 Azul.webp",
+    "model_slug": "iphone-13",
+    "file_name": "iphone-13-blue.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-13/iphone-13-blue.webp"
+  },
+  {
+    "original": "Imagens iPhone/13/13 Branco.webp",
+    "model_slug": "iphone-13",
+    "file_name": "iphone-13-starlight.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-13/iphone-13-starlight.webp"
+  },
+  {
+    "original": "Imagens iPhone/13/13 Preto.webp",
+    "model_slug": "iphone-13",
+    "file_name": "iphone-13-midnight.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-13/iphone-13-midnight.webp"
+  },
+  {
+    "original": "Imagens iPhone/13/13 Rosa.webp",
+    "model_slug": "iphone-13",
+    "file_name": "iphone-13-pink.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-13/iphone-13-pink.webp"
+  },
+  {
+    "original": "Imagens iPhone/13/13 Product Red.webp",
+    "model_slug": "iphone-13",
+    "file_name": "iphone-13-product-red.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-13/iphone-13-product-red.webp"
+  },
+  {
+    "original": "Imagens iPhone/13/13 Verde Oliva.webp",
+    "model_slug": "iphone-13",
+    "file_name": "iphone-13-green.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-13/iphone-13-green.webp"
+  },
+  {
+    "original": "Imagens iPhone/13/13 Pro/13 Pro Branco.webp",
+    "model_slug": "iphone-13-pro",
+    "file_name": "iphone-13-pro-silver.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-13-pro/iphone-13-pro-silver.webp"
+  },
+  {
+    "original": "Imagens iPhone/13/13 Pro/13 Pro Verde Alpino.webp",
+    "model_slug": "iphone-13-pro",
+    "file_name": "iphone-13-pro-alpine-green.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-13-pro/iphone-13-pro-alpine-green.webp"
+  },
+  {
+    "original": "Imagens iPhone/13/13 Pro/13 Pro Dourado.webp",
+    "model_slug": "iphone-13-pro",
+    "file_name": "iphone-13-pro-gold.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-13-pro/iphone-13-pro-gold.webp"
+  },
+  {
+    "original": "Imagens iPhone/13/13 Pro/13 Pro Grafite.webp",
+    "model_slug": "iphone-13-pro",
+    "file_name": "iphone-13-pro-graphite.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-13-pro/iphone-13-pro-graphite.webp"
+  },
+  {
+    "original": "Imagens iPhone/13/13 Pro/D_NQ_NP_2X_752210-MLA100016726835_122025-F.webp",
+    "model_slug": "iphone-13-pro",
+    "file_name": "iphone-13-pro-sierra-blue.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-13-pro/iphone-13-pro-sierra-blue.webp"
+  },
+  {
+    "original": "Imagens iPhone/13/13 Pro Max/13 Pro Max Azul Sierra.webp",
+    "model_slug": "iphone-13-pro-max",
+    "file_name": "iphone-13-pro-max-sierra-blue.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-13-pro-max/iphone-13-pro-max-sierra-blue.webp"
+  },
+  {
+    "original": "Imagens iPhone/13/13 Pro Max/13 Pro Max Dourado.webp",
+    "model_slug": "iphone-13-pro-max",
+    "file_name": "iphone-13-pro-max-gold.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-13-pro-max/iphone-13-pro-max-gold.webp"
+  },
+  {
+    "original": "Imagens iPhone/13/13 Pro Max/13 Pro Max Grafite.webp",
+    "model_slug": "iphone-13-pro-max",
+    "file_name": "iphone-13-pro-max-graphite.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-13-pro-max/iphone-13-pro-max-graphite.webp"
+  },
+  {
+    "original": "Imagens iPhone/13/13 Pro Max/13 Pro Max Prata.webp",
+    "model_slug": "iphone-13-pro-max",
+    "file_name": "iphone-13-pro-max-silver.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-13-pro-max/iphone-13-pro-max-silver.webp"
+  },
+  {
+    "original": "Imagens iPhone/13/13 Pro Max/13 Pro Max Verde.webp",
+    "model_slug": "iphone-13-pro-max",
+    "file_name": "iphone-13-pro-max-alpine-green.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-13-pro-max/iphone-13-pro-max-alpine-green.webp"
+  },
+  {
+    "original": "Imagens iPhone/14/14 Azul.webp",
+    "model_slug": "iphone-14",
+    "file_name": "iphone-14-blue.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-14/iphone-14-blue.webp"
+  },
+  {
+    "original": "Imagens iPhone/14/14 Estelar.webp",
+    "model_slug": "iphone-14",
+    "file_name": "iphone-14-starlight.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-14/iphone-14-starlight.webp"
+  },
+  {
+    "original": "Imagens iPhone/14/14 Meia Noite.webp",
+    "model_slug": "iphone-14",
+    "file_name": "iphone-14-midnight.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-14/iphone-14-midnight.webp"
+  },
+  {
+    "original": "Imagens iPhone/14/14 Product Red.webp",
+    "model_slug": "iphone-14",
+    "file_name": "iphone-14-product-red.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-14/iphone-14-product-red.webp"
+  },
+  {
+    "original": "Imagens iPhone/14/14 Roxo.webp",
+    "model_slug": "iphone-14",
+    "file_name": "iphone-14-purple.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-14/iphone-14-purple.webp"
+  },
+  {
+    "original": "Imagens iPhone/14/14 Pro/14 Pro Deep Purple.webp",
+    "model_slug": "iphone-14-pro",
+    "file_name": "iphone-14-pro-deep-purple.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-14-pro/iphone-14-pro-deep-purple.webp"
+  },
+  {
+    "original": "Imagens iPhone/14/14 Pro/14 Pro Dourado.webp",
+    "model_slug": "iphone-14-pro",
+    "file_name": "iphone-14-pro-gold.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-14-pro/iphone-14-pro-gold.webp"
+  },
+  {
+    "original": "Imagens iPhone/14/14 Pro/14 Pro Prateado.webp",
+    "model_slug": "iphone-14-pro",
+    "file_name": "iphone-14-pro-silver.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-14-pro/iphone-14-pro-silver.webp"
+  },
+  {
+    "original": "Imagens iPhone/14/14 Pro/14 Pro Preto Espacial.webp",
+    "model_slug": "iphone-14-pro",
+    "file_name": "iphone-14-pro-space-black.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-14-pro/iphone-14-pro-space-black.webp"
+  },
+  {
+    "original": "Imagens iPhone/15/15 Amarelo.webp",
+    "model_slug": "iphone-15",
+    "file_name": "iphone-15-yellow.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-15/iphone-15-yellow.webp"
+  },
+  {
+    "original": "Imagens iPhone/15/15 Azul.webp",
+    "model_slug": "iphone-15",
+    "file_name": "iphone-15-blue.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-15/iphone-15-blue.webp"
+  },
+  {
+    "original": "Imagens iPhone/15/15 Preto.webp",
+    "model_slug": "iphone-15",
+    "file_name": "iphone-15-black.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-15/iphone-15-black.webp"
+  },
+  {
+    "original": "Imagens iPhone/15/15 Rosa.webp",
+    "model_slug": "iphone-15",
+    "file_name": "iphone-15-pink.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-15/iphone-15-pink.webp"
+  },
+  {
+    "original": "Imagens iPhone/15/15 Pro/15 Pro Titanio Azul.webp",
+    "model_slug": "iphone-15-pro",
+    "file_name": "iphone-15-pro-blue-titanium.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-15-pro/iphone-15-pro-blue-titanium.webp"
+  },
+  {
+    "original": "Imagens iPhone/15/15 Pro/15 Pro Titanio Branco.webp",
+    "model_slug": "iphone-15-pro",
+    "file_name": "iphone-15-pro-white-titanium.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-15-pro/iphone-15-pro-white-titanium.webp"
+  },
+  {
+    "original": "Imagens iPhone/15/15 Pro/15 Pro Titanio Natural.webp",
+    "model_slug": "iphone-15-pro",
+    "file_name": "iphone-15-pro-natural-titanium.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-15-pro/iphone-15-pro-natural-titanium.webp"
+  },
+  {
+    "original": "Imagens iPhone/15/15 Pro/15 Pro Titanio Preto.webp",
+    "model_slug": "iphone-15-pro",
+    "file_name": "iphone-15-pro-black-titanium.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-15-pro/iphone-15-pro-black-titanium.webp"
+  },
+  {
+    "original": "Imagens iPhone/15/15 Pro Max/15 Pro Max Titanio Azul.webp",
+    "model_slug": "iphone-15-pro-max",
+    "file_name": "iphone-15-pro-max-blue-titanium.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-15-pro-max/iphone-15-pro-max-blue-titanium.webp"
+  },
+  {
+    "original": "Imagens iPhone/15/15 Pro Max/15 Pro Max Titanio Branco.webp",
+    "model_slug": "iphone-15-pro-max",
+    "file_name": "iphone-15-pro-max-white-titanium.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-15-pro-max/iphone-15-pro-max-white-titanium.webp"
+  },
+  {
+    "original": "Imagens iPhone/15/15 Pro Max/15 Pro Max Titanio Natural.webp",
+    "model_slug": "iphone-15-pro-max",
+    "file_name": "iphone-15-pro-max-natural-titanium.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-15-pro-max/iphone-15-pro-max-natural-titanium.webp"
+  },
+  {
+    "original": "Imagens iPhone/15/15 Pro Max/15 Pro Max Titanio Preto.webp",
+    "model_slug": "iphone-15-pro-max",
+    "file_name": "iphone-15-pro-max-black-titanium.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-15-pro-max/iphone-15-pro-max-black-titanium.webp"
+  },
+  {
+    "original": "Imagens iPhone/16/16 Branco.webp",
+    "model_slug": "iphone-16",
+    "file_name": "iphone-16-white.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-16/iphone-16-white.webp"
+  },
+  {
+    "original": "Imagens iPhone/16/16 Preto.webp",
+    "model_slug": "iphone-16",
+    "file_name": "iphone-16-black.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-16/iphone-16-black.webp"
+  },
+  {
+    "original": "Imagens iPhone/16/16 Rosa.webp",
+    "model_slug": "iphone-16",
+    "file_name": "iphone-16-pink.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-16/iphone-16-pink.webp"
+  },
+  {
+    "original": "Imagens iPhone/16/16 Ultramarine.webp",
+    "model_slug": "iphone-16",
+    "file_name": "iphone-16-ultramarine.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-16/iphone-16-ultramarine.webp"
+  },
+  {
+    "original": "Imagens iPhone/16/16 Verde-acinzentado.webp",
+    "model_slug": "iphone-16",
+    "file_name": "iphone-16-teal.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-16/iphone-16-teal.webp"
+  },
+  {
+    "original": "Imagens iPhone/16/16 Pro/16 Pro Titanio Branco.webp",
+    "model_slug": "iphone-16-pro",
+    "file_name": "iphone-16-pro-white-titanium.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-16-pro/iphone-16-pro-white-titanium.webp"
+  },
+  {
+    "original": "Imagens iPhone/16/16 Pro/16 Pro Titanio Deserto.webp",
+    "model_slug": "iphone-16-pro",
+    "file_name": "iphone-16-pro-desert-titanium.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-16-pro/iphone-16-pro-desert-titanium.webp"
+  },
+  {
+    "original": "Imagens iPhone/16/16 Pro/16 Pro Titanio Natural.webp",
+    "model_slug": "iphone-16-pro",
+    "file_name": "iphone-16-pro-natural-titanium.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-16-pro/iphone-16-pro-natural-titanium.webp"
+  },
+  {
+    "original": "Imagens iPhone/16/16 Pro/16 Pro Titanio Preto.webp",
+    "model_slug": "iphone-16-pro",
+    "file_name": "iphone-16-pro-black-titanium.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-16-pro/iphone-16-pro-black-titanium.webp"
+  },
+  {
+    "original": "Imagens iPhone/17/17 Azul Nevoa.webp",
+    "model_slug": "iphone-17",
+    "file_name": "iphone-17-mist-blue.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-17/iphone-17-mist-blue.webp"
+  },
+  {
+    "original": "Imagens iPhone/17/17 Branco.webp",
+    "model_slug": "iphone-17",
+    "file_name": "iphone-17-white.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-17/iphone-17-white.webp"
+  },
+  {
+    "original": "Imagens iPhone/17/17 Lavanda.webp",
+    "model_slug": "iphone-17",
+    "file_name": "iphone-17-lavender.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-17/iphone-17-lavender.webp"
+  },
+  {
+    "original": "Imagens iPhone/17/17 Preto.webp",
+    "model_slug": "iphone-17",
+    "file_name": "iphone-17-black.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-17/iphone-17-black.webp"
+  },
+  {
+    "original": "Imagens iPhone/17/17 Salvia.webp",
+    "model_slug": "iphone-17",
+    "file_name": "iphone-17-sage.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-17/iphone-17-sage.webp"
+  },
+  {
+    "original": "Imagens iPhone/17/17 Pro/17 Pro Cosmic Orange.webp",
+    "model_slug": "iphone-17-pro",
+    "file_name": "iphone-17-pro-cosmic-orange.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-17-pro/iphone-17-pro-cosmic-orange.webp"
+  },
+  {
+    "original": "Imagens iPhone/17/17 Pro/17 Pro Deep Blue.webp",
+    "model_slug": "iphone-17-pro",
+    "file_name": "iphone-17-pro-deep-blue.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-17-pro/iphone-17-pro-deep-blue.webp"
+  },
+  {
+    "original": "Imagens iPhone/17/17 Pro/17 Pro Silver.webp",
+    "model_slug": "iphone-17-pro",
+    "file_name": "iphone-17-pro-silver.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-17-pro/iphone-17-pro-silver.webp"
+  },
+  {
+    "original": "Imagens iPhone/17/17 Pro Max/17 Pro Max Cosmic Orange.webp",
+    "model_slug": "iphone-17-pro-max",
+    "file_name": "iphone-17-pro-max-cosmic-orange.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-17-pro-max/iphone-17-pro-max-cosmic-orange.webp"
+  },
+  {
+    "original": "Imagens iPhone/17/17 Pro Max/17 Pro Max Deep Blue.webp",
+    "model_slug": "iphone-17-pro-max",
+    "file_name": "iphone-17-pro-max-deep-blue.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-17-pro-max/iphone-17-pro-max-deep-blue.webp"
+  },
+  {
+    "original": "Imagens iPhone/17/17 Pro Max/17 Pro Max Silver.webp",
+    "model_slug": "iphone-17-pro-max",
+    "file_name": "iphone-17-pro-max-silver.webp",
+    "public_path": "/product-assets/apple/iphone/iphone-17-pro-max/iphone-17-pro-max-silver.webp"
+  }
+]

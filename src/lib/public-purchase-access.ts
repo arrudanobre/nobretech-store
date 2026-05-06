@@ -200,6 +200,12 @@ type PublicProblemRow = {
   resolved_date: string | Date | null
 }
 
+type PublicProductImageRow = {
+  product_id: string
+  image_url: string
+  thumbnail_url: string
+}
+
 type AdditionalSaleItemRow = {
   id: string
   product_id: string | null
@@ -523,6 +529,26 @@ async function getProblemsByInventoryId(saleId: string, inventoryIds: string[]) 
     byInventoryId.set(problem.inventory_id, list)
   }
   return byInventoryId
+}
+
+async function getPrimaryProductImagesByInventoryId(inventoryIds: string[]) {
+  if (inventoryIds.length === 0) return new Map<string, PublicProductImageRow>()
+
+  const result = await pool.query<PublicProductImageRow>(
+    `
+      SELECT DISTINCT ON (product_id)
+        product_id,
+        image_url,
+        thumbnail_url
+      FROM product_images
+      WHERE product_id = ANY($1::uuid[])
+        AND is_primary = true
+      ORDER BY product_id, created_at DESC
+    `,
+    [inventoryIds]
+  )
+
+  return new Map(result.rows.map((row) => [row.product_id, row]))
 }
 
 async function getSaleByToken(token: string) {
@@ -865,6 +891,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
     ...additionalItems.map((item) => item.product_id),
   ].filter((id): id is string => Boolean(id))
   const problemsByInventoryId = await getProblemsByInventoryId(row.id, inventoryIds)
+  const imagesByInventoryId = await getPrimaryProductImagesByInventoryId(inventoryIds)
   const deviceName = uniqueDeviceName(row.model, row.variant, row.storage)
   const { saleDate, warrantyStart, warrantyEnd } = warrantyPeriodFromSale(row)
   const settings = companySettings(row.company_settings)
@@ -895,6 +922,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
     amount: payment.amount,
   }))
   const principalIssues = row.inventory_id ? problemsByInventoryId.get(row.inventory_id) || [] : []
+  const principalImage = row.inventory_id ? imagesByInventoryId.get(row.inventory_id) : null
   const principalItem: PublicPurchaseItem = {
     id: "principal",
     type: "principal",
@@ -905,7 +933,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
     grade: row.grade || null,
     batteryHealth: row.battery_health === null || row.battery_health === undefined ? null : Number(row.battery_health),
     boxType: packagingLabel(row.packaging_type, row.packaging_notes),
-    photoUrl: firstPhoto(row.inventory_photos),
+    photoUrl: principalImage?.image_url || firstPhoto(row.inventory_photos),
     imei: maskTrailing(row.imei),
     serial: maskTrailing(row.serial_number),
     warrantyStart,
@@ -918,6 +946,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
     ...additionalItems.map((item, index) => {
       const itemType = normalizePublicItemType(item.type)
       const issues = item.product_id ? problemsByInventoryId.get(item.product_id) || [] : []
+      const itemImage = item.product_id ? imagesByInventoryId.get(item.product_id) : null
       return {
         id: `item_${index + 1}`,
         type: itemType,
@@ -928,7 +957,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
         grade: item.grade || null,
         batteryHealth: item.battery_health === null || item.battery_health === undefined ? null : Number(item.battery_health),
         boxType: packagingLabel(item.packaging_type, item.packaging_notes),
-        photoUrl: null,
+        photoUrl: itemImage?.image_url || null,
         imei: maskTrailing(item.imei),
         serial: maskTrailing(item.serial_number),
         warrantyStart: null,

@@ -22,6 +22,7 @@ import {
   Wrench,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { ProductAssetImage } from "@/components/products/product-asset-image"
 import { formatBRL } from "@/lib/helpers"
 import { generateReceiptPDF, generateWarrantyPDF, type SaleDocumentData } from "@/lib/sale-documents"
 
@@ -463,16 +464,20 @@ function PinGate({
   )
 }
 
-function ProductThumb({ src, name }: { src?: string | null; name: string }) {
+function ProductThumb({ src, name, color, size = 96 }: { src?: string | null; name: string; color?: string | null; size?: number }) {
   return (
-    <div className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-[1.2rem] bg-[#f7f9fc] ring-1 ring-[#dce6f2]">
-      {src ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={src} alt={name} className="h-full w-full object-cover" />
-      ) : (
-        <Smartphone className="h-11 w-11 text-royal-500" />
-      )}
-    </div>
+    <ProductAssetImage
+      brand="Apple"
+      category="iphone"
+      model={name}
+      color={color}
+      uploadedImageUrl={src || null}
+      uploadedThumbnailUrl={size <= 96 ? src || null : null}
+      size={size}
+      className="rounded-[1.2rem] border-[#dce6f2] bg-[#f7f9fc] ring-1 ring-[#dce6f2]"
+      imageClassName="p-2"
+      priority={size >= 180}
+    />
   )
 }
 
@@ -483,8 +488,8 @@ function VerifiedDeviceCard({ purchase }: { purchase: Purchase }) {
   return (
     <PortalCard>
       <SectionTitle icon={Smartphone} title="Seu aparelho" />
-      <div className="flex items-center gap-4">
-        <ProductThumb src={purchase.device.photoUrl} name={purchase.device.model} />
+      <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center">
+        <ProductThumb src={purchase.device.photoUrl} name={purchase.device.model} color={purchase.device.color} size={220} />
         <div className="min-w-0 flex-1">
           <h2 className="text-xl font-extrabold leading-tight text-navy-900">{fallback(purchase.device.model)}</h2>
           <p className="mt-1 text-sm font-semibold text-slate-500">{fallback(purchase.device.color)}</p>
@@ -758,7 +763,7 @@ function VerifiedPurchaseItemsCard({ purchase }: { purchase: Purchase }) {
 
           return (
             <div key={item.id || `${item.type}-${index}`} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
-              <ProductThumb src={item.photoUrl} name={item.model} />
+              <ProductThumb src={item.photoUrl} name={item.model} color={item.color} size={76} />
               <div className="min-w-0 flex-1">
                 <p className="line-clamp-2 text-sm font-extrabold leading-5 text-navy-900">{fallback(item.model)}</p>
                 <p className="mt-0.5 text-xs font-semibold text-slate-500">{fallback(item.color || item.storage)}</p>

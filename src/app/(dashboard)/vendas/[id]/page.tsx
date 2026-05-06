@@ -6,9 +6,12 @@ import { useToast } from "@/components/ui/toaster"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { LabelPreviewModal, VerifiedPurchaseCustomerLabel } from "@/components/labels/label-preview-modal"
+import { ProductAssetImage } from "@/components/products/product-asset-image"
 import { supabase } from "@/lib/supabase"
 import { formatBRL, formatDate, getAdditionalItemDisplayName, getTradeInDisplayName, getTradeInSummaryStatus, getInventoryStatusMeta, isPendingInventoryStatus, getProductName, formatPaymentMethod } from "@/lib/helpers"
 import { paymentMethodSummary, salePaymentStatusSummary, type SalePayment } from "@/lib/sale-payments"
+import type { ProductAssetInput } from "@/lib/product-assets"
+import { fetchProductImageMap, type ProductImageMap } from "@/lib/product-images"
 import { buildPublicPurchaseUrl, buildPurchaseCode, getFirstName, normalizePin, verifiedPurchaseLabelText, type VerifiedPurchaseCustomerLabelData } from "@/lib/label-utils"
 import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
 import { calculateSaleEconomics, estimateRiskReserve } from "@/lib/sale-economics"
@@ -78,6 +81,41 @@ const auditField = (data: unknown, key: string) => {
   return (data as Record<string, unknown>)[key]
 }
 
+type SaleInventoryImageItem = {
+  id?: string | null
+  brand?: string | null
+  type?: string | null
+  catalog?: {
+    brand?: string | null
+    model?: string | null
+    color?: string | null
+    category?: string | null
+  } | null
+}
+
+type AdditionalItemImageSource = {
+  product_id?: string | null
+  inventory?: SaleInventoryImageItem | null
+}
+
+function getSaleItemImageInput(
+  inventoryItem: SaleInventoryImageItem | null | undefined,
+  imagesByProductId: ProductImageMap,
+  fallbackName?: string | null
+): ProductAssetInput {
+  const catalog = inventoryItem?.catalog || {}
+  const linkedImage = inventoryItem?.id ? imagesByProductId[inventoryItem.id] : null
+
+  return {
+    brand: catalog.brand || inventoryItem?.brand || null,
+    model: catalog.model || fallbackName || null,
+    color: catalog.color || null,
+    category: catalog.category || inventoryItem?.type || fallbackName || null,
+    uploadedImageUrl: linkedImage?.image_url || null,
+    uploadedThumbnailUrl: linkedImage?.thumbnail_url || null,
+  }
+}
+
 const saleStatusMeta = (status?: string | null) => {
   switch (status || "completed") {
     case "reserved":
@@ -101,6 +139,7 @@ export default function SaleDetailPage() {
   const [checklist, setChecklist] = useState<any[]>([])
   const [generatingPdf, setGeneratingPdf] = useState(false)
   const [additionalItems, setAdditionalItems] = useState<any[]>([])
+  const [productImagesById, setProductImagesById] = useState<ProductImageMap>({})
   const [tradeInData, setTradeInData] = useState<any>(null)
   const [tradeInInventory, setTradeInInventory] = useState<any>(null)
   const [salePayments, setSalePayments] = useState<SalePayment[]>([])
@@ -140,6 +179,9 @@ export default function SaleDetailPage() {
 
   useEffect(() => {
     const fetchSale = async () => {
+      let fetchedProduct: SaleInventoryImageItem | null = null
+      let fetchedAdditionalItems: AdditionalItemImageSource[] = []
+
       try {
         const { data, error } = await (supabase
           .from("sales") as any)
@@ -168,6 +210,7 @@ export default function SaleDetailPage() {
             .single()
 
           if (!invErr && p) {
+            fetchedProduct = p
             setProduct(p)
 
             if ((p as any)?.checklist_id) {
@@ -210,7 +253,10 @@ export default function SaleDetailPage() {
             .from("sales_additional_items") as any)
             .select("*, inventory:product_id(id, imei, imei2, serial_number, grade, catalog:catalog_id(*))")
             .eq("sale_id", id)
-          if (addItems) setAdditionalItems(addItems)
+          if (addItems) {
+            fetchedAdditionalItems = addItems as AdditionalItemImageSource[]
+            setAdditionalItems(addItems)
+          }
 
           const { data: payments } = await (supabase.from("sale_payments") as any)
             .select("id, sale_id, payment_method, amount, status, due_date, received_date, financial_account_id, transaction_id, notes")
@@ -237,6 +283,22 @@ export default function SaleDetailPage() {
             .select("id, name, channel, status")
             .order("created_at", { ascending: false })
           if (campaigns) setMarketingCampaigns(campaigns)
+        }
+
+        const productIds = [
+          fetchedProduct?.id,
+          ...fetchedAdditionalItems.map((item) => item.product_id || item.inventory?.id),
+        ].filter((productId): productId is string => Boolean(productId))
+
+        if (productIds.length > 0) {
+          try {
+            setProductImagesById(await fetchProductImageMap(productIds))
+          } catch (imageError) {
+            console.warn("Não foi possível carregar imagens dos itens da venda.", imageError)
+            setProductImagesById({})
+          }
+        } else {
+          setProductImagesById({})
         }
       } catch (err) {
         toast({ title: "Venda não encontrada", type: "error" })
@@ -970,6 +1032,14 @@ export default function SaleDetailPage() {
       await (supabase.from("sales") as any).update({ sale_price: newTotal }).eq("id", id)
       setSale({ ...sale, sale_price: newTotal })
       setAdditionalItems([...additionalItems, newItem])
+      if (selectedInventoryItemId) {
+        try {
+          const imageMap = await fetchProductImageMap([selectedInventoryItemId])
+          setProductImagesById((current) => ({ ...current, ...imageMap }))
+        } catch (imageError) {
+          console.warn("Não foi possível carregar imagem do item adicionado.", imageError)
+        }
+      }
 
       const imeiLog = newItem.inventory?.imei || newItem.inventory?.serial_number
       await logAudit("ADD_ITEM", null, { item: finalName, price: chargedPrice, realPrice: price, type: newItemType, imei: imeiLog })
@@ -1039,6 +1109,7 @@ export default function SaleDetailPage() {
 
   const catalog = product?.catalog || {}
   const fullModel = `${catalog.model || "—"}${catalog.variant ? " " + catalog.variant : ""} ${catalog.storage || ""} ${catalog.color || ""}`.trim()
+  const mainProductImage = getSaleItemImageInput(product, productImagesById, fullModel)
   const okCount = checklist.filter((i: any) => i.status === "ok").length
   const failCount = checklist.filter((i: any) => i.status === "fail").length
   const customerLabelData: VerifiedPurchaseCustomerLabelData = {
@@ -1492,7 +1563,17 @@ export default function SaleDetailPage() {
                 {/* Principal */}
                 <tr className="hover:bg-gray-50/50 transition-colors">
                   <td className="px-6 py-3"><span className="text-[11px] font-bold bg-royal-100 text-royal-600 px-2 py-0.5 rounded-full">PRINCIPAL</span></td>
-                  <td className="px-4 py-3 font-medium text-navy-900">{fullModel}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex min-w-[220px] items-center gap-3">
+                      <ProductAssetImage
+                        {...mainProductImage}
+                        size={52}
+                        className="rounded-lg bg-white"
+                        imageClassName="p-1"
+                      />
+                      <span className="font-medium text-navy-900">{fullModel}</span>
+                    </div>
+                  </td>
                   <td className="px-4 py-3 font-mono text-gray-500 text-xs">{product?.imei || product?.serial_number || "—"}</td>
                   <td className="px-4 py-3 text-right text-gray-600">{formatBRL(totals.custoPrincipal)}</td>
                   <td className="px-4 py-3 text-right font-semibold text-navy-900">{formatBRL(totals.valorPrincipal)}</td>
@@ -1507,6 +1588,8 @@ export default function SaleDetailPage() {
                   const saleP = Number(item.sale_price || 0)
                   const profit = Number(item.profit ?? (isUpsell ? saleP - cost : -cost))
                   const imei = item.inventory?.imei || item.inventory?.serial_number || "—"
+                  const itemName = getAdditionalItemDisplayName(item.name)
+                  const itemImage = getSaleItemImageInput(item.inventory, productImagesById, itemName)
                   return (
                     <tr key={item.id} className="hover:bg-gray-50/50 transition-colors">
                       <td className="px-6 py-3">
@@ -1514,7 +1597,17 @@ export default function SaleDetailPage() {
                           {isUpsell ? 'UPSELL' : 'BRINDE'}
                         </span>
                       </td>
-                      <td className="px-4 py-3 font-medium text-navy-900">{getAdditionalItemDisplayName(item.name)}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex min-w-[220px] items-center gap-3">
+                          <ProductAssetImage
+                            {...itemImage}
+                            size={48}
+                            className="rounded-lg bg-white"
+                            imageClassName="p-1"
+                          />
+                          <span className="font-medium text-navy-900">{itemName}</span>
+                        </div>
+                      </td>
                       <td className="px-4 py-3 font-mono text-gray-500 text-xs">{imei}</td>
                       <td className="px-4 py-3 text-right text-gray-600">{formatBRL(cost)}</td>
                       <td className="px-4 py-3 text-right font-semibold text-navy-900">{isUpsell ? formatBRL(saleP) : <span className="text-gray-400">—</span>}</td>
@@ -1540,9 +1633,17 @@ export default function SaleDetailPage() {
           {/* Mobile cards */}
           <div className="sm:hidden p-4 space-y-2">
             <div className="rounded-xl bg-royal-50 border border-royal-100 p-3">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-[11px] font-bold bg-royal-100 text-royal-600 px-2 py-0.5 rounded-full">PRINCIPAL</span>
-                <p className="text-sm font-semibold text-navy-900 flex-1 truncate">{fullModel}</p>
+              <div className="mb-1 flex items-center gap-3">
+                <ProductAssetImage
+                  {...mainProductImage}
+                  size={52}
+                  className="rounded-lg bg-white"
+                  imageClassName="p-1"
+                />
+                <div className="min-w-0 flex-1">
+                  <span className="text-[11px] font-bold bg-royal-100 text-royal-600 px-2 py-0.5 rounded-full">PRINCIPAL</span>
+                  <p className="mt-1 truncate text-sm font-semibold text-navy-900">{fullModel}</p>
+                </div>
               </div>
               <div className="flex items-center justify-between text-xs text-gray-500">
                 <span>Custo: {formatBRL(totals.custoPrincipal)} · Venda: {formatBRL(totals.valorPrincipal)}</span>
@@ -1554,11 +1655,21 @@ export default function SaleDetailPage() {
               const cost = Number(item.cost_price || 0)
               const saleP = Number(item.sale_price || 0)
               const profit = Number(item.profit ?? (isUpsell ? saleP - cost : -cost))
+              const itemName = getAdditionalItemDisplayName(item.name)
+              const itemImage = getSaleItemImageInput(item.inventory, productImagesById, itemName)
               return (
                 <div key={item.id} className={`rounded-xl p-3 border ${isUpsell ? 'bg-success-50 border-success-200' : 'bg-amber-50 border-amber-200'}`}>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${isUpsell ? 'bg-success-100 text-success-600' : 'bg-amber-100 text-amber-600'}`}>{isUpsell ? 'UPSELL' : 'BRINDE'}</span>
-                    <p className="text-sm font-semibold text-navy-900 flex-1 truncate">{getAdditionalItemDisplayName(item.name)}</p>
+                  <div className="mb-1 flex items-center gap-3">
+                    <ProductAssetImage
+                      {...itemImage}
+                      size={48}
+                      className="rounded-lg bg-white"
+                      imageClassName="p-1"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${isUpsell ? 'bg-success-100 text-success-600' : 'bg-amber-100 text-amber-600'}`}>{isUpsell ? 'UPSELL' : 'BRINDE'}</span>
+                      <p className="mt-1 truncate text-sm font-semibold text-navy-900">{itemName}</p>
+                    </div>
                   </div>
                   <div className="text-xs text-gray-400 mb-1">
                     {item.inventory?.imei || item.inventory?.serial_number ? `IMEI/Série: ${item.inventory.imei || item.inventory.serial_number}` : "Sem vínculo de IMEI"}

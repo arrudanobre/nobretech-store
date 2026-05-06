@@ -5,8 +5,10 @@ import { useRouter, useParams } from "next/navigation"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { ProductImageManager } from "@/components/products/product-image-manager"
 import { InventoryStockLabel, LabelPreviewModal } from "@/components/labels/label-preview-modal"
 import { formatBRL, daysBetween, buildPriceTable, getInventoryStatusMeta, getComputedInventoryStatus, getProductName, getTradeInOriginLabel, isPendingInventoryStatus } from "@/lib/helpers"
+import { fetchProductImageMap, type ProductImageRecord } from "@/lib/product-images"
 import { buildInventoryStockCode, inventoryLabelText, type InventoryStockLabelData } from "@/lib/label-utils"
 import { CATEGORIES, GRADES, CHECKLIST_TEMPLATES, SIDEPAY_FEE_PCTS } from "@/lib/constants"
 import { calculateSaleEconomics, estimateRiskReserve } from "@/lib/sale-economics"
@@ -78,6 +80,8 @@ export default function ProductDetailPage() {
 
       const p = items[0] as any
       p.photos = []
+      const imageMap: Record<string, ProductImageRecord | null> = await fetchProductImageMap([p.id]).catch(() => ({}))
+      p.productImage = imageMap[p.id] || null
       setProduct(p)
 
       if (p.catalog_id) {
@@ -87,6 +91,7 @@ export default function ProductDetailPage() {
           .single()
         if (catalogData) p.catalog = catalogData
       }
+      setProduct({ ...p })
 
       if (p.checklist_id) {
         const { data: cd } = await (supabase.from("checklists") as any)
@@ -361,6 +366,16 @@ export default function ProductDetailPage() {
           </Link>
         </div>
       )}
+
+      <ProductImageManager
+        productId={productId}
+        image={product.productImage || null}
+        brand={product.catalog?.brand || "Apple"}
+        category={product.catalog?.category || catalogCategory}
+        model={product.catalog?.model || catalogName}
+        color={product.catalog?.color || null}
+        onImageChange={(image) => setProduct((current: any) => current ? { ...current, productImage: image } : current)}
+      />
 
       {/* Strategic overview */}
       <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">

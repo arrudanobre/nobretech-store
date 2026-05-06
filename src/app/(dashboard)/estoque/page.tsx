@@ -6,7 +6,9 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { CategoryIcon } from "@/components/ui/icon-helpers"
+import { ProductAssetImage } from "@/components/products/product-asset-image"
 import { daysBetween, formatBRL, getProductName, getInventoryStatusMeta, getComputedInventoryStatus, isPendingInventoryStatus, normalizeInventoryStatus } from "@/lib/helpers"
+import { fetchProductImageMap, type ProductImageRecord } from "@/lib/product-images"
 import { CATEGORIES, GRADES } from "@/lib/constants"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/components/ui/toaster"
@@ -36,6 +38,7 @@ interface InventoryItem {
   notes?: string
   catalog?: any
   product_catalog?: any
+  productImage?: ProductImageRecord | null
   sales?: any
   created_at: string
 }
@@ -174,18 +177,23 @@ export default function InventoryPage() {
         ...item,
         catalog: item.catalog_id ? catalogsById[item.catalog_id] || null : null,
       }))
+      const imageMap: Record<string, ProductImageRecord | null> = await fetchProductImageMap(hydratedData.map((item: any) => item.id)).catch(() => ({}))
+      const hydratedWithImages = hydratedData.map((item: any) => ({
+        ...item,
+        productImage: imageMap[item.id] || null,
+      }))
 
       if (loadMore) {
-        setItems(prev => [...prev, ...hydratedData])
+        setItems(prev => [...prev, ...hydratedWithImages])
         setPage(currentPage)
         pageRef.current = currentPage
       } else {
-        setItems(hydratedData)
+        setItems(hydratedWithImages)
         setPage(1)
         pageRef.current = 1
       }
 
-      setHasMore(hydratedData.length === itemsPerPage)
+      setHasMore(hydratedWithImages.length === itemsPerPage)
     } catch (err: any) {
       console.error("Erro ao carregar estoque:", err?.message)
       const isTimeout = err?.message?.includes("statement timeout")
@@ -488,10 +496,22 @@ export default function InventoryPage() {
 
               return (
                 <div key={item.id} className="grid grid-cols-1 lg:grid-cols-[1.6fr_0.75fr_1.05fr_0.7fr_0.55fr_0.5fr_0.75fr_0.75fr_0.65fr_0.75fr_0.75fr] gap-2 lg:gap-3 px-4 py-3 hover:bg-gray-50/60 transition-colors">
-                  <div className="min-w-0">
-                    <Link href={`/estoque/${item.id}`} className="font-semibold text-sm text-navy-900 hover:text-royal-500 truncate block">{product}</Link>
-                    <p className="text-xs text-gray-500 truncate lg:hidden">{categoryLabel} · {identity}</p>
-                    {item.type === "supplier" && <p className="text-xs text-gray-400">Fornecedor{item.supplier_name ? `: ${item.supplier_name}` : ""}</p>}
+                  <div className="flex min-w-0 items-center gap-3">
+                    <ProductAssetImage
+                      brand={cat?.brand}
+                      category={cat?.category}
+                      model={cat?.model || product}
+                      color={cat?.color}
+                      uploadedImageUrl={item.productImage?.image_url || null}
+                      uploadedThumbnailUrl={item.productImage?.thumbnail_url || null}
+                      size={56}
+                      className="rounded-xl bg-white"
+                    />
+                    <div className="min-w-0">
+                      <Link href={`/estoque/${item.id}`} className="font-semibold text-sm text-navy-900 hover:text-royal-500 truncate block">{product}</Link>
+                      <p className="text-xs text-gray-500 truncate lg:hidden">{categoryLabel} · {identity}</p>
+                      {item.type === "supplier" && <p className="text-xs text-gray-400">Fornecedor{item.supplier_name ? `: ${item.supplier_name}` : ""}</p>}
+                    </div>
                   </div>
                   <div className="hidden lg:flex items-center text-sm text-gray-600">{categoryLabel}</div>
                   <div className="hidden lg:flex items-center text-xs text-gray-500">{identity}</div>
