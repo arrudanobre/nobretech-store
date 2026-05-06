@@ -1,16 +1,12 @@
-import { redirect } from "next/navigation"
-import { getCurrentAuthContext } from "@/lib/auth-context"
+import type { Metadata } from "next"
+import { NobretechLandingPage } from "@/components/landing/nobretech-landing-page"
 
-export default async function Home() {
-  const context = await getCurrentAuthContext()
+export const metadata: Metadata = {
+  title: "Nobretech Store | Apple Premium em São Luís",
+  description:
+    "Tecnologia Apple com experiência premium, curadoria, garantia e atendimento humano.",
+}
 
-  if (context.status === "unauthenticated") {
-    redirect("/login")
-  }
-
-  if (context.status === "unauthorized") {
-    redirect("/unauthorized")
-  }
-
-  redirect("/dashboard")
+export default function Home() {
+  return <NobretechLandingPage />
 }

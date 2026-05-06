@@ -33,6 +33,25 @@ body {
 ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
+html:has([data-nobretech-landing]) {
+  position: relative;
+  scrollbar-color: #242a36 #050505;
+}
+
+html:has([data-nobretech-landing])::-webkit-scrollbar-track {
+  background: #050505;
+}
+
+html:has([data-nobretech-landing])::-webkit-scrollbar-thumb {
+  background: #242a36;
+  border: 1px solid #050505;
+  border-radius: 999px;
+}
+
+html:has([data-nobretech-landing])::-webkit-scrollbar-thumb:hover {
+  background: #384152;
+}
+
 /* ── Print ─────────────────────────────────────────────── */
 @media print {
   body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
