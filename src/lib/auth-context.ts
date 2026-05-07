@@ -87,6 +87,18 @@ function getPrimaryEmail(user: Awaited<ReturnType<typeof currentUser>>) {
   )
 }
 
+function getProviderFullName(user: Awaited<ReturnType<typeof currentUser>>) {
+  if (!user) return null
+
+  const fullName = user.fullName?.trim()
+  if (fullName) return fullName
+
+  const joinedName = [user.firstName, user.lastName].filter(Boolean).join(" ").trim()
+  if (joinedName) return joinedName
+
+  return user.username?.trim() || null
+}
+
 export async function getCurrentAuthContext(): Promise<AuthContext> {
   const { userId } = await auth()
 
@@ -139,7 +151,7 @@ export async function getCurrentAuthContext(): Promise<AuthContext> {
     clerkUserId: userId,
     appUserId: row.app_user_id,
     email: row.email,
-    fullName: row.full_name,
+    fullName: getProviderFullName(clerkUser),
     role: normalizeRole(row.role),
     avatarUrl: clerkUser?.imageUrl || row.avatar_url || null,
     companyId: row.company_id,

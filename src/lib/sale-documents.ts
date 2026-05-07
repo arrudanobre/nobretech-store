@@ -65,6 +65,8 @@ const DEFAULT_SELLER = "Vinicius Arruda Nobre"
 const NAVY = "#07162f"
 const MID_GRAY = "#d9d9d9"
 const TEXT_GRAY = "#4b5563"
+const PAGE_TOP = 20
+const PAGE_BOTTOM = 277
 
 const WARRANTY_TERMS = [
   { text: "A GARANTIA É CANCELADA AUTOMATICAMENTE NOS SEGUINTES CASOS:", bold: true },
@@ -121,6 +123,12 @@ function text(doc: jsPDF, value: string | string[], x: number, y: number, option
   doc.text(value || "", x, y, options)
 }
 
+function ensurePageSpace(doc: jsPDF, y: number, needed: number, top = PAGE_TOP) {
+  if (y + needed <= PAGE_BOTTOM) return y
+  doc.addPage()
+  return top
+}
+
 function money(value: number) {
   return formatBRL(Number(value || 0))
 }
@@ -146,8 +154,12 @@ function drawWarrantyText(doc: jsPDF, x: number, y: number, maxWidth: number, li
   for (const item of WARRANTY_TERMS) {
     setFont(doc, 8.2, item.bold ? "bold" : "normal", TEXT_GRAY)
     const lines = doc.splitTextToSize(item.text, maxWidth)
-    text(doc, lines, x, y)
-    y += lines.length * lineHeight
+    for (const line of lines) {
+      y = ensurePageSpace(doc, y, lineHeight)
+      text(doc, line, x, y)
+      y += lineHeight
+    }
+    y += 1.2
   }
   return y
 }
@@ -221,33 +233,30 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
 
   // ── Products table ──
   const ROW_H = 13
-  const tableTop = 75
-  setFont(doc, 9, "bold")
-  text(doc, "PRODUTOS", 17.5, 74)
+  const colX = { desc: 40, guar: 128, qty: 142, unit: 151, total: 173 }
 
-  const totalTableH = ROW_H * lines.length + 5 // header row(5) + data rows
-  doc.rect(17, tableTop, 176, totalTableH + 5)
-  // column dividers
-  const colX = { sku: 17, desc: 40, guar: 128, qty: 142, unit: 151, total: 173 }
-  doc.line(colX.desc, tableTop, colX.desc, tableTop + totalTableH + 5)
-  doc.line(colX.guar, tableTop, colX.guar, tableTop + totalTableH + 5)
-  doc.line(colX.qty, tableTop, colX.qty, tableTop + totalTableH + 5)
-  doc.line(colX.unit, tableTop, colX.unit, tableTop + totalTableH + 5)
-  doc.line(colX.total, tableTop, colX.total, tableTop + totalTableH + 5)
+  function drawProductsHeader(y: number) {
+    setFont(doc, 9, "bold")
+    text(doc, "PRODUTOS", 17.5, y - 1)
+    doc.rect(17, y, 176, 5)
+    doc.line(colX.desc, y, colX.desc, y + 5)
+    doc.line(colX.guar, y, colX.guar, y + 5)
+    doc.line(colX.qty, y, colX.qty, y + 5)
+    doc.line(colX.unit, y, colX.unit, y + 5)
+    doc.line(colX.total, y, colX.total, y + 5)
+    doc.setFillColor(MID_GRAY)
+    doc.rect(17, y, 176, 5, "F")
+    setFont(doc, 8.2, "bold")
+    text(doc, "Tipo", 28.5, y + 3.5, { align: "center" })
+    text(doc, "Descrição", 84, y + 3.5, { align: "center" })
+    text(doc, "Garantia", 135, y + 3.5, { align: "center" })
+    text(doc, "Qtd", 146.5, y + 3.5, { align: "center" })
+    text(doc, "Valor Unit.", 162, y + 3.5, { align: "center" })
+    text(doc, "Total", 183, y + 3.5, { align: "center" })
+    return y + 5
+  }
 
-  doc.setFillColor(MID_GRAY)
-  doc.rect(17, tableTop, 176, 5, "F")
-  setFont(doc, 8.2, "bold")
-  text(doc, "Tipo", 28.5, tableTop + 3.5, { align: "center" })
-  text(doc, "Descrição", 84, tableTop + 3.5, { align: "center" })
-  text(doc, "Garantia", 135, tableTop + 3.5, { align: "center" })
-  text(doc, "Qtd", 146.5, tableTop + 3.5, { align: "center" })
-  text(doc, "Valor Unit.", 162, tableTop + 3.5, { align: "center" })
-  text(doc, "Total", 183, tableTop + 3.5, { align: "center" })
-
-  setFont(doc, 8.2)
-  lines.forEach((line, idx) => {
-    const rowY = tableTop + 5 + idx * ROW_H
+  function drawProductRow(line: ReceiptLineItem, rowY: number) {
     const isFree = line.type === "free"
     const typeLabel = line.type === "principal" ? "Principal" : line.type === "upsell" ? "Upsell" : "Brinde"
     const descLine = [
@@ -256,16 +265,32 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
       line.imei2 ? `IMEI 2: ${line.imei2}` : null,
     ].filter(Boolean).join(" — ")
     const descLines = doc.splitTextToSize(descLine, 84).slice(0, 2)
+    doc.rect(17, rowY, 176, ROW_H)
+    doc.line(colX.desc, rowY, colX.desc, rowY + ROW_H)
+    doc.line(colX.guar, rowY, colX.guar, rowY + ROW_H)
+    doc.line(colX.qty, rowY, colX.qty, rowY + ROW_H)
+    doc.line(colX.unit, rowY, colX.unit, rowY + ROW_H)
+    doc.line(colX.total, rowY, colX.total, rowY + ROW_H)
+    setFont(doc, 8.2)
     text(doc, typeLabel, 28.5, rowY + 7, { align: "center" })
     text(doc, descLines, 41, rowY + 4.6)
     text(doc, warrantyLabel(line.warrantyMonths), 135, rowY + 7, { align: "center" })
     text(doc, String(line.quantity), 146.5, rowY + 7, { align: "center" })
     text(doc, isFree ? "—" : money(line.unitPrice), 162, rowY + 7, { align: "center" })
     text(doc, isFree ? "Brinde" : money(line.totalPrice), 183, rowY + 7, { align: "center" })
-    if (idx < lines.length - 1) doc.line(17, rowY + ROW_H, 193, rowY + ROW_H)
-  })
+  }
 
-  const afterTableY = tableTop + totalTableH + 5
+  let tableY = drawProductsHeader(75)
+  for (const line of lines) {
+    if (tableY + ROW_H > PAGE_BOTTOM) {
+      doc.addPage()
+      tableY = drawProductsHeader(PAGE_TOP + 2)
+    }
+    drawProductRow(line, tableY)
+    tableY += ROW_H
+  }
+
+  const afterTableY = ensurePageSpace(doc, tableY, 7)
   doc.rect(151, afterTableY, 42, 4)
   setFont(doc, 8.2, "bold")
   text(doc, "Total", 152, afterTableY + 3)
@@ -316,6 +341,7 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
     settlementRows.push({ label: "Cliente pagou", value: money(customerPaid), bold: true })
 
     const settlementH = 8 + settlementRows.length * 4.4
+    settlementY = ensurePageSpace(doc, settlementY, settlementH + 3)
 
     doc.rect(17, settlementY, 176, settlementH)
     doc.setFillColor(245, 246, 247)
@@ -334,14 +360,16 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
   }
 
   // ── Payment ──
-  const payY = settlementY
+  let payY = settlementY
   setFont(doc, 9, "bold")
-  text(doc, "PAGAMENTO", 17.5, payY)
   const paymentRows = data.payments && data.payments.length > 0
     ? data.payments
     : [{ method: data.paymentMethod, amount: customerPaid }]
   const paymentLineHeight = 4.5
   const paymentBoxHeight = Math.max(9, 5 + paymentRows.length * paymentLineHeight)
+  payY = ensurePageSpace(doc, payY, paymentBoxHeight + 8)
+  setFont(doc, 9, "bold")
+  text(doc, "PAGAMENTO", 17.5, payY)
   doc.rect(17, payY + 1, 176, paymentBoxHeight)
   doc.line(158, payY + 1, 158, payY + 1 + paymentBoxHeight)
   doc.setFillColor(MID_GRAY)
@@ -357,21 +385,25 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
   })
 
   // ── Observations ──
-  const obsY = payY + paymentBoxHeight + 8
+  let obsY = payY + paymentBoxHeight + 8
+  const observationLines = doc.splitTextToSize(observations, 172)
+  const observationBoxHeight = Math.max(12, 5 + observationLines.length * 4)
+  obsY = ensurePageSpace(doc, obsY, observationBoxHeight + 7)
   setFont(doc, 9, "bold")
   text(doc, "OBSERVAÇÕES DA VENDA", 17.5, obsY)
-  doc.rect(17, obsY + 1, 176, 12)
+  doc.rect(17, obsY + 1, 176, observationBoxHeight)
   setFont(doc, 8.4)
-  text(doc, doc.splitTextToSize(observations, 172), 19, obsY + 5.5)
+  text(doc, observationLines, 19, obsY + 5.5)
 
   // ── Warranty terms ──
-  const termsY = obsY + 17
+  const termsY = ensurePageSpace(doc, obsY + observationBoxHeight + 5, 120)
   doc.rect(17, termsY, 176, Math.min(109, 297 - termsY - 30))
   doc.line(17, termsY + 4, 193, termsY + 4)
   setFont(doc, 8.6, "bold")
   text(doc, "DADOS ADICIONAIS", 19.5, termsY + 3)
-  drawWarrantyText(doc, 19.5, termsY + 8, 171, 4.05)
-  drawSignature(doc, termsY + 113, data.customerName)
+  const termsEndY = drawWarrantyText(doc, 19.5, termsY + 8, 171, 4.05)
+  const signatureY = ensurePageSpace(doc, termsEndY + 12, 14)
+  drawSignature(doc, signatureY, data.customerName)
 
   doc.save(`Recibo-${safeFileName(data.customerName)}-${receiptNumber(data.saleId)}.pdf`)
 }
@@ -439,8 +471,9 @@ export async function generateWarrantyPDF(data: SaleDocumentData) {
 
   setFont(doc, 72, "bold", "#f4f4f4")
   text(doc, "NT", 130, 170)
-  drawWarrantyText(doc, 17, 100, 176, 4.45)
-  drawSignature(doc, 249, data.customerName)
+  const termsEndY = drawWarrantyText(doc, 17, 100, 176, 4.45)
+  const signatureY = ensurePageSpace(doc, Math.max(termsEndY + 12, 249), 14)
+  drawSignature(doc, signatureY, data.customerName)
 
   doc.save(`${safeFileName(data.item.name)} - Garantia.pdf`)
 }

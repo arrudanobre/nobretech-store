@@ -19,6 +19,7 @@ import { useToast } from "@/components/ui/toaster"
 import { getProductName } from "@/lib/helpers"
 import { formatPhoneBR, isValidEmail } from "@/lib/marketing-format"
 import { supabase } from "@/lib/supabase"
+import { cn } from "@/lib/utils"
 
 type Campaign = {
   id: string
@@ -132,6 +133,8 @@ const NEXT_ACTION_OPTIONS = [
   "Criar venda",
   "Outro",
 ]
+
+const LEADS_PAGE_SIZE = 5
 
 const DEMO_CAMPAIGNS: Campaign[] = [
   { id: "demo-meta", name: "Meta Ads", channel: "trafego_pago" },
@@ -312,6 +315,7 @@ function CRMContent() {
   const [originFilter, setOriginFilter] = useState("all")
   const [productFilter, setProductFilter] = useState("all")
   const [periodFilter, setPeriodFilter] = useState("all")
+  const [leadPage, setLeadPage] = useState(1)
   const [searchTerm, setSearchTerm] = useState("")
   const [productSearch, setProductSearch] = useState("")
   const [useCustomProduct, setUseCustomProduct] = useState(false)
@@ -409,6 +413,11 @@ function CRMContent() {
       return matchesStatus && matchesCampaign && matchesOrigin && matchesProduct && matchesSearch && matchesPeriod
     })
   }, [campaignFilter, leads, originFilter, periodFilter, productById, productFilter, searchTerm, statusFilter])
+
+  const totalLeadPages = Math.max(1, Math.ceil(filteredLeads.length / LEADS_PAGE_SIZE))
+  const currentLeadPage = Math.min(leadPage, totalLeadPages)
+  const leadStartIndex = (currentLeadPage - 1) * LEADS_PAGE_SIZE
+  const paginatedLeads = filteredLeads.slice(leadStartIndex, leadStartIndex + LEADS_PAGE_SIZE)
 
   const funnel = useMemo(() => {
     return STATUS_OPTIONS.map(([status, label]) => ({
@@ -604,8 +613,8 @@ function CRMContent() {
 
           <div className="grid gap-4 xl:grid-cols-[0.9fr_1.15fr]">
             <FormBlock icon={<UserRound className="h-4 w-4" />} title="Cliente" subtitle="Dados mínimos para atendimento e venda.">
-              <div className="grid gap-3 md:grid-cols-3">
-                <label className="block">
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="block md:col-span-2">
                   <span className="mb-1.5 block text-sm font-semibold text-slate-900">Nome</span>
                   <input value={form.full_name} onChange={(event) => updateForm({ full_name: event.target.value })} placeholder="Ex: Thalita" className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20" />
                 </label>
@@ -727,7 +736,7 @@ function CRMContent() {
           <div className="p-8 text-center text-gray-400">Nenhum lead encontrado.</div>
         ) : (
           <div className="divide-y divide-gray-100">
-            {filteredLeads.map((lead) => {
+            {paginatedLeads.map((lead) => {
               const campaignId = lead.campaign_id || lead.marketing_campaign_id
               const saleId = lead.sale_id || lead.converted_sale_id
               const leadName = lead.name || lead.full_name || "Lead sem nome"
@@ -799,6 +808,45 @@ function CRMContent() {
                 </div>
               )
             })}
+            <div className="flex flex-col gap-3 px-5 py-4 text-sm text-gray-500 sm:flex-row sm:items-center sm:justify-between">
+              <span>
+                Mostrando {filteredLeads.length > 0 ? leadStartIndex + 1 : 0} a {Math.min(leadStartIndex + LEADS_PAGE_SIZE, filteredLeads.length)} de {filteredLeads.length} leads
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setLeadPage((value) => Math.max(1, value - 1))}
+                  disabled={currentLeadPage <= 1}
+                  className="h-9 rounded-xl border border-gray-200 bg-white px-3 text-xs font-bold text-navy-900 transition hover:border-royal-200 hover:bg-royal-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Anterior
+                </button>
+                {Array.from({ length: totalLeadPages }).map((_, index) => {
+                  const pageNumber = index + 1
+                  return (
+                    <button
+                      key={pageNumber}
+                      type="button"
+                      onClick={() => setLeadPage(pageNumber)}
+                      className={cn(
+                        "h-9 min-w-9 rounded-xl px-3 text-xs font-bold transition",
+                        currentLeadPage === pageNumber ? "bg-royal-500 text-white shadow-sm" : "border border-gray-200 bg-white text-navy-900 hover:border-royal-200 hover:bg-royal-50"
+                      )}
+                    >
+                      {pageNumber}
+                    </button>
+                  )
+                })}
+                <button
+                  type="button"
+                  onClick={() => setLeadPage((value) => Math.min(totalLeadPages, value + 1))}
+                  disabled={currentLeadPage >= totalLeadPages}
+                  className="h-9 rounded-xl border border-gray-200 bg-white px-3 text-xs font-bold text-navy-900 transition hover:border-royal-200 hover:bg-royal-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Próxima
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>

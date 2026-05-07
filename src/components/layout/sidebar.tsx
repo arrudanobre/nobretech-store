@@ -1,10 +1,12 @@
 "use client"
 
+/* eslint-disable @next/next/no-img-element */
+
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { SignOutButton } from "@clerk/nextjs"
 import { cn } from "@/lib/utils"
-import { BarChart3, Package, ShoppingCart, ShieldCheck, AlertTriangle, FileText, Users, Truck, DollarSign, Settings, Smartphone, Calculator, ListChecks, ChevronDown, Menu, X, LogOut, Mail } from "lucide-react"
+import { BarChart3, Package, ShoppingCart, ShieldCheck, AlertTriangle, FileText, Users, Truck, DollarSign, Settings, Calculator, ListChecks, ChevronDown, Menu, X, LogOut, Mail, type LucideIcon } from "lucide-react"
 import { useState, useEffect, createContext, useContext, useCallback } from "react"
 import { supabase } from "@/lib/supabase"
 import { canAccess, roleLabels, type PermissionKey, type UserRole } from "@/lib/permissions"
@@ -12,7 +14,7 @@ import { canAccess, roleLabels, type PermissionKey, type UserRole } from "@/lib/
 export interface NavItem {
   label: string
   href: string
-  icon: any
+  icon: LucideIcon
   permission?: PermissionKey
   badge?: {
     count?: number
@@ -40,6 +42,10 @@ type DashboardUser = {
 export interface BadgeCountContextType {
   counts: Record<string, number>
   refresh: () => void
+}
+
+type WarrantyCountRow = {
+  sales?: { sale_status?: string | null } | { sale_status?: string | null }[] | null
 }
 
 export const BadgeCountContext = createContext<BadgeCountContextType>({
@@ -90,6 +96,16 @@ function userInitial(name: string) {
   return name.trim().charAt(0).toUpperCase() || "U"
 }
 
+function userInitials(name: string, email: string) {
+  const source = name?.trim() || email?.trim() || "Usuário"
+  const parts = source
+    .replace(/@.*/, "")
+    .split(/\s+/)
+    .filter(Boolean)
+  const initials = parts.length > 1 ? `${parts[0][0]}${parts[parts.length - 1][0]}` : parts[0]?.slice(0, 2)
+  return initials?.toUpperCase() || "U"
+}
+
 function filterNavItems(role: UserRole): NavItem[] {
   return staticNavItems
     .filter((item) => !item.permission || canAccess(role, item.permission))
@@ -97,6 +113,38 @@ function filterNavItems(role: UserRole): NavItem[] {
       ...item,
       items: item.items?.filter((subItem) => !subItem.permission || canAccess(role, subItem.permission)),
     })) as NavItem[]
+}
+
+export function NobretechLogoMark() {
+  return (
+    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-600/15 ring-1 ring-blue-400/30">
+      <svg
+        viewBox="0 0 64 64"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        className="h-8 w-8"
+      >
+        <rect
+          x="10"
+          y="10"
+          width="44"
+          height="44"
+          rx="12"
+          stroke="currentColor"
+          strokeWidth="4"
+          className="text-blue-400"
+        />
+        <path
+          d="M21 44V20L43 44V20"
+          stroke="currentColor"
+          strokeWidth="5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="text-blue-400"
+        />
+      </svg>
+    </div>
+  )
 }
 
 export function Sidebar({ currentUser }: { currentUser: DashboardUser }) {
@@ -132,9 +180,7 @@ export function Sidebar({ currentUser }: { currentUser: DashboardUser }) {
       {/* Logo */}
       <div className="flex items-center h-16 px-4 border-b border-navy-800">
         <Link href="/dashboard" className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-royal-500 flex items-center justify-center shrink-0">
-            <Smartphone className="w-5 h-5 text-white" />
-          </div>
+          <NobretechLogoMark />
           {!collapsed && (
             <div className="overflow-hidden">
               <span className="font-display font-bold text-base tracking-tight block leading-tight font-syne">
@@ -303,12 +349,10 @@ export function MobileNav({ isOpen, onOpenChange, currentUser }: { isOpen: boole
           <aside className="absolute right-0 top-0 flex h-full w-[86vw] max-w-sm flex-col bg-white shadow-2xl">
             <div className="flex h-16 items-center justify-between border-b border-gray-100 px-4">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-royal-500 flex items-center justify-center">
-                  <Smartphone className="w-5 h-5 text-white" />
-                </div>
+                <NobretechLogoMark />
                 <div>
                   <p className="font-display font-bold text-sm font-syne text-navy-900">NOBRETECH</p>
-                  <p className="text-xs text-gray-400">Menu</p>
+                  <p className="text-xs text-gray-400">Store</p>
                 </div>
               </div>
               <button
@@ -457,54 +501,74 @@ export function MobileNav({ isOpen, onOpenChange, currentUser }: { isOpen: boole
 
 function UserHeader({ currentUser }: { currentUser: DashboardUser }) {
   const [open, setOpen] = useState(false)
+  const displayName = currentUser.name || currentUser.email || "Usuário"
+  const displayEmail = currentUser.email || "Email não informado"
+  const roleLabel = roleLabels[currentUser.role]
+  const initials = userInitials(displayName, displayEmail)
 
   return (
     <div className="relative">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
-        className="flex items-center gap-2 rounded-2xl border border-gray-100 bg-white/80 p-1.5 pr-3 text-left shadow-sm transition hover:border-royal-100 hover:bg-white"
+        className="flex min-h-12 items-center gap-2 rounded-2xl border border-slate-200/80 bg-white/85 p-1.5 pr-2.5 text-left shadow-sm shadow-navy-900/5 backdrop-blur transition hover:border-royal-200 hover:bg-white hover:shadow-md"
       >
         {currentUser.avatarUrl ? (
-          <img src={currentUser.avatarUrl} alt="" className="h-8 w-8 rounded-xl object-cover" />
+          <img src={currentUser.avatarUrl} alt={displayName} className="h-8 w-8 rounded-full object-cover ring-1 ring-slate-200" />
         ) : (
-          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-navy-900 text-sm font-bold text-white">
-            {userInitial(currentUser.name)}
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-navy-900 text-[11px] font-bold text-white ring-1 ring-slate-200">
+            {initials}
           </div>
         )}
         <div className="hidden min-w-0 sm:block">
-          <p className="max-w-40 truncate text-xs font-bold leading-tight text-navy-900">{currentUser.name}</p>
-          <p className="text-[11px] font-semibold leading-tight text-royal-600">{roleLabels[currentUser.role]}</p>
+          <p className="max-w-36 truncate text-[12px] font-bold leading-tight text-navy-900">{displayName}</p>
+          <p className="mt-0.5 text-[10px] font-semibold leading-tight text-royal-600">{roleLabel}</p>
         </div>
-        <ChevronDown className={cn("hidden h-3.5 w-3.5 text-gray-400 transition sm:block", open ? "rotate-180" : "")} />
+        <ChevronDown className={cn("hidden h-3.5 w-3.5 text-slate-400 transition sm:block", open ? "rotate-180" : "")} />
       </button>
 
       {open && (
-        <div className="absolute right-0 top-12 z-50 w-72 overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-2xl shadow-navy-900/10">
-          <div className="border-b border-gray-100 p-4">
+        <div className="absolute right-0 top-14 z-50 w-72 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl shadow-navy-900/12">
+          <div className="border-b border-slate-100 p-4">
             <div className="flex items-center gap-3">
               {currentUser.avatarUrl ? (
-                <img src={currentUser.avatarUrl} alt="" className="h-11 w-11 rounded-xl object-cover" />
+                <img src={currentUser.avatarUrl} alt={displayName} className="h-12 w-12 rounded-full object-cover ring-1 ring-slate-200" />
               ) : (
-                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-navy-900 text-base font-bold text-white">
-                  {userInitial(currentUser.name)}
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-navy-900 text-sm font-bold text-white ring-1 ring-slate-200">
+                  {initials}
                 </div>
               )}
               <div className="min-w-0">
-                <p className="truncate text-sm font-bold text-navy-900">{currentUser.name}</p>
-                <p className="text-xs font-semibold text-royal-600">{roleLabels[currentUser.role]}</p>
+                <div className="flex min-w-0 items-center gap-2">
+                  <p className="truncate text-sm font-bold text-navy-900">{displayName}</p>
+                  <span className="shrink-0 rounded-full bg-royal-50 px-2 py-0.5 text-[10px] font-bold text-royal-600">{roleLabel}</span>
+                </div>
+                <p className="mt-1 truncate text-xs font-medium text-slate-500">{displayEmail}</p>
               </div>
-            </div>
-            <div className="mt-3 flex items-center gap-2 rounded-xl bg-gray-50 px-3 py-2 text-xs text-gray-500">
-              <Mail className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">{currentUser.email}</span>
             </div>
           </div>
           <div className="p-2">
+            <Link
+              href="/configuracoes"
+              onClick={() => setOpen(false)}
+              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 hover:text-navy-900"
+            >
+              <Mail className="h-4 w-4 text-slate-400" />
+              Meu perfil
+            </Link>
+            <Link
+              href="/configuracoes"
+              onClick={() => setOpen(false)}
+              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 hover:text-navy-900"
+            >
+              <Settings className="h-4 w-4 text-slate-400" />
+              Configurações
+            </Link>
+            <div className="my-1 h-px bg-slate-100" />
             <SignOutButton redirectUrl="/login">
               <button className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-50">
                 <LogOut className="h-4 w-4" />
-                Sair
+                Sair da conta
               </button>
             </SignOutButton>
           </div>
@@ -524,17 +588,17 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
   useEffect(() => {
     const fetchCounts = async () => {
       try {
-        const { data, error } = await (supabase
-          .from("inventory") as any)
+        const { data, error } = await supabase
+          .from("inventory")
           .select("id")
-          .in("status", ["active", "in_stock"] as any)
+          .in("status", ["active", "in_stock"])
         if (!error) {
           setCounts((prev) => ({ ...prev, estoque: data?.length ?? 0 }))
         }
 
         const today = new Date().toISOString().split("T")[0]
-        const { data: warrantyData, error: warrantyError } = await (supabase
-          .from("warranties") as any)
+        const { data: warrantyData, error: warrantyError } = await supabase
+          .from("warranties")
           .select(`
             id,
             sales!inner (
@@ -545,13 +609,16 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
           .neq("status", "expired")
           .neq("status", "voided")
         if (!warrantyError) {
-          const completedWarrantyCount = (warrantyData || []).filter((w: any) => w.sales?.sale_status === "completed").length
+          const completedWarrantyCount = ((warrantyData || []) as WarrantyCountRow[]).filter((w) => {
+            const sale = Array.isArray(w.sales) ? w.sales[0] : w.sales
+            return sale?.sale_status === "completed"
+          }).length
           setCounts((prev) => ({ ...prev, garantias: completedWarrantyCount }))
         }
 
         // Contagem de problemas (apenas não fechados)
-        const { data: problemsData } = await (supabase
-          .from("problems") as any)
+        const { data: problemsData } = await supabase
+          .from("problems")
           .select("id")
           .neq("status", "closed")
         if (!problemsData?.length) {
@@ -588,10 +655,11 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
                 >
                   <Menu className="h-4 w-4" />
                 </button>
-                <div className="w-8 h-8 rounded-lg bg-royal-500 flex items-center justify-center">
-                  <Smartphone className="w-4 h-4 text-white" />
+                <NobretechLogoMark />
+                <div className="leading-tight">
+                  <span className="block font-display font-bold text-sm font-syne text-navy-900">NOBRETECH</span>
+                  <span className="block text-[10px] text-gray-400">Store</span>
                 </div>
-                <span className="font-display font-bold text-sm font-syne text-navy-900">NOBRETECH</span>
               </div>
               <h1 className="hidden md:block font-display font-semibold text-navy-900 font-syne">
                 {title}

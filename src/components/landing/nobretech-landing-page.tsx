@@ -258,9 +258,6 @@ function CinematicHero() {
             <a href={WHATSAPP_URL} className="group inline-flex h-14 w-full items-center justify-center gap-3 rounded-full bg-white px-7 text-base font-semibold text-black transition hover:scale-[1.03] hover:bg-zinc-200 sm:w-auto lg:h-auto lg:px-8 lg:py-4">
               Falar no WhatsApp <MessageCircleIcon className="h-5 w-5" />
             </a>
-            <a href={SYSTEM_URL} className="inline-flex h-14 w-full items-center justify-center gap-3 rounded-full border border-white/15 bg-white/[0.03] px-7 text-base font-semibold text-white backdrop-blur-xl transition hover:border-white/35 hover:bg-white/[0.07] sm:w-auto lg:h-auto lg:px-8 lg:py-4">
-              Acessar sistema <ArrowRightIcon className="h-5 w-5" />
-            </a>
           </motion.div>
 
         </motion.div>
@@ -476,7 +473,7 @@ export function NobretechLandingPage() {
             <a href="#produtos" className="transition hover:text-white">Produtos</a>
           </nav>
 
-          <a href={SYSTEM_URL} className="group inline-flex items-center gap-2 rounded-full border border-white/15 bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:scale-[1.03] hover:bg-zinc-200 sm:px-5">
+          <a href={SYSTEM_URL} className="group inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.045] px-3.5 py-2 text-xs font-medium text-zinc-300 backdrop-blur-2xl transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white sm:px-4 sm:py-2.5 sm:text-sm">
             Acessar sistema <ArrowRightIcon className="h-4 w-4 transition group-hover:translate-x-0.5" />
           </a>
         </div>
@@ -640,9 +637,6 @@ export function NobretechLandingPage() {
           <div className="mt-12 flex flex-col items-center justify-center gap-4 sm:flex-row">
             <a href={WHATSAPP_URL} className="inline-flex items-center gap-3 rounded-full bg-white px-9 py-5 text-lg font-semibold text-black transition hover:scale-[1.03] hover:bg-zinc-200">
               Falar no WhatsApp <ArrowRightIcon className="h-5 w-5" />
-            </a>
-            <a href={SYSTEM_URL} className="inline-flex items-center gap-3 rounded-full border border-white/15 bg-white/[0.035] px-9 py-5 text-lg font-semibold text-white backdrop-blur-xl transition hover:border-white/35 hover:bg-white/[0.07]">
-              Acessar sistema <ArrowRightIcon className="h-5 w-5" />
             </a>
           </div>
         </div>

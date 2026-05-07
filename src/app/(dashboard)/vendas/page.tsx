@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { formatBRL, formatDate, daysBetween, todayISO, addDaysISO, getProductName, getAdditionalItemDisplayName, getTradeInDisplayName } from "@/lib/helpers"
-import { paymentMethodSummary } from "@/lib/sale-payments"
+import { paymentMethodSummary, type SalePayment } from "@/lib/sale-payments"
 import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
 import { calculateSaleEconomics } from "@/lib/sale-economics"
 import { supabase } from "@/lib/supabase"
@@ -21,6 +21,10 @@ function formatPayment(method?: string) {
     .replace("debit", "Débito")
     .replace("pix", "PIX")
     .replace("cash", "Dinheiro")
+}
+
+function formatSalePaymentSummary(payments?: SalePayment[] | null, legacyMethod?: string | null) {
+  return formatPayment(paymentMethodSummary(payments, legacyMethod))
 }
 
 function getSaleFeeSettings(sale: any) {
@@ -233,19 +237,19 @@ export default function SalesPage() {
       ) : (
         <>
           {/* Desktop: tabela */}
-          <div className="hidden lg:block bg-card rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="hidden lg:block bg-card rounded-2xl border border-gray-100 shadow-sm overflow-x-auto">
+            <table className="w-full min-w-[1180px] table-fixed text-sm">
               <thead>
                 <tr className="bg-gray-50/80 border-b border-gray-100">
-                  <th className="text-left px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Data</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Produto / Cliente</th>
-                  <th className="text-center px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Itens</th>
-                  <th className="text-left px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Pagamento</th>
-                  <th className="text-left px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Status</th>
-                  <th className="text-right px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Negociação</th>
-                  <th className="text-right px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Lucro</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Garantia</th>
-                  <th className="px-4 py-3"></th>
+                  <th className="w-[100px] text-left px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Data</th>
+                  <th className="w-[240px] text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Produto / Cliente</th>
+                  <th className="w-[60px] text-center px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Itens</th>
+                  <th className="w-[150px] text-left px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Pagamento</th>
+                  <th className="w-[145px] text-left px-3 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Status</th>
+                  <th className="w-[175px] text-right px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Negociação</th>
+                  <th className="w-[140px] text-right px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Lucro</th>
+                  <th className="w-[135px] text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Garantia</th>
+                  <th className="w-[35px] px-3 py-3"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
@@ -275,6 +279,7 @@ export default function SalesPage() {
                   const discountAmount = suggestedMainValue > 0 ? Math.max(0, suggestedMainValue - totals.valorPrincipal) : 0
                   const tradeInName = getTradeInName(s)
                   const tradeInGrade = getTradeInGrade(s)
+                  const paymentLabel = formatSalePaymentSummary(s.sale_payments, s.payment_method)
                   return (
                     <tr
                       key={s.id}
@@ -303,7 +308,9 @@ export default function SalesPage() {
                           {totals.quantidadeTotalItens}
                         </span>
                       </td>
-                      <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{paymentMethodSummary(s.sale_payments, s.payment_method)}</td>
+                      <td className="px-3 py-3 text-gray-600">
+                        <span className="block max-w-[130px] whitespace-normal break-words leading-snug">{paymentLabel}</span>
+                      </td>
                       <td className="px-3 py-3 whitespace-nowrap">
                         <Badge variant={statusMeta.variant} dot>
                           {statusMeta.label}
@@ -337,7 +344,7 @@ export default function SalesPage() {
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <Badge variant={warrantyMeta.variant} dot>
+                        <Badge variant={warrantyMeta.variant} dot className="max-w-[122px] justify-center whitespace-normal text-center leading-tight">
                           {warrantyMeta.label}
                         </Badge>
                       </td>
@@ -379,6 +386,7 @@ export default function SalesPage() {
               const discountAmount = suggestedMainValue > 0 ? Math.max(0, suggestedMainValue - totals.valorPrincipal) : 0
               const tradeInName = getTradeInName(s)
               const tradeInGrade = getTradeInGrade(s)
+              const paymentLabel = formatSalePaymentSummary(s.sale_payments, s.payment_method)
 
               return (
                 <button
@@ -390,7 +398,7 @@ export default function SalesPage() {
                     <div className="min-w-0 flex-1">
                       <p className="font-semibold text-sm text-navy-900 truncate">{productName}</p>
                       <p className="text-xs text-gray-500 mt-0.5">
-                        {customerName} · {paymentMethodSummary(s.sale_payments, s.payment_method)} · {formatDate(s.sale_date)}
+                        {customerName} · {paymentLabel} · {formatDate(s.sale_date)}
                       </p>
                       {upsellItems.length > 0 && (
                         <p className="text-xs text-royal-500 mt-0.5">

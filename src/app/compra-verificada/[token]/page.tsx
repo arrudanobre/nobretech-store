@@ -23,7 +23,7 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ProductAssetImage } from "@/components/products/product-asset-image"
-import { formatBRL } from "@/lib/helpers"
+import { formatBRL, formatDate, renderChecklistHTML } from "@/lib/helpers"
 import { generateReceiptPDF, generateWarrantyPDF, type SaleDocumentData } from "@/lib/sale-documents"
 
 type Intro = {
@@ -93,6 +93,16 @@ type Purchase = {
     receiptAvailable: boolean
     warrantyAvailable: boolean
     technicalReportUrl: string | null
+    technicalReportDocument: {
+      productName: string
+      imei: string
+      serial: string
+      grade: string
+      date: string
+      items: Array<{ label: string; status: string; note?: string }>
+      battery?: number
+      iosVersion?: string
+    } | null
     receiptDocument: SaleDocumentData | null
     warrantyDocument: SaleDocumentData | null
   }
@@ -275,6 +285,42 @@ function PortalCard({ children, className = "" }: { children: React.ReactNode; c
   )
 }
 
+function CollapsiblePortalCard({
+  icon: Icon,
+  title,
+  subtitle,
+  children,
+  className = "",
+  headerExtra,
+}: {
+  icon: IconType
+  title: string
+  subtitle?: string
+  children: React.ReactNode
+  className?: string
+  headerExtra?: React.ReactNode
+}) {
+  return (
+    <details
+      open
+      className={`group rounded-[1.45rem] border border-[#dce6f2] bg-white p-4 shadow-[0_12px_34px_rgba(15,27,45,0.045)] sm:p-5 ${className}`}
+    >
+      <summary className="mb-0 flex cursor-pointer list-none items-start gap-3 rounded-2xl outline-none transition group-open:mb-4 focus-visible:ring-4 focus-visible:ring-royal-100 [&::-webkit-details-marker]:hidden">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-royal-50 text-royal-600">
+          <Icon className="h-4 w-4" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-lg font-extrabold leading-tight text-navy-900">{title}</span>
+          {subtitle && <span className="mt-0.5 block text-sm leading-5 text-slate-500">{subtitle}</span>}
+        </span>
+        {headerExtra}
+        <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-royal-600 transition-transform duration-200 group-open:rotate-90" />
+      </summary>
+      {children}
+    </details>
+  )
+}
+
 function InfoRows({
   rows,
 }: {
@@ -300,21 +346,6 @@ function InfoRows({
           </div>
         )
       })}
-    </div>
-  )
-}
-
-function SectionTitle({ icon: Icon, title, subtitle, action = true }: { icon: IconType; title: string; subtitle?: string; action?: boolean }) {
-  return (
-    <div className="mb-4 flex items-start gap-3">
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-royal-50 text-royal-600">
-        <Icon className="h-4 w-4" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <h3 className="text-lg font-extrabold leading-tight text-navy-900">{title}</h3>
-        {subtitle && <p className="mt-0.5 text-sm leading-5 text-slate-500">{subtitle}</p>}
-      </div>
-      {action && <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-royal-600" />}
     </div>
   )
 }
@@ -486,8 +517,7 @@ function VerifiedDeviceCard({ purchase }: { purchase: Purchase }) {
   const statusCopy = getWarrantyStatusCopy(status)
 
   return (
-    <PortalCard>
-      <SectionTitle icon={Smartphone} title="Seu aparelho" />
+    <CollapsiblePortalCard icon={Smartphone} title="Seu aparelho">
       <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center">
         <ProductThumb src={purchase.device.photoUrl} name={purchase.device.model} color={purchase.device.color} size={220} />
         <div className="min-w-0 flex-1">
@@ -510,7 +540,7 @@ function VerifiedDeviceCard({ purchase }: { purchase: Purchase }) {
           <p className="mt-1 font-mono text-sm font-black text-navy-900">{maskIdentifier(purchase.device.serial)}</p>
         </div>
       </div>
-    </PortalCard>
+    </CollapsiblePortalCard>
   )
 }
 
@@ -533,12 +563,12 @@ function VerifiedPurchaseProvenanceCard({ purchase }: { purchase: Purchase }) {
       ]
 
   return (
-    <PortalCard className={hasData ? "bg-[linear-gradient(135deg,#ffffff_0%,#f6fffb_100%)]" : ""}>
-      <SectionTitle
-        icon={ShieldCheck}
-        title="Procedência verificada"
-        subtitle={provenance.description}
-      />
+    <CollapsiblePortalCard
+      icon={ShieldCheck}
+      title="Procedência verificada"
+      subtitle={provenance.description}
+      className={hasData ? "bg-[linear-gradient(135deg,#ffffff_0%,#f6fffb_100%)]" : ""}
+    >
 
       {hasData ? (
         <>
@@ -553,7 +583,7 @@ function VerifiedPurchaseProvenanceCard({ purchase }: { purchase: Purchase }) {
           Dados de procedência ainda não registrados.
         </div>
       )}
-    </PortalCard>
+    </CollapsiblePortalCard>
   )
 }
 
@@ -569,8 +599,7 @@ function VerifiedPurchaseTimelineCard({ purchase }: { purchase: Purchase }) {
   if (events.length === 0) return null
 
   return (
-    <PortalCard>
-      <SectionTitle icon={Clock} title="Linha do tempo" />
+    <CollapsiblePortalCard icon={Clock} title="Linha do tempo">
       <ol className="space-y-0">
         {events.map((event, index) => (
           <li key={event.label} className="grid grid-cols-[22px_1fr_auto] gap-3 py-1.5">
@@ -583,7 +612,7 @@ function VerifiedPurchaseTimelineCard({ purchase }: { purchase: Purchase }) {
           </li>
         ))}
       </ol>
-    </PortalCard>
+    </CollapsiblePortalCard>
   )
 }
 
@@ -603,6 +632,66 @@ async function downloadPublicDocument(kind: "receipt" | "warranty", purchase: Pu
     await generateWarrantyPDF(documentData)
   } catch (error) {
     console.error("Erro ao gerar documento público:", error)
+  }
+}
+
+async function downloadPublicTechnicalReport(purchase: Purchase) {
+  const report = purchase.documents.technicalReportDocument
+  if (!report) return
+
+  try {
+    const { default: JSPDF } = await import("jspdf")
+    const html2canvas = (await import("html2canvas")).default
+    const wrapper = document.createElement("div")
+
+    wrapper.style.position = "fixed"
+    wrapper.style.left = "-10000px"
+    wrapper.style.top = "0"
+    wrapper.style.width = "760px"
+    wrapper.style.background = "#ffffff"
+    wrapper.innerHTML = renderChecklistHTML({
+      productName: report.productName,
+      imei: report.imei,
+      serial: report.serial,
+      grade: report.grade,
+      date: formatDate(report.date),
+      items: report.items,
+      battery: report.battery,
+      iosVersion: report.iosVersion,
+    })
+
+    document.body.appendChild(wrapper)
+    const canvas = await html2canvas(wrapper, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: "#ffffff",
+      logging: false,
+    })
+    document.body.removeChild(wrapper)
+
+    const pdf = new JSPDF("p", "mm", "a4")
+    const pageW = pdf.internal.pageSize.getWidth()
+    const pageH = pdf.internal.pageSize.getHeight()
+    const marginMm = 10
+    const imgWidth = pageW - marginMm * 2
+    const imgHeight = (canvas.height * imgWidth) / canvas.width
+    const pxPerMm = canvas.width / imgWidth
+    const pageSlicePx = Math.floor((pageH - marginMm * 2) * pxPerMm)
+    const imgData = canvas.toDataURL("image/png")
+
+    pdf.addImage(imgData, "PNG", marginMm, 0, imgWidth, imgHeight)
+    let currentPage = 1
+
+    while (currentPage * pageSlicePx < canvas.height) {
+      const pageOffsetMm = (currentPage * pageSlicePx) / pxPerMm
+      pdf.addPage()
+      pdf.addImage(imgData, "PNG", marginMm, marginMm - pageOffsetMm, imgWidth, imgHeight)
+      currentPage++
+    }
+
+    pdf.save(`Laudo-${report.productName.replace(/[^a-zA-Z0-9]+/g, "-")}.pdf`)
+  } catch (error) {
+    console.error("Erro ao gerar laudo público:", error)
   }
 }
 
@@ -634,15 +723,23 @@ function DocumentRow({ icon: Icon, title, subtitle, href, disabled, onClick }: {
 }
 
 function VerifiedPurchaseDocumentsCard({ purchase }: { purchase: Purchase }) {
+  const hasTechnicalReport = Boolean(purchase.documents.technicalReportUrl || purchase.documents.technicalReportDocument)
+
   return (
-    <PortalCard>
-      <SectionTitle icon={FileText} title="Documentos da compra" />
+    <CollapsiblePortalCard icon={FileText} title="Documentos da compra">
       <div className="overflow-hidden rounded-2xl border border-[#dce6f2] bg-white px-3">
         <DocumentRow icon={ReceiptText} title="Recibo da compra" subtitle="PDF" disabled={!purchase.documents.receiptAvailable} onClick={() => downloadPublicDocument("receipt", purchase)} />
         <DocumentRow icon={ShieldCheck} title="Termo de garantia" subtitle="PDF" disabled={!purchase.documents.warrantyAvailable} onClick={() => downloadPublicDocument("warranty", purchase)} />
-        <DocumentRow icon={FileText} title="Laudo técnico" subtitle={purchase.documents.technicalReportUrl ? "PDF" : "Sem laudo registrado"} href={purchase.documents.technicalReportUrl} disabled={!purchase.documents.technicalReportUrl} />
+        <DocumentRow
+          icon={FileText}
+          title="Laudo técnico"
+          subtitle={hasTechnicalReport ? "PDF" : "Sem laudo registrado"}
+          href={purchase.documents.technicalReportUrl}
+          disabled={!hasTechnicalReport}
+          onClick={() => downloadPublicTechnicalReport(purchase)}
+        />
       </div>
-    </PortalCard>
+    </CollapsiblePortalCard>
   )
 }
 
@@ -667,11 +764,12 @@ function VerifiedPurchaseSummaryCard({ purchase }: { purchase: Purchase }) {
       ]
 
   return (
-    <PortalCard>
-      <div className="mb-4 flex items-start justify-between gap-3">
-        <SectionTitle icon={CreditCard} title="Resumo da compra" subtitle="Informações principais desta compra." />
-        {hasTradeIn && <StatusPill tone="green">Trade-in aplicado</StatusPill>}
-      </div>
+    <CollapsiblePortalCard
+      icon={CreditCard}
+      title="Resumo da compra"
+      subtitle="Informações principais desta compra."
+      headerExtra={hasTradeIn ? <StatusPill tone="green">Trade-in aplicado</StatusPill> : null}
+    >
 
       <InfoRows rows={summaryRows} />
 
@@ -723,7 +821,7 @@ function VerifiedPurchaseSummaryCard({ purchase }: { purchase: Purchase }) {
           )}
         </div>
       )}
-    </PortalCard>
+    </CollapsiblePortalCard>
   )
 }
 
@@ -754,8 +852,7 @@ function VerifiedPurchaseItemsCard({ purchase }: { purchase: Purchase }) {
   }]
 
   return (
-    <PortalCard>
-      <SectionTitle icon={PackageCheck} title="Itens da sua compra" />
+    <CollapsiblePortalCard icon={PackageCheck} title="Itens da sua compra">
       <div className="divide-y divide-slate-100">
         {items.map((item, index) => {
           const tone = itemTone(item.type)
@@ -777,7 +874,7 @@ function VerifiedPurchaseItemsCard({ purchase }: { purchase: Purchase }) {
           )
         })}
       </div>
-    </PortalCard>
+    </CollapsiblePortalCard>
   )
 }
 
@@ -788,14 +885,18 @@ function VerifiedPurchaseWarrantyCard({ purchase }: { purchase: Purchase }) {
   const progressPct = Math.round((progress ?? 0) * 100)
 
   return (
-    <PortalCard className="overflow-hidden">
-      <div className="mb-4 flex items-start justify-between gap-3">
-        <SectionTitle icon={ShieldCheck} title="Garantia" subtitle="Acompanhamento do período de cobertura." />
+    <CollapsiblePortalCard
+      icon={ShieldCheck}
+      title="Garantia"
+      subtitle="Acompanhamento do período de cobertura."
+      className="overflow-hidden"
+      headerExtra={
         <span className={`mt-1 hidden shrink-0 items-center gap-2 rounded-full px-3 py-1 text-xs font-bold sm:inline-flex ${statusCopy.className}`}>
           <span className={`h-2 w-2 rounded-full ${statusCopy.dot}`} />
           {statusCopy.label}
         </span>
-      </div>
+      }
+    >
 
       <div className="rounded-[1.25rem] bg-gradient-to-br from-royal-50 to-emerald-50/70 p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -848,25 +949,23 @@ function VerifiedPurchaseWarrantyCard({ purchase }: { purchase: Purchase }) {
           { icon: ShieldCheck, label: "Status", value: statusCopy.label, tone: status === "active" ? "green" : "blue" },
         ]} />
       </div>
-    </PortalCard>
+    </CollapsiblePortalCard>
   )
 }
 
 function VerifiedPurchaseIssueCard({ purchase }: { purchase: Purchase }) {
   if (purchase.assistance.length === 0) {
     return (
-      <PortalCard>
-        <SectionTitle icon={Wrench} title="Ordem de Serviço" />
+      <CollapsiblePortalCard icon={Wrench} title="Ordem de Serviço">
         <div className="rounded-2xl border border-dashed border-[#dce6f2] bg-slate-50/70 p-4 text-sm font-semibold leading-6 text-slate-600">
           Nenhuma ordem de serviço aberta para este aparelho.
         </div>
-      </PortalCard>
+      </CollapsiblePortalCard>
     )
   }
 
   return (
-    <PortalCard>
-      <SectionTitle icon={Wrench} title="Ordem de Serviço" subtitle="Acompanhamento de atendimentos vinculados ao aparelho." />
+    <CollapsiblePortalCard icon={Wrench} title="Ordem de Serviço" subtitle="Acompanhamento de atendimentos vinculados ao aparelho.">
       <div className="space-y-4">
         {purchase.assistance.map((item, index) => (
           <div key={item.id} className="rounded-[1.2rem] border border-slate-200 bg-slate-50/70 p-4">
@@ -917,7 +1016,7 @@ function VerifiedPurchaseIssueCard({ purchase }: { purchase: Purchase }) {
           </div>
         ))}
       </div>
-    </PortalCard>
+    </CollapsiblePortalCard>
   )
 }
 

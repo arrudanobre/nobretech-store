@@ -510,7 +510,7 @@ export default function InventoryPage() {
                     <div className="min-w-0">
                       <Link href={`/estoque/${item.id}`} className="font-semibold text-sm text-navy-900 hover:text-royal-500 truncate block">{product}</Link>
                       <p className="text-xs text-gray-500 truncate lg:hidden">{categoryLabel} · {identity}</p>
-                      {item.type === "supplier" && <p className="text-xs text-gray-400">Fornecedor{item.supplier_name ? `: ${item.supplier_name}` : ""}</p>}
+                      {item.supplier_name && <p className="text-xs text-gray-400">Fornecedor: {item.supplier_name}</p>}
                     </div>
                   </div>
                   <div className="hidden lg:flex items-center text-sm text-gray-600">{categoryLabel}</div>

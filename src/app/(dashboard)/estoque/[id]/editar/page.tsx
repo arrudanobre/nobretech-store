@@ -31,7 +31,7 @@ import {
   UserRound,
   WalletCards,
 } from "lucide-react"
-import { formatBRL, getComputedInventoryStatus, getProductName, mapLifecycleToLegacyCompatibleStatus } from "@/lib/helpers"
+import { formatBRL, getComputedInventoryStatus, getProductName, mapLifecycleToLegacyCompatibleStatus, normalizeInventoryStatus } from "@/lib/helpers"
 
 const STATUS_OPTIONS = [
   { value: "active", label: "Ativo" },
@@ -57,6 +57,7 @@ type LinkedPurchaseInfo = {
   id: string
   purchase_date: string
   transaction_id?: string | null
+  supplier_name?: string | null
 }
 
 type SourceSaleInfo = {
@@ -237,7 +238,9 @@ export default function EditProductPage() {
         imei: item.imei || "",
         serial_number: item.serial_number || "",
         grade: item.grade || "",
-        status: item.status || "in_stock",
+        status: item.origin === "trade_in" && item.status === "trade_in_received"
+          ? "trade_in_received"
+          : normalizeInventoryStatus(item.status || "in_stock"),
         purchase_price: item.purchase_price?.toString() || "",
         suggested_price: item.suggested_price?.toString() || "",
         purchase_date: toDateInputValue(item.purchase_date),
@@ -286,6 +289,9 @@ export default function EditProductPage() {
             storage: selection.storage,
             color: selection.color,
             colorHex: selection.colorHex,
+            status: item.origin === "trade_in" && item.status === "trade_in_received"
+              ? "trade_in_received"
+              : getComputedInventoryStatus({ ...item, catalog: catData }),
           }))
         }
       } else {
@@ -299,6 +305,9 @@ export default function EditProductPage() {
           storage: selection.storage,
           color: selection.color,
           colorHex: selection.colorHex,
+          status: item.origin === "trade_in" && item.status === "trade_in_received"
+            ? "trade_in_received"
+            : getComputedInventoryStatus(item),
         }))
         const fallbackName = item.notes || item.condition_notes?.replace(/^Acessório:\s*/, "") || "Produto manual"
         setCatalogName(hasDeviceSignals ? getProductName({ model: (PRODUCT_CATALOG[selection.categoryValue as keyof typeof PRODUCT_CATALOG]?.models[selection.modelIndex] as any)?.name, storage: selection.storage, color: selection.color }) : fallbackName)
@@ -343,13 +352,17 @@ export default function EditProductPage() {
       const purchaseId = purchaseItems?.[0]?.purchase_id
       if (purchaseId) {
         const { data: purchases, error: purchaseError } = await (supabase.from("inventory_purchases") as any)
-          .select("id, purchase_date, transaction_id")
+          .select("id, purchase_date, transaction_id, supplier_name")
           .eq("id", purchaseId)
           .limit(1)
         if (purchaseError) throw purchaseError
         if (purchases?.[0]) {
           setLinkedPurchase(purchases[0])
-          setFormData((prev) => ({ ...prev, purchase_date: toDateInputValue(purchases[0].purchase_date) || prev.purchase_date }))
+          setFormData((prev) => ({
+            ...prev,
+            purchase_date: toDateInputValue(purchases[0].purchase_date) || prev.purchase_date,
+            supplier_name: prev.supplier_name || purchases[0].supplier_name || "",
+          }))
         }
       }
     } catch (err) {
@@ -444,7 +457,7 @@ export default function EditProductPage() {
         condition_notes: formData.condition_notes || null,
         quantity: resolvedType === "own" ? Math.max(1, parseInt(formData.quantity) || 1) : 1,
         type: resolvedType,
-        supplier_name: resolvedType === "supplier" ? (formData.supplier_name || null) : null,
+        supplier_name: isTradeInItem ? null : (formData.supplier_name || null),
         notes: mode === "manual" ? (trimmedProductName || null) : (customCatalogName ? `Nome: ${customCatalogName}` : null),
       }
 
@@ -761,7 +774,7 @@ export default function EditProductPage() {
               </div>
             ) : (
               <>
-                <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
                   <Select
                     label="Origem do produto"
                     value={formData.type}
@@ -771,22 +784,20 @@ export default function EditProductPage() {
                       { label: "Fornecedor", value: "supplier" },
                     ]}
                   />
-                  {formData.type === "supplier" ? (
-                    <Input
-                      label="Nome do fornecedor"
-                      placeholder="Opcional"
-                      value={formData.supplier_name}
-                      onChange={(e) => updateField("supplier_name", e.target.value)}
-                    />
-                  ) : (
-                    <Input
-                      label="Quantidade em estoque"
-                      type="number"
-                      min="1"
-                      value={formData.quantity}
-                      onChange={(e) => updateField("quantity", Math.max(1, parseInt(e.target.value) || 1).toString())}
-                    />
-                  )}
+                  <Input
+                    label="Fornecedor da compra"
+                    placeholder="Opcional"
+                    value={formData.supplier_name}
+                    onChange={(e) => updateField("supplier_name", e.target.value)}
+                  />
+                  <Input
+                    label="Quantidade em estoque"
+                    type="number"
+                    min="1"
+                    disabled={formData.type === "supplier"}
+                    value={formData.type === "supplier" ? "1" : formData.quantity}
+                    onChange={(e) => updateField("quantity", Math.max(1, parseInt(e.target.value) || 1).toString())}
+                  />
                   <Input
                     label="Data de aquisição"
                     type="date"

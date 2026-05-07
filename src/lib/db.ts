@@ -7,7 +7,6 @@ if (!connectionString) {
 }
 
 declare global {
-  // eslint-disable-next-line no-var
   var nobretechPool: Pool | undefined
 }
 
@@ -46,7 +45,7 @@ export async function ensureDefaultCompanyAndUser() {
   await pool.query(
     `
       INSERT INTO users (id, company_id, email, full_name, role)
-      VALUES ($1, $2, $3, 'Nobretech Local', 'owner')
+      VALUES ($1, $2, $3, NULL, 'owner')
       ON CONFLICT (id) DO UPDATE
       SET company_id = EXCLUDED.company_id,
           email = EXCLUDED.email,

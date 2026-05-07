@@ -171,19 +171,6 @@ const LEAD_STATUS_LABELS: Record<string, string> = {
   converted: "Vendido",
 }
 
-const LEAD_STATUS_CLASSES: Record<string, string> = {
-  new: "bg-blue-100 text-blue-700",
-  in_service: "bg-violet-100 text-violet-700",
-  table_sent: "bg-amber-100 text-amber-700",
-  hot_negotiation: "bg-orange-100 text-orange-700",
-  sold: "bg-emerald-100 text-emerald-700",
-  lost: "bg-rose-100 text-rose-700",
-  contacted: "bg-violet-100 text-violet-700",
-  qualified: "bg-orange-100 text-orange-700",
-  proposal: "bg-amber-100 text-amber-700",
-  converted: "bg-emerald-100 text-emerald-700",
-}
-
 const FUNNEL_STEPS = [
   { key: "new", label: "Novos", count: 2, width: "w-full", tone: "bg-blue-50 text-blue-700 border-blue-100", icon: UserRound },
   { key: "in_service", label: "Em atendimento", count: 2, width: "w-[92%]", tone: "bg-violet-50 text-violet-700 border-violet-100", icon: MessageCircle },
@@ -404,6 +391,13 @@ function LeadFunnel({ leads, useDemo }: { leads: DisplayLead[]; useDemo: boolean
 }
 
 function LeadsTable({ leads, totalLeads }: { leads: DisplayLead[]; totalLeads: number }) {
+  const pageSize = 5
+  const [page, setPage] = useState(1)
+  const totalPages = Math.max(1, Math.ceil(leads.length / pageSize))
+  const currentPage = Math.min(page, totalPages)
+  const startIndex = (currentPage - 1) * pageSize
+  const paginatedLeads = leads.slice(startIndex, startIndex + pageSize)
+
   return (
     <div className="rounded-2xl border border-[#e2e8f0] bg-white p-5 shadow-sm">
       <div className="flex items-start justify-between gap-4">
@@ -417,36 +411,36 @@ function LeadsTable({ leads, totalLeads }: { leads: DisplayLead[]; totalLeads: n
         <table className="w-full min-w-[760px] text-left text-sm">
           <thead>
             <tr className="border-b border-slate-200 text-[11px] font-bold uppercase tracking-wide text-slate-500">
-              <th className="py-3">Lead</th>
-              <th className="py-3">Produto</th>
-              <th className="py-3">Origem</th>
-              <th className="py-3">Status</th>
-              <th className="py-3">Próxima ação</th>
-              <th className="py-3">Vínculo</th>
+              <th className="px-3 py-3">Lead</th>
+              <th className="px-3 py-3">Produto</th>
+              <th className="px-3 py-3">Origem</th>
+              <th className="px-3 py-3">Status</th>
+              <th className="px-3 py-3">Próxima ação</th>
+              <th className="px-3 py-3">Vínculo</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {leads.length === 0 ? (
+            {paginatedLeads.length === 0 ? (
               <tr>
                 <td colSpan={6} className="py-6 text-center text-sm font-medium text-slate-400">
                   Nenhum lead real encontrado neste período.
                 </td>
               </tr>
-            ) : leads.map((lead, index) => (
+            ) : paginatedLeads.map((lead, index) => (
               <tr key={lead.id} className="transition hover:bg-slate-50">
-                <td className="py-3">
+                <td className="px-3 py-3">
                   <div className="flex items-center gap-2">
-                    <span className={cn("flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold", avatarClass(index))}>{lead.name.slice(0, 1)}</span>
+                    <span className={cn("flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold", avatarClass(startIndex + index))}>{lead.name.slice(0, 1)}</span>
                     <span className="font-semibold text-slate-950">{lead.name}</span>
                   </div>
                 </td>
-                <td className="py-3 font-medium text-slate-700">{lead.product}</td>
-                <td className="py-3 text-slate-600">{lead.origin}</td>
-                <td className="py-3">
-                  <LeadStatusBadge status={lead.status} label={lead.statusLabel} />
+                <td className="px-3 py-3 font-medium text-slate-700">{lead.product}</td>
+                <td className="px-3 py-3 text-slate-600">{lead.origin}</td>
+                <td className={cn("px-3 py-3 align-middle text-xs font-bold", leadStatusCellClass(lead.status))}>
+                  <span className="block leading-tight">{lead.statusLabel}</span>
                 </td>
-                <td className="py-3 font-medium text-slate-700">{lead.nextAction}</td>
-                <td className="py-3">
+                <td className="px-3 py-3 font-medium text-slate-700">{lead.nextAction}</td>
+                <td className="px-3 py-3">
                   <span className={cn("inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold", lead.linked ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600")}>
                     <Link2 className="h-3 w-3" />
                     {lead.linked ? "Vinculado" : "Não vinculado"}
@@ -458,23 +452,49 @@ function LeadsTable({ leads, totalLeads }: { leads: DisplayLead[]; totalLeads: n
         </table>
       </div>
       <div className="mt-4 flex items-center justify-between text-sm text-slate-500">
-        <span>Mostrando {totalLeads > 0 ? 1 : 0} a {Math.min(5, totalLeads)} de {totalLeads} leads</span>
-        <div className="flex items-center gap-3">
-          <span className="rounded-md bg-royal-500 px-3 py-1 text-xs font-bold text-white">1</span>
-          <span className="text-xs font-bold text-slate-700">2</span>
-          <ArrowRight className="h-4 w-4 text-slate-900" />
+        <span>Mostrando {totalLeads > 0 ? startIndex + 1 : 0} a {Math.min(startIndex + pageSize, totalLeads)} de {totalLeads} leads</span>
+        <div className="flex items-center gap-1">
+          {Array.from({ length: totalPages }).map((_, index) => {
+            const pageNumber = index + 1
+            return (
+              <button
+                key={pageNumber}
+                type="button"
+                onClick={() => setPage(pageNumber)}
+                className={cn(
+                  "h-8 min-w-8 rounded-lg px-2 text-xs font-bold transition",
+                  currentPage === pageNumber ? "bg-royal-500 text-white" : "text-slate-600 hover:bg-slate-100"
+                )}
+              >
+                {pageNumber}
+              </button>
+            )
+          })}
+          <button
+            type="button"
+            onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+            disabled={currentPage >= totalPages}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-900 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-35"
+            aria-label="Próxima página"
+          >
+            <ArrowRight className="h-4 w-4" />
+          </button>
         </div>
       </div>
     </div>
   )
 }
 
-function LeadStatusBadge({ status, label }: { status: string; label: string }) {
-  return (
-    <span className={cn("inline-flex rounded-full px-3 py-1 text-xs font-bold", LEAD_STATUS_CLASSES[status] || "bg-slate-100 text-slate-600")}>
-      {label}
-    </span>
-  )
+function leadStatusCellClass(status: string) {
+  const classes: Record<string, string> = {
+    new: "bg-blue-50 text-blue-700",
+    in_service: "bg-violet-50 text-violet-700",
+    table_sent: "bg-amber-50 text-amber-700",
+    hot_negotiation: "bg-orange-50 text-orange-700",
+    sold: "bg-emerald-50 text-emerald-700",
+    lost: "bg-rose-50 text-rose-700",
+  }
+  return classes[status] || "bg-slate-50 text-slate-600"
 }
 
 function LeadOriginCard({ rows, total }: { rows: { origin: string; pct: number; count: number }[]; total: number }) {
@@ -633,8 +653,8 @@ export default function MarketingRoiPage() {
   const hasRealLeads = leads.length > 0
   const isDemoMode = !loading && !hasRealCampaigns && !hasRealLeads
   const displayCampaigns = loading ? EMPTY_DISPLAY_CAMPAIGNS : isDemoMode ? DEMO_CAMPAIGNS : realCampaigns
-  const displayLeads = loading ? EMPTY_DISPLAY_LEADS : isDemoMode ? DEMO_LEADS : realLeads.slice(0, 5)
-  const displayTotalLeads = loading ? 0 : isDemoMode ? 8 : realLeads.length
+  const displayLeads = loading ? EMPTY_DISPLAY_LEADS : isDemoMode ? DEMO_LEADS : realLeads
+  const displayTotalLeads = loading ? 0 : isDemoMode ? DEMO_LEADS.length : realLeads.length
 
   const originRows = useMemo(() => {
     if (isDemoMode) return DEMO_ORIGINS

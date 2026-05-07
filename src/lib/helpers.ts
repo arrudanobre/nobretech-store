@@ -57,6 +57,7 @@ export function formatPaymentMethod(method?: string | null): string {
     transfer: "Transferência",
     transferencia: "Transferência",
     "transferência": "Transferência",
+    mixed: "Pagamento misto",
     trade_in_credit: "Crédito gerado no trade-in",
   }
   if (labels[normalized]) return labels[normalized]
@@ -600,13 +601,18 @@ export function isInventoryReadyForSale(item: {
   imei?: string | null
   serial_number?: string | null
   catalog_id?: string | null
+  category?: string | null
+  catalog?: { category?: string | null } | null
+  product_catalog?: { category?: string | null } | null
   notes?: string | null
   condition_notes?: string | null
 }): boolean {
   const hasPrice = Number(item.purchase_price || 0) > 0
   const hasDate = Boolean(item.purchase_date)
+  const category = item.category || item.catalog?.category || item.product_catalog?.category || ""
   const isManual = !item.catalog_id && Boolean((item.notes || "").trim() || (item.condition_notes || "").trim())
-  const isAccessory = /acess[oó]rio:/i.test(`${item.notes || ""} ${item.condition_notes || ""}`)
+  const accessoryText = `${item.notes || ""} ${item.condition_notes || ""}`.toLowerCase()
+  const isAccessory = category === "accessories" || /acess[oó]rio|capa|pel[ií]cula|pencil|caneta|cabo|fonte|carregador|fone/.test(accessoryText)
   const isLacrado = item.grade === "Lacrado"
   const hasGrade = Boolean(item.grade) || isManual || isAccessory
   const hasIdentity = Boolean(item.imei || item.serial_number) || isManual || isAccessory || isLacrado
@@ -623,6 +629,9 @@ export function getComputedInventoryStatus(item: {
   imei?: string | null
   serial_number?: string | null
   catalog_id?: string | null
+  category?: string | null
+  catalog?: { category?: string | null } | null
+  product_catalog?: { category?: string | null } | null
   notes?: string | null
   condition_notes?: string | null
 }): "pending" | "active" | "reserved" | "sold" | "returned" | "under_repair" {
@@ -721,7 +730,7 @@ export function mapLegacyInventoryStatusToLifecycle(status?: string | null): str
 
 export function mapLifecycleToLegacyCompatibleStatus(status?: string | null): string {
   if (status === "active") return "in_stock"
-  if (status === "pending") return "trade_in_received"
+  if (status === "pending") return "pending"
   return status || "in_stock"
 }
 
@@ -746,6 +755,9 @@ export function getTradeInInitialStatus(item: {
   imei?: string | null
   serial_number?: string | null
   catalog_id?: string | null
+  category?: string | null
+  catalog?: { category?: string | null } | null
+  product_catalog?: { category?: string | null } | null
   notes?: string | null
   condition_notes?: string | null
 }): "pending" | "active" {

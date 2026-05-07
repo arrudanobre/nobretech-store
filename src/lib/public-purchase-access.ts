@@ -80,6 +80,7 @@ export type PublicPurchaseDetails = {
     receiptAvailable: boolean
     warrantyAvailable: boolean
     technicalReportUrl: string | null
+    technicalReportDocument: PublicTechnicalReportDocument | null
     receiptDocument: SaleDocumentData | null
     warrantyDocument: SaleDocumentData | null
   }
@@ -108,6 +109,17 @@ export type PublicPurchaseIssue = {
   expectedAt: string | null
   publicNote: string | null
   timeline: Array<{ label: string; date: string | null; active: boolean }>
+}
+
+export type PublicTechnicalReportDocument = {
+  productName: string
+  imei: string
+  serial: string
+  grade: string
+  date: string
+  items: Array<{ label: string; status: string; note?: string }>
+  battery?: number
+  iosVersion?: string
 }
 
 export type PublicPurchaseItem = {
@@ -175,12 +187,14 @@ type SaleAccessRow = {
   checklist_completed_at: string | Date | null
   checklist_created_at: string | Date | null
   checklist_pdf_url: string | null
+  checklist_items: Array<{ label?: string; status?: string; note?: string }> | null
   model: string | null
   variant: string | null
   storage: string | null
   color: string | null
   grade: string | null
   battery_health: number | null
+  ios_version: string | null
   inventory_suggested_price: string | number | null
   imei: string | null
   imei2: string | null
@@ -623,6 +637,7 @@ async function getSaleByToken(token: string) {
         i.photos AS inventory_photos,
         i.grade,
         i.battery_health,
+        i.ios_version,
         i.suggested_price AS inventory_suggested_price,
         i.imei,
         i.imei2,
@@ -633,7 +648,8 @@ async function getSaleByToken(token: string) {
         pc_owner.cpf AS previous_owner_cpf,
         ch.completed_at AS checklist_completed_at,
         ch.created_at AS checklist_created_at,
-        ch.pdf_url AS checklist_pdf_url
+        ch.pdf_url AS checklist_pdf_url,
+        ch.items AS checklist_items
       FROM sales s
       LEFT JOIN customers c ON c.id = s.customer_id
       LEFT JOIN companies co ON co.id = s.company_id
@@ -645,7 +661,13 @@ async function getSaleByToken(token: string) {
       LEFT JOIN product_catalog pc ON pc.id = i.catalog_id
       LEFT JOIN sales ps ON ps.id = i.source_sale_id
       LEFT JOIN customers pc_owner ON pc_owner.id = ps.customer_id
-      LEFT JOIN checklists ch ON ch.id = i.checklist_id OR ch.inventory_id = i.id
+      LEFT JOIN LATERAL (
+        SELECT completed_at, created_at, pdf_url, items
+        FROM checklists
+        WHERE id = i.checklist_id OR inventory_id = i.id
+        ORDER BY completed_at DESC NULLS LAST, created_at DESC NULLS LAST
+        LIMIT 1
+      ) ch ON true
       WHERE s.public_access_token = $1
       LIMIT 1
     `,
@@ -883,6 +905,25 @@ function buildSaleDocuments(input: {
   return { receiptDocument, warrantyDocument }
 }
 
+function buildTechnicalReportDocument(row: SaleAccessRow): PublicTechnicalReportDocument | null {
+  if (!row.checklist_items?.length) return null
+
+  return {
+    productName: documentItemName(row.model, row.variant, row.storage, row.color),
+    imei: maskTrailing(row.imei) || "—",
+    serial: maskTrailing(row.serial_number) || "—",
+    grade: row.grade || "—",
+    date: dateOnly(row.checklist_completed_at || row.checklist_created_at) || new Date().toISOString().slice(0, 10),
+    items: row.checklist_items.map((item) => ({
+      label: item.label || "Item avaliado",
+      status: item.status || "na",
+      note: item.note || undefined,
+    })),
+    battery: row.battery_health === null || row.battery_health === undefined ? undefined : Number(row.battery_health),
+    iosVersion: row.ios_version || undefined,
+  }
+}
+
 async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPurchaseDetails> {
   const additionalItems = await getAdditionalItemsForSale(row.id)
   const publicPayments = await getPublicPaymentsForSale(row.id)
@@ -983,6 +1024,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
     tradeInDeviceName: tradeInDeviceModel === "Aparelho não informado" ? null : tradeInDeviceModel,
     settings,
   })
+  const technicalReportDocument = buildTechnicalReportDocument(row)
 
   return {
     customerName: firstName(row.customer_name) || "cliente",
@@ -1020,6 +1062,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
       receiptAvailable: true,
       warrantyAvailable: Boolean(warrantyStart && warrantyEnd) || Boolean(row.warranty_pdf_url),
       technicalReportUrl: row.checklist_pdf_url || null,
+      technicalReportDocument,
       receiptDocument: documents.receiptDocument,
       warrantyDocument: documents.warrantyDocument,
     },

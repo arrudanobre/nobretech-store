@@ -1,9 +1,9 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { ArrowLeft, Calculator, Copy, Package, Plus, Save, Trash2, Truck } from "lucide-react"
+import { ArrowLeft, Calculator, Copy, ImageIcon, Package, Plus, Save, Trash2, Truck, Upload, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
@@ -35,6 +35,8 @@ type PurchaseLine = {
   imeis: string
   serials: string
   notes: string
+  imageFile: File | null
+  imagePreviewUrl: string
 }
 
 const categoryOptions = CATEGORIES.map((category) => ({ label: category.label, value: category.value }))
@@ -77,6 +79,8 @@ function newLine(overrides: Partial<PurchaseLine> = {}): PurchaseLine {
     imeis: "",
     serials: "",
     notes: "",
+    imageFile: null,
+    imagePreviewUrl: "",
     ...overrides,
   }
 }
@@ -120,6 +124,22 @@ function shouldCreateOneInventoryRowPerUnit(line: PurchaseLine, imeis: string[],
   return line.mode === "catalog" && ["iphone", "ipad", "applewatch", "airpods", "macbook"].includes(line.category)
 }
 
+async function uploadProductImage(productId: string, file: File) {
+  const formData = new FormData()
+  formData.set("productId", productId)
+  formData.set("file", file)
+
+  const response = await fetch("/api/product-images", {
+    method: "POST",
+    body: formData,
+  })
+
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || "Erro ao enviar imagem")
+  }
+}
+
 export default function NewInventoryPurchasePage() {
   const router = useRouter()
   const { toast } = useToast()
@@ -138,6 +158,14 @@ export default function NewInventoryPurchasePage() {
     notes: "",
   })
   const [lines, setLines] = useState<PurchaseLine[]>([newLine()])
+  const imagePreviewUrlsRef = useRef(new Set<string>())
+
+  useEffect(() => {
+    return () => {
+      imagePreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
+      imagePreviewUrlsRef.current.clear()
+    }
+  }, [])
 
   useEffect(() => {
     async function loadOptions() {
@@ -211,16 +239,59 @@ export default function NewInventoryPurchasePage() {
     }))
   }
 
+  const updateLineImage = (id: string, file: File | null) => {
+    if (file && !file.type.startsWith("image/")) {
+      toast({
+        title: "Arquivo inválido",
+        description: "Envie uma imagem em JPG, PNG ou WebP.",
+        type: "error",
+      })
+      return
+    }
+
+    if (file && file.size > 10 * 1024 * 1024) {
+      toast({
+        title: "Imagem muito grande",
+        description: "Use uma imagem com até 10MB.",
+        type: "error",
+      })
+      return
+    }
+
+    setLines((prev) => prev.map((line) => {
+      if (line.id !== id) return line
+      if (line.imagePreviewUrl) {
+        URL.revokeObjectURL(line.imagePreviewUrl)
+        imagePreviewUrlsRef.current.delete(line.imagePreviewUrl)
+      }
+      const nextPreviewUrl = file ? URL.createObjectURL(file) : ""
+      if (nextPreviewUrl) imagePreviewUrlsRef.current.add(nextPreviewUrl)
+      return {
+        ...line,
+        imageFile: file,
+        imagePreviewUrl: nextPreviewUrl,
+      }
+    }))
+  }
+
   const addLine = (mode: ProductMode = "catalog") => {
     setLines((prev) => [...prev, newLine(mode === "manual" ? { mode, category: "accessories", manualName: accessorySuggestions[0] } : {})])
   }
 
   const duplicateLine = (line: PurchaseLine) => {
-    setLines((prev) => [...prev, { ...line, id: crypto.randomUUID(), imeis: "", serials: "" }])
+    setLines((prev) => [...prev, { ...line, id: crypto.randomUUID(), imeis: "", serials: "", imageFile: null, imagePreviewUrl: "" }])
   }
 
   const removeLine = (id: string) => {
-    setLines((prev) => prev.length === 1 ? prev : prev.filter((line) => line.id !== id))
+    setLines((prev) => {
+      if (prev.length === 1) return prev
+      const removed = prev.find((line) => line.id === id)
+      if (removed?.imagePreviewUrl) {
+        URL.revokeObjectURL(removed.imagePreviewUrl)
+        imagePreviewUrlsRef.current.delete(removed.imagePreviewUrl)
+      }
+      return prev.filter((line) => line.id !== id)
+    })
   }
 
   const findOrCreateCatalog = async (line: PurchaseLine) => {
@@ -389,6 +460,7 @@ export default function NewInventoryPurchasePage() {
           })
 
           purchaseItemPayloads.push({
+            __lineId: line.id,
             purchase_id: purchaseRow.id,
             catalog_id: catalogId,
             product_name: productName,
@@ -424,16 +496,43 @@ export default function NewInventoryPurchasePage() {
         inventory_id: createdInventory?.[index]?.id || null,
       }))
 
+      const itemsForInsert = itemsWithInventory.map(({ __lineId, ...item }) => item)
+
       const { error: itemError } = await (supabase.from("inventory_purchase_items") as any)
-        .insert(itemsWithInventory)
+        .insert(itemsForInsert)
 
       if (itemError) throw itemError
 
-      toast({
-        title: "Compra cadastrada",
-        description: `${totals.totalQty} item(ns) entraram no estoque com custo rateado.`,
-        type: "success",
-      })
+      const uploadTargets = itemsWithInventory
+        .map((item) => ({
+          inventoryId: item.inventory_id as string | null,
+          line: lines.find((line) => line.id === item.__lineId),
+        }))
+        .filter((item): item is { inventoryId: string; line: PurchaseLine } => Boolean(item.inventoryId && item.line?.imageFile))
+
+      const imageUploadErrors: string[] = []
+      for (const target of uploadTargets) {
+        try {
+          await uploadProductImage(target.inventoryId, target.line.imageFile as File)
+        } catch (error) {
+          imageUploadErrors.push(error instanceof Error ? error.message : "Erro ao enviar imagem")
+        }
+      }
+
+      if (imageUploadErrors.length > 0) {
+        toast({
+          title: "Compra cadastrada, mas imagem não enviada",
+          description: imageUploadErrors[0],
+          type: "warning",
+          duration: 6000,
+        })
+      } else {
+        toast({
+          title: "Compra cadastrada",
+          description: `${totals.totalQty} item(ns) entraram no estoque com custo rateado.`,
+          type: "success",
+        })
+      }
       router.push("/estoque")
     } catch (error) {
       toast({
@@ -575,6 +674,44 @@ export default function NewInventoryPurchasePage() {
                     <div className="grid gap-3 md:grid-cols-2">
                       <Textarea label="IMEIs (um por linha)" value={line.imeis} onChange={(event) => updateLine(line.id, "imeis", event.target.value)} placeholder={"356...\n356..."} />
                       <Textarea label="Seriais (um por linha)" value={line.serials} onChange={(event) => updateLine(line.id, "serials", event.target.value)} placeholder={"F2L...\nG6T..."} />
+                    </div>
+                    <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50/70 p-3">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                        <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
+                          {line.imagePreviewUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={line.imagePreviewUrl} alt={`Imagem de ${lineProductName(line)}`} className="h-full w-full object-cover" />
+                          ) : (
+                            <ImageIcon className="h-6 w-6 text-gray-300" />
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-semibold text-navy-900">Imagem do item</p>
+                          <p className="text-xs leading-5 text-gray-500">
+                            Opcional. Use uma foto limpa do produto; ela será aplicada ao item criado no estoque.
+                          </p>
+                          {line.imageFile ? (
+                            <p className="mt-1 truncate text-xs font-medium text-gray-600">{line.imageFile.name}</p>
+                          ) : null}
+                        </div>
+                        <div className="flex shrink-0 gap-2">
+                          <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3 text-sm font-semibold text-navy-900 shadow-sm transition-colors hover:border-royal-200 hover:text-royal-600">
+                            <Upload className="h-4 w-4" />
+                            {line.imageFile ? "Trocar" : "Enviar"}
+                            <input
+                              type="file"
+                              accept="image/jpeg,image/png,image/webp"
+                              className="hidden"
+                              onChange={(event) => updateLineImage(line.id, event.target.files?.[0] || null)}
+                            />
+                          </label>
+                          {line.imageFile ? (
+                            <Button variant="ghost" size="icon" onClick={() => updateLineImage(line.id, null)} title="Remover imagem">
+                              <X className="h-4 w-4" />
+                            </Button>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
                     <Textarea label="Observacoes do item" value={line.notes} onChange={(event) => updateLine(line.id, "notes", event.target.value)} placeholder="Marcas de uso, caixa, acessorios inclusos, origem..." />
                   </div>
