@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   Area,
   AreaChart,
@@ -24,6 +24,7 @@ import {
   ArrowUpRight,
   Bot,
   BrainCircuit,
+  ChevronDown,
   CheckCircle2,
   Clock3,
   ClipboardList,
@@ -31,13 +32,18 @@ import {
   Flame,
   Gauge,
   Loader2,
+  Megaphone,
   MessageSquareText,
+  PackageCheck,
+  PhoneCall,
   RadioTower,
   RefreshCw,
+  Route,
   Send,
   ShieldCheck,
   Sparkles,
   Target,
+  TrendingUp,
   WalletCards,
   Zap,
 } from "lucide-react"
@@ -176,6 +182,424 @@ function buildProactiveMessage(payload: OrionApiPayload) {
     return `Vinícius, o estoque tem ${executive.stuckStockCount} item(ns) parado(s). Posso sugerir uma campanha segura sem sacrificar margem.`
   }
   return "Vinícius, o cenário está sem bloqueio crítico no momento. Posso apontar a melhor oportunidade de crescimento para hoje."
+}
+
+type ExecutiveSectionId =
+  | "diagnosis"
+  | "bestScenario"
+  | "alternativeScenarios"
+  | "products"
+  | "commercial"
+  | "whatsapp"
+  | "traffic"
+  | "bundle"
+  | "timeline"
+  | "risk"
+  | "goal"
+  | "pauseScale"
+
+type ParsedScenarioCard = {
+  title: string
+  tone: "conservative" | "balanced" | "aggressive" | "neutral"
+  body: string
+}
+
+type ParsedExecutiveResponse = {
+  sections: Map<ExecutiveSectionId, string>
+  scenarios: ParsedScenarioCard[]
+  isStructured: boolean
+}
+
+const SECTION_ALIASES: Array<[ExecutiveSectionId, string[]]> = [
+  ["diagnosis", ["diagnostico executivo"]],
+  ["bestScenario", ["melhor cenario recomendado"]],
+  ["alternativeScenarios", ["cenario alternativo", "cenarios alternativos"]],
+  ["products", ["produtos prioritarios", "produtos priorizados", "papel de cada sku"]],
+  ["commercial", ["estrategia comercial", "mix ideal de execucao"]],
+  ["whatsapp", ["estrategia whatsapp", "estrategia de whatsapp"]],
+  ["traffic", ["estrategia de trafego", "trafego pago"]],
+  ["bundle", ["estrategia de bundle", "bundle estrategico"]],
+  ["timeline", ["timeline de execucao", "plano de execucao 72h"]],
+  ["risk", ["risco operacional", "riscos operacionais"]],
+  ["goal", ["meta esperada", "objetivo financeiro"]],
+  ["pauseScale", ["condicao de pausa escala", "condicao de pausa/escala"]],
+]
+
+function normalizeExecutiveLabel(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/^#+\s*/, "")
+    .replace(/^\d{1,2}[.)]\s*/, "")
+    .replace(/[—–-]/g, " ")
+    .replace(/[:/]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+}
+
+function sectionIdFor(line: string): ExecutiveSectionId | null {
+  const normalized = normalizeExecutiveLabel(line)
+  for (const [id, aliases] of SECTION_ALIASES) {
+    if (aliases.some((alias) => normalized === alias)) return id
+  }
+  return null
+}
+
+function appendSectionLine(sections: Map<ExecutiveSectionId, string[]>, id: ExecutiveSectionId, line: string) {
+  const existing = sections.get(id) || []
+  existing.push(line)
+  sections.set(id, existing)
+}
+
+function scenarioTone(title: string): ParsedScenarioCard["tone"] {
+  const normalized = normalizeExecutiveLabel(title)
+  if (normalized.includes("conservador")) return "conservative"
+  if (normalized.includes("balanceado")) return "balanced"
+  if (normalized.includes("agressivo")) return "aggressive"
+  return "neutral"
+}
+
+function parseScenarioCards(content: string) {
+  const lines = content.split(/\r?\n/)
+  const scenarios: ParsedScenarioCard[] = []
+  let current: ParsedScenarioCard | null = null
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    const normalized = normalizeExecutiveLabel(trimmed)
+    const isScenarioTitle = /^cenario\s+\d+\s+(conservador|balanceado|agressivo)\.?$/.test(normalized)
+
+    if (isScenarioTitle) {
+      if (current) scenarios.push({ ...current, body: current.body.trim() })
+      current = { title: trimmed, tone: scenarioTone(trimmed), body: "" }
+      continue
+    }
+
+    if (current && sectionIdFor(trimmed)) {
+      scenarios.push({ ...current, body: current.body.trim() })
+      current = null
+      continue
+    }
+
+    if (current) {
+      current.body = `${current.body}${current.body ? "\n" : ""}${line}`
+    }
+  }
+
+  if (current) scenarios.push({ ...current, body: current.body.trim() })
+
+  const seen = new Set<string>()
+  return scenarios.filter((scenario) => {
+    const key = normalizeExecutiveLabel(scenario.title)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function parseExecutiveResponse(content: string): ParsedExecutiveResponse {
+  const sections = new Map<ExecutiveSectionId, string[]>()
+  let activeSection: ExecutiveSectionId | null = null
+
+  for (const line of content.split(/\r?\n/)) {
+    const nextSection = sectionIdFor(line.trim())
+    if (nextSection) {
+      activeSection = nextSection
+      if (!sections.has(nextSection)) sections.set(nextSection, [])
+      continue
+    }
+    if (activeSection) appendSectionLine(sections, activeSection, line)
+  }
+
+  const normalizedSections = new Map<ExecutiveSectionId, string>()
+  sections.forEach((lines, key) => {
+    const text = lines.join("\n").replace(/\n{3,}/g, "\n\n").trim()
+    if (text) normalizedSections.set(key, text)
+  })
+
+  const scenarios = parseScenarioCards(content)
+  const isStructured = normalizedSections.size >= 3 || scenarios.length >= 2
+  return { sections: normalizedSections, scenarios, isStructured }
+}
+
+function sectionText(parsed: ParsedExecutiveResponse, ids: ExecutiveSectionId[]) {
+  return ids
+    .map((id) => parsed.sections.get(id))
+    .filter(Boolean)
+    .join("\n\n")
+    .trim()
+}
+
+function displayLines(text: string) {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
+
+function metricFromScenario(scenario: ParsedScenarioCard, labels: string[]) {
+  const normalizedLabels = labels.map(normalizeExecutiveLabel)
+  for (const line of displayLines(scenario.body)) {
+    const [label, ...valueParts] = line.split(":")
+    if (!valueParts.length) continue
+    if (normalizedLabels.includes(normalizeExecutiveLabel(label))) {
+      return valueParts.join(":").trim()
+    }
+  }
+  return null
+}
+
+function sentencePreview(text: string, fallback: string) {
+  const firstLine = displayLines(text)[0]
+  if (!firstLine) return fallback
+  return firstLine.replace(/^[-*\d.)\s]+/, "").trim()
+}
+
+function ExecutiveTextBlock({ text, dense = false }: { text: string; dense?: boolean }) {
+  const blocks = text.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean)
+  if (!blocks.length) {
+    return <p className="text-sm leading-relaxed text-slate-400">Sem conteúdo executivo específico para este módulo.</p>
+  }
+
+  return (
+    <div className={cn("space-y-3", dense ? "text-xs" : "text-sm")}>
+      {blocks.map((block, blockIndex) => {
+        const lines = displayLines(block)
+        const listLike = lines.length > 1 || lines.some((line) => /^[-*\d]+[.)]?\s/.test(line))
+        if (listLike) {
+          return (
+            <div key={`${block.slice(0, 24)}-${blockIndex}`} className="space-y-2">
+              {lines.map((line, lineIndex) => (
+                <div key={`${line}-${lineIndex}`} className="flex gap-2 leading-relaxed text-slate-200">
+                  <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-sky-300/70" />
+                  <span>{line.replace(/^[-*\d.)\s]+/, "")}</span>
+                </div>
+              ))}
+            </div>
+          )
+        }
+        return <p key={`${block.slice(0, 24)}-${blockIndex}`} className="leading-relaxed text-slate-200">{block}</p>
+      })}
+    </div>
+  )
+}
+
+function ExecutiveModuleCard({
+  title,
+  eyebrow,
+  icon,
+  children,
+  className,
+}: {
+  title: string
+  eyebrow: string
+  icon: ReactNode
+  children: ReactNode
+  className?: string
+}) {
+  return (
+    <section className={cn("rounded-2xl border border-[#243044] bg-[#0b1220] p-4 shadow-lg shadow-black/20", className)}>
+      <div className="mb-3 flex items-start gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-sky-300/10 bg-sky-300/10 text-sky-200">
+          {icon}
+        </div>
+        <div className="min-w-0">
+          <p className="text-[10px] font-bold uppercase text-slate-500">{eyebrow}</p>
+          <h3 className="mt-1 text-sm font-semibold leading-snug text-white">{title}</h3>
+        </div>
+      </div>
+      {children}
+    </section>
+  )
+}
+
+function scenarioClasses(tone: ParsedScenarioCard["tone"]) {
+  if (tone === "conservative") return "border-emerald-300/25 bg-emerald-300/5 text-emerald-100"
+  if (tone === "balanced") return "border-sky-300/30 bg-sky-300/5 text-sky-100"
+  if (tone === "aggressive") return "border-amber-300/30 bg-amber-300/5 text-amber-100"
+  return "border-slate-500/30 bg-slate-500/5 text-slate-100"
+}
+
+function scenarioBadge(tone: ParsedScenarioCard["tone"]) {
+  if (tone === "conservative") return "Margem alta"
+  if (tone === "balanced") return "Melhor ROI"
+  if (tone === "aggressive") return "Liquidez rápida"
+  return "Cenário"
+}
+
+function ScenarioMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-xl border border-white/10 bg-black/15 p-3">
+      <p className="text-[10px] font-semibold uppercase text-slate-500">{label}</p>
+      <p className="mt-1 break-words text-xs leading-relaxed text-slate-100">{value}</p>
+    </div>
+  )
+}
+
+function ScenarioCard({ scenario, defaultOpen = false }: { scenario: ParsedScenarioCard; defaultOpen?: boolean }) {
+  const objective = metricFromScenario(scenario, ["Objetivo"]) || sentencePreview(scenario.body, "Objetivo definido pela ORION.")
+  const profit = metricFromScenario(scenario, ["Lucro total esperado"]) || metricFromScenario(scenario, ["Lucro unitário"]) || "Projetado no cenário."
+  const margin = metricFromScenario(scenario, ["Margem final"]) || "Margem preservada conforme piso seguro."
+  const traffic = metricFromScenario(scenario, ["Tráfego"]) || "Canal definido conforme mix operacional."
+  const healthyCac = metricFromScenario(scenario, ["CAC máximo saudável"]) || "Controlar abaixo do lucro incremental por conversa qualificada."
+  const term = metricFromScenario(scenario, ["Prazo esperado"]) || "Janela de execução definida no plano."
+  const risk = metricFromScenario(scenario, ["Risco"]) || "Risco calibrado pela pressão operacional."
+  const products = metricFromScenario(scenario, ["Produtos"]) || "Mix de produtos ativo aplicado ao cenário."
+  const impact = metricFromScenario(scenario, ["Impacto na liquidez"]) || "Impacto financeiro projetado pela estratégia."
+  const pause = metricFromScenario(scenario, ["Gatilho de pausa"]) || "Pausar se os indicadores comerciais perderem eficiência."
+  const scale = metricFromScenario(scenario, ["Gatilho de escala"]) || "Escalar quando conversas qualificadas e retorno sustentarem a verba."
+
+  return (
+    <details className={cn("group overflow-hidden rounded-2xl border", scenarioClasses(scenario.tone))} open={defaultOpen}>
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-4 [&::-webkit-details-marker]:hidden">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-bold uppercase text-white/70">
+              {scenarioBadge(scenario.tone)}
+            </span>
+            <h4 className="text-sm font-semibold text-white">{scenario.title}</h4>
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-slate-300">{objective}</p>
+        </div>
+        <ChevronDown className="h-4 w-4 shrink-0 transition group-open:rotate-180" />
+      </summary>
+      <div className="border-t border-white/10 p-4">
+        <div className="grid gap-2 sm:grid-cols-2">
+          <ScenarioMetric label="Lucro" value={profit} />
+          <ScenarioMetric label="Margem" value={margin} />
+          <ScenarioMetric label="Velocidade" value={term} />
+          <ScenarioMetric label="Verba e CAC" value={`${traffic} ${healthyCac}`} />
+          <ScenarioMetric label="Produtos" value={products} />
+          <ScenarioMetric label="Impacto" value={impact} />
+          <ScenarioMetric label="Risco" value={risk} />
+          <ScenarioMetric label="Pausa / escala" value={`${pause} ${scale}`} />
+        </div>
+        <div className="mt-4 rounded-xl border border-white/10 bg-black/10 p-3">
+          <ExecutiveTextBlock text={scenario.body} dense />
+        </div>
+      </div>
+    </details>
+  )
+}
+
+function TimelineModule({ parsed }: { parsed: ParsedExecutiveResponse }) {
+  const best = parsed.scenarios.find((scenario) => scenario.tone === "balanced") || parsed.scenarios[0]
+  const pause = best ? metricFromScenario(best, ["Gatilho de pausa"]) : null
+  const scale = best ? metricFromScenario(best, ["Gatilho de escala"]) : null
+  const traffic = sectionText(parsed, ["traffic"])
+  const whatsapp = sectionText(parsed, ["whatsapp"])
+  const bundle = sectionText(parsed, ["bundle"])
+  const steps = [
+    { time: "Hora 0", action: "Confirmar estoque operacional, preço e mix da campanha.", kpi: "Capacidade real validada", pause: "Pausar se algum item não estiver disponível.", scale: "Liberar campanha após validação." },
+    { time: "0-6h", action: sentencePreview(bundle || traffic, "Montar oferta, bundle e criativo principal."), kpi: "Oferta pronta para WhatsApp e tráfego", pause: "Pausar se o preço romper o piso seguro.", scale: "Publicar quando o CTA estiver claro." },
+    { time: "6-24h", action: sentencePreview(whatsapp, "Ativar conversas qualificadas no WhatsApp."), kpi: "Conversas qualificadas", pause: pause || "Pausar sem intenção real de compra.", scale: scale || "Escalar com sinais fortes de conversão." },
+    { time: "24-48h", action: "Reforçar remarketing e priorizar fechamento dos leads compatíveis.", kpi: "Propostas em negociação", pause: "Pausar verba se o custo por conversa perder eficiência.", scale: "Aumentar verba apenas com ROI preservado." },
+    { time: "48-72h", action: "Decidir entre proteção de margem, giro balanceado ou liquidez agressiva.", kpi: "Venda fechada ou cenário recalibrado", pause: "Pausar o agressivo sem pressão financeira real.", scale: "Escalar o cenário vencedor." },
+  ]
+
+  return (
+    <div className="grid gap-3">
+      {steps.map((step) => (
+        <div key={step.time} className="rounded-xl border border-white/10 bg-black/15 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="font-mono text-[11px] font-semibold text-sky-200">{step.time}</p>
+            <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-slate-300">{step.kpi}</span>
+          </div>
+          <p className="mt-2 text-sm leading-relaxed text-slate-100">{step.action}</p>
+          <div className="mt-2 grid gap-2 text-xs text-slate-400 sm:grid-cols-2">
+            <p><span className="text-amber-200">Pausa:</span> {step.pause}</p>
+            <p><span className="text-emerald-200">Escala:</span> {step.scale}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ExecutiveDecisionResponse({ content }: { content: string }) {
+  const safeContent = useMemo(() => humanizeOrionText(content), [content])
+  const parsed = useMemo(() => parseExecutiveResponse(safeContent), [safeContent])
+
+  if (!parsed.isStructured) {
+    return (
+      <div className="rounded-2xl border border-[#243044] bg-[#111a2b] p-3 text-sm leading-relaxed text-slate-200">
+        <ExecutiveTextBlock text={safeContent} />
+      </div>
+    )
+  }
+
+  const bestScenario = parsed.scenarios.find((scenario) => {
+    const bestText = sectionText(parsed, ["bestScenario"])
+    return bestText && bestText.includes(scenario.title)
+  }) || parsed.scenarios.find((scenario) => scenario.tone === "balanced") || parsed.scenarios[0]
+  const alternatives = parsed.scenarios.filter((scenario) => scenario.title !== bestScenario?.title)
+  const productText = sectionText(parsed, ["products"])
+  const commercialText = sectionText(parsed, ["commercial"])
+  const trafficText = sectionText(parsed, ["traffic"])
+  const whatsappText = sectionText(parsed, ["whatsapp"])
+  const bundleText = sectionText(parsed, ["bundle"])
+  const riskText = sectionText(parsed, ["risk"])
+  const goalText = sectionText(parsed, ["goal"])
+  const pauseScaleText = sectionText(parsed, ["pauseScale"])
+
+  return (
+    <div className="space-y-3">
+      <ExecutiveModuleCard title="Diagnóstico Executivo" eyebrow="Leitura de decisão" icon={<BrainCircuit className="h-4 w-4" />} className="bg-[#0a1322]">
+        <ExecutiveTextBlock text={sectionText(parsed, ["diagnosis"]) || safeContent} />
+      </ExecutiveModuleCard>
+
+      {bestScenario ? (
+        <ExecutiveModuleCard title="Melhor Cenário Recomendado" eyebrow="Cenário vencedor" icon={<TrendingUp className="h-4 w-4" />}>
+          <ScenarioCard scenario={bestScenario} defaultOpen />
+        </ExecutiveModuleCard>
+      ) : null}
+
+      <ExecutiveModuleCard title="Cenários Alternativos" eyebrow="Comparação operacional" icon={<Gauge className="h-4 w-4" />}>
+        <div className="grid gap-3">
+          {alternatives.length ? alternatives.map((scenario) => (
+            <ScenarioCard key={scenario.title} scenario={scenario} />
+          )) : (
+            <ExecutiveTextBlock text={sectionText(parsed, ["alternativeScenarios"]) || "Sem cenário alternativo detalhado nesta resposta."} dense />
+          )}
+        </div>
+      </ExecutiveModuleCard>
+
+      <div className="grid gap-3 xl:grid-cols-2">
+        <ExecutiveModuleCard title="Produtos Prioritários" eyebrow="Mix de portfólio" icon={<PackageCheck className="h-4 w-4" />}>
+          <ExecutiveTextBlock text={productText} dense />
+        </ExecutiveModuleCard>
+        <ExecutiveModuleCard title="Estratégia Comercial" eyebrow="Engenharia de oferta" icon={<Target className="h-4 w-4" />}>
+          <ExecutiveTextBlock text={commercialText} dense />
+        </ExecutiveModuleCard>
+        <ExecutiveModuleCard title="Estratégia WhatsApp" eyebrow="Conversão" icon={<PhoneCall className="h-4 w-4" />}>
+          <ExecutiveTextBlock text={whatsappText} dense />
+        </ExecutiveModuleCard>
+        <ExecutiveModuleCard title="Estratégia de Tráfego" eyebrow="Mídia paga" icon={<Megaphone className="h-4 w-4" />}>
+          <ExecutiveTextBlock text={trafficText} dense />
+        </ExecutiveModuleCard>
+        <ExecutiveModuleCard title="Estratégia de Bundle" eyebrow="Ticket e margem" icon={<Sparkles className="h-4 w-4" />}>
+          <ExecutiveTextBlock text={bundleText} dense />
+        </ExecutiveModuleCard>
+        <ExecutiveModuleCard title="Meta Esperada" eyebrow="Projeção" icon={<WalletCards className="h-4 w-4" />}>
+          <ExecutiveTextBlock text={goalText} dense />
+        </ExecutiveModuleCard>
+      </div>
+
+      <ExecutiveModuleCard title="Timeline de Execução" eyebrow="72 horas" icon={<Route className="h-4 w-4" />}>
+        <TimelineModule parsed={parsed} />
+      </ExecutiveModuleCard>
+
+      <div className="grid gap-3 xl:grid-cols-2">
+        <ExecutiveModuleCard title="Riscos Operacionais" eyebrow="Controle" icon={<AlertTriangle className="h-4 w-4" />}>
+          <ExecutiveTextBlock text={riskText} dense />
+        </ExecutiveModuleCard>
+        <ExecutiveModuleCard title="Condição de Pausa/Escala" eyebrow="Governança" icon={<RadioTower className="h-4 w-4" />}>
+          <ExecutiveTextBlock text={pauseScaleText} dense />
+        </ExecutiveModuleCard>
+      </div>
+    </div>
+  )
 }
 
 function CustomTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ value?: number; name?: string; color?: string }>; label?: string }) {
@@ -627,7 +1051,7 @@ export function OrionClient() {
         ))}
       </div>
 
-      <div className="grid gap-6 px-4 pb-8 sm:px-6 lg:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.75fr)] lg:px-8">
+      <div className="grid gap-6 px-4 pb-8 sm:px-6 lg:grid-cols-[minmax(0,1fr)_minmax(420px,0.95fr)] lg:px-8">
         <main className="space-y-6">
           <section className="rounded-3xl border border-[#243044] bg-[#0b1220] p-5 shadow-2xl shadow-black/20">
             <div className="flex items-start gap-3">
@@ -706,12 +1130,12 @@ export function OrionClient() {
               </div>
               <MessageSquareText className="h-5 w-5 text-sky-200" />
             </div>
-            <div className="h-[360px] space-y-3 overflow-y-auto rounded-2xl border border-[#243044] bg-[#060b14] p-3">
+            <div className="h-[560px] max-h-[74vh] space-y-3 overflow-y-auto rounded-2xl border border-[#243044] bg-[#060b14] p-3 sm:h-[620px]">
               {messages.map((message, index) => (
                 <div key={`${message.role}-${index}`} className={cn("flex", message.role === "user" ? "justify-end" : "justify-start")}>
                   <div className={cn(
-                    "max-w-[88%] rounded-2xl px-3 py-2 text-sm leading-relaxed",
-                    message.role === "user" ? "bg-sky-300 text-slate-950" : "border border-[#243044] bg-[#111a2b] text-slate-200"
+                    "text-sm leading-relaxed",
+                    message.role === "user" ? "max-w-[88%] rounded-2xl bg-sky-300 px-3 py-2 text-slate-950" : "w-full max-w-full"
                   )}>
                     {message.role === "orion" && message.source === "operational" ? (
                       <div className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-emerald-200">
@@ -719,7 +1143,9 @@ export function OrionClient() {
                         Consulta operacional
                       </div>
                     ) : null}
-                    {humanizeOrionText(message.content)}
+                    {message.role === "orion" ? (
+                      <ExecutiveDecisionResponse content={message.content} />
+                    ) : humanizeOrionText(message.content)}
                   </div>
                 </div>
               ))}

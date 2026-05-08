@@ -470,18 +470,14 @@ async function buildInventoryContext(companyId: string, question: string, toolsU
       WHERE i.company_id = $1::uuid
         AND i.status IN ('active', 'in_stock')
       ORDER BY i.purchase_date ASC, i.created_at ASC
-      LIMIT $2
     `,
-    [companyId, tokens.length ? 500 : 160]
+    [companyId]
   )
 
   const scoredRows = result.rows
     .map((row) => ({ row, ...scoreInventoryCandidate(row, question, tokens) }))
     .sort((a, b) => b.score - a.score)
-  const filteredRows = (tokens.length
-    ? scoredRows.filter((item) => item.score > 0 && !isExplicitlyUnavailable(String(item.row.status || "pending")))
-    : scoredRows.filter((item) => isOperationallyAvailable(String(item.row.status || "pending"))))
-    .slice(0, MAX_TOOL_ROWS)
+  const filteredRows = scoredRows.filter((item) => isOperationallyAvailable(String(item.row.status || "pending")) && !isExplicitlyUnavailable(String(item.row.status || "pending")))
 
   const items: InventoryContextItem[] = filteredRows.map((row) => {
     const purchasePrice = number(row.row.purchase_price)
@@ -541,7 +537,7 @@ async function buildInventoryContext(companyId: string, question: string, toolsU
         tokens,
         activeStatuses: Array.from(OPERATIONAL_STATUSES),
         unavailableStatuses: Array.from(EXCLUDED_STATUSES),
-        candidateLimit: tokens.length ? 500 : 160,
+        candidateLimit: "todos os produtos operacionais ativos",
       },
       total_candidates: result.rows.length,
       top_matches: topMatches,
@@ -852,40 +848,18 @@ function countRecords(contexts: Record<string, unknown>) {
 
 function selectPromotionProducts(contexts: Record<string, unknown>) {
   const inventory = contexts.inventory as { products?: InventoryContextItem[] } | null
-  const sales = contexts.sales as { topProfitProducts?: Array<{ product: string; profit: number; revenue: number; sales: number }> } | null
   const products = inventory?.products || []
-  const soldNames = new Set((sales?.topProfitProducts || []).map((item) => item.product.toLowerCase()))
-
   const question = String(contexts.question || "")
   const askingAccessory = questionMentionsAccessory(question)
 
-  const ranked = [...products]
-    .map((item) => {
-      const categoryText = compactText(`${item.productType || ""} ${item.category}`)
-      const isAccessory = categoryText.includes("accessory") || categoryText.includes("acessorio")
-
-      let score = item.marginPct
-        + Math.min(item.daysInStock, 60) * 0.35
-        + (soldNames.has(item.name.toLowerCase()) ? 18 : 0)
-
-      if (isAccessory && !askingAccessory) {
-        score -= 75
-      }
-
-      return { ...item, score }
-    })
-    .sort((a, b) => b.score - a.score)
-
-  const selected: typeof ranked = []
-  const seen = new Set<string>()
-  for (const item of ranked) {
-    const key = compactText(productShortName(item))
-    if (seen.has(key)) continue
-    seen.add(key)
-    selected.push(item)
-    if (selected.length === 3) break
-  }
-  return selected
+  return [...products].sort((a, b) => {
+    const aText = compactText(`${a.productType || ""} ${a.category}`)
+    const bText = compactText(`${b.productType || ""} ${b.category}`)
+    const aAccessory = aText.includes("accessory") || aText.includes("acessorio")
+    const bAccessory = bText.includes("accessory") || bText.includes("acessorio")
+    if (!askingAccessory && aAccessory !== bAccessory) return aAccessory ? 1 : -1
+    return a.daysInStock - b.daysInStock
+  })
 }
 
 function asksForCommercialAction(question: string) {
@@ -930,13 +904,18 @@ function commercialActionAnswer(
   product: InventoryContextItem,
   snapshot: OrionSnapshot,
   health: OperationalHealthScore,
+  availableProducts: InventoryContextItem[],
   sales?: { topProfitProducts?: Array<{ product: string; profit: number; revenue: number; sales: number }> } | null
 ) {
   const strategy = buildCommercialStrategy(product, snapshot, health)
   const details = productDetailsLine(product)
+  const portfolio = [
+    product,
+    ...availableProducts.filter((item) => item.id !== product.id),
+  ]
 
   return buildScenarioExecutionPlan({
-    products: [product],
+    products: portfolio,
     snapshot,
     health,
     targetProfit: strategy.expectedProfit,
@@ -1060,7 +1039,7 @@ function buildAnswer(intent: OrionBusinessIntent, contexts: Record<string, unkno
 
   if ((intent === "inventory_product_analysis" || intent === "pricing_analysis") && product && hasSpecificProduct) {
     if (asksForCommercialAction(question)) {
-      return commercialActionAnswer(product, snapshot, health, sales)
+      return commercialActionAnswer(product, snapshot, health, inventory?.products || [product], sales)
     }
 
     const priceLine = product.minimumSafePrice
@@ -1086,7 +1065,7 @@ function buildAnswer(intent: OrionBusinessIntent, contexts: Record<string, unkno
   if (intent === "promotion_recommendation") {
     if (product && questionLooksProductSpecific(question)) {
       if (asksForCommercialAction(question)) {
-        return commercialActionAnswer(product, snapshot, health, sales)
+        return commercialActionAnswer(product, snapshot, health, inventory?.products || [product], sales)
       }
       return [
         `Diagnóstico: ${product.name} parado há ${product.daysInStock} dias. Margem: ${pct(product.marginPct)}.`,
