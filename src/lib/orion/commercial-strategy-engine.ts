@@ -25,6 +25,7 @@ export type CampaignStrategy = {
   objective: string
   cta: string
   headline: string
+  creative?: string
 }
 
 export type CommercialStrategy = {
@@ -36,6 +37,7 @@ export type CommercialStrategy = {
   campaign: CampaignStrategy
   risk: string
   expectedImpact: string
+  expectedProfit: number
   compatibleLeads?: Array<{ name: string; intent: string; classification: string; compatibility: string }>
 }
 
@@ -250,22 +252,26 @@ export function buildCommercialStrategy(
     campaign.objective = "Conversão imediata 1 a 1"
     campaign.cta = "Responda 'EU QUERO' para travar essa unidade."
     campaign.headline = "Liberação de Capital - Última Unidade no Piso"
+    campaign.creative = "Lista VIP com prova de pronta entrega, garantia e condição válida até o fim do dia."
   } else if (urgency === "high") {
     campaign.channel = "instagram"
     campaign.objective = "Escassez para base morna"
     campaign.cta = "Clique no link da bio para garantir."
     campaign.headline = "Oferta Especial - 48h ou até sair a unidade"
+    campaign.creative = "Stories com comparativo de valor: aparelho, garantia, entrega rápida e parcelamento."
     campaign.budgetSuggestion = 30
   } else if (highLeads && urgency === "medium") {
     campaign.channel = "whatsapp"
     campaign.objective = "Resgatar leads quentes esquecidos"
     campaign.cta = "Tenho a condição exata que você pediu. Podemos fechar?"
     campaign.headline = "Condição Exclusiva VIP"
+    campaign.creative = "Mensagem individual citando o produto de interesse original e uma vantagem sem desconto direto."
   } else if (modelLiquidity === "high" || urgency === "low") {
     campaign.channel = "meta_ads"
     campaign.objective = "Atrair topo de funil com produto objeto de desejo"
     campaign.cta = "Fale com um consultor Apple"
     campaign.headline = "O iPhone dos seus sonhos com a segurança Nobretech"
+    campaign.creative = "Criativo premium com foco em segurança, procedência, garantia e parcelamento sem fricção."
     campaign.budgetSuggestion = 50
   }
 
@@ -295,6 +301,7 @@ export function buildCommercialStrategy(
     campaign,
     risk: riskMap[urgency],
     expectedImpact: urgency === "low" || urgency === "medium" ? "Proteção de margem e ganho de branding" : "Injeção de capital e alívio do fluxo de caixa",
+    expectedProfit: Math.max(0, Math.round((pricing.aggressivePrice || pricing.currentPrice) - product.purchasePrice)),
     compatibleLeads
   }
 }

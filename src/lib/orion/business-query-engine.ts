@@ -3,6 +3,7 @@ import "server-only"
 import { pool } from "@/lib/db"
 import { calculateOperationalHealth } from "./operational-health-engine"
 import { buildCommercialStrategy } from "./commercial-strategy-engine"
+import { buildScenarioExecutionPlan } from "./scenario-execution-engine"
 import {
   EXCLUDED_STATUSES,
   isExplicitlyUnavailable,
@@ -139,6 +140,29 @@ function pct(value: number) {
   return `${round(value, 1).toLocaleString("pt-BR")}%`
 }
 
+function parseMoneyTarget(question: string) {
+  const match = question.match(/(?:r\$\s*)?(\d{1,3}(?:[.\s]\d{3})+|\d+)(?:,\d{1,2})?/i)
+  if (!match) return null
+  const normalized = match[0]
+    .replace(/r\$/i, "")
+    .replace(/\s/g, "")
+    .replace(/\./g, "")
+    .replace(",", ".")
+  const parsed = Number(normalized)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+function questionLooksFinancialGoal(question: string) {
+  const normalized = compactText(question)
+  const goalPhrase = /\b(quero tirar|preciso tirar|quero retirar|preciso retirar|quero levantar|preciso levantar|preciso pagar|quero me pagar|preciso me pagar|me pagar|pagar contas|pagar boleto|pagar boletos|fazer caixa|gerar caixa|meta financeira|objetivo financeiro|meta de lucro|lucrar)\b/.test(normalized)
+  return goalPhrase && (parseMoneyTarget(question) !== null || /\b(pagar contas|me pagar|retirada|retirar|levantar dinheiro|fazer caixa|gerar caixa)\b/.test(normalized))
+}
+
+function questionLooksStrategicExecution(question: string) {
+  const normalized = compactText(question)
+  return /\b(gerar lucro|bater meta|meta financeira|acelerar vendas|aumentar caixa|gerar caixa|fazer caixa|vender mais rapido|vender mais rapido|levantar dinheiro|proteger margem|aumentar conversao|aumentar conversão|criar promocao|criar promoção|criar campanha|executar estrategia|executar estratégia|campanha|promocao|promoção|oferta|giro|girar|converter|conversao|conversão)\b/.test(normalized)
+}
+
 function daysBetween(from: string | null | undefined) {
   if (!from) return 0
   const parsed = new Date(from)
@@ -241,6 +265,20 @@ function questionMentionsAccessory(question: string) {
 
 function routeIntent(question: string): { intent: OrionBusinessIntent; toolsUsed: OrionBusinessToolName[] } {
   const normalized = compactText(question)
+
+  if (questionLooksFinancialGoal(question)) {
+    return {
+      intent: "financial_goal_execution",
+      toolsUsed: ["inventory_tool", "pricing_tool", "sales_tool", "financial_tool", "cashflow_tool", "crm_tool", "campaign_tool", "dre_tool"],
+    }
+  }
+
+  if (questionLooksStrategicExecution(question)) {
+    return {
+      intent: "promotion_recommendation",
+      toolsUsed: ["inventory_tool", "pricing_tool", "sales_tool", "financial_tool", "cashflow_tool", "crm_tool", "campaign_tool", "dre_tool"],
+    }
+  }
 
   // Prioridade 1: Produto específico com intenção comercial
   if (
@@ -877,22 +915,6 @@ function productDetailsLine(product: InventoryContextItem) {
   ].filter(Boolean).join(", ")
 }
 
-function urgencyLabel(value: string) {
-  if (value === "critical") return "conversão imediata com piso protegido"
-  if (value === "high") return "alta prioridade comercial"
-  if (value === "medium") return "otimização controlada"
-  return "proteção de margem"
-}
-
-function channelLabel(value: string) {
-  if (value === "meta_ads") return "Meta Ads"
-  if (value === "whatsapp") return "WhatsApp"
-  if (value === "instagram") return "Instagram"
-  if (value === "stories") return "Stories"
-  if (value === "site") return "site"
-  return value
-}
-
 function healthLabel(health: OperationalHealthScore) {
   if (health.level === "critical") return "liquidez sob pressão imediata"
   if (health.level === "attention") return "liquidez em atenção"
@@ -900,65 +922,98 @@ function healthLabel(health: OperationalHealthScore) {
   return "operação com espaço para crescer"
 }
 
-function commercialActionAnswer(product: InventoryContextItem, snapshot: OrionSnapshot, health: OperationalHealthScore) {
-  const strategy = buildCommercialStrategy(product, snapshot, health)
-  const name = productShortName(product)
-  const details = productDetailsLine(product)
-  const p = strategy.pricing
-
-  const leadLines = strategy.compatibleLeads && strategy.compatibleLeads.length > 0
-    ? [
-        "",
-        "Leads Compatíveis para Reengajamento:",
-        ...strategy.compatibleLeads.map(l => `- ${l.name}: interesse em ${l.intent}; ${l.classification}; ${l.compatibility}.`)
-      ]
-    : []
-
-  return [
-    `Estratégia Comercial: ${name}`,
-    details ? `Especificações: ${details}` : null,
-    "",
-    `Diagnóstico: ${strategy.diagnosis}`,
-    `Recomendação: ${strategy.recommendedAction}`,
-    "",
-    "Plano de Preço:",
-    `- Preço Sugerido: ${brl(p.suggestedPrice || p.currentPrice)}`,
-    p.aggressivePrice && p.aggressivePrice < p.currentPrice ? `- Oferta Agressiva (Piso): ${brl(p.aggressivePrice)}` : null,
-    `- Limite de Segurança: ${brl(p.minimumSafePrice)}`,
-    `- Justificativa: ${p.reasoning}`,
-    "",
-    "Oferta e Bundle:",
-    `- Estratégia: ${strategy.bundle.objective}`,
-    strategy.bundle.enabled ? `- Itens Sugeridos: ${strategy.bundle.items.join(", ")}` : "- Sem bundle (foco em giro direto)",
-    "",
-    "Plano de Campanha:",
-    `- Canal Ideal: ${channelLabel(strategy.campaign.channel)}`,
-    `- Objetivo: ${strategy.campaign.objective}`,
-    `- Headline: "${strategy.campaign.headline}"`,
-    `- CTA: ${strategy.campaign.cta}`,
-    strategy.campaign.budgetSuggestion ? `- Verba Sugerida: ${brl(strategy.campaign.budgetSuggestion)}/dia` : null,
-    ...leadLines,
-    "",
-    "Análise de Risco:",
-    `- Nível de Urgência: ${urgencyLabel(strategy.urgency)}`,
-    `- Risco Operacional: ${strategy.risk}`,
-    `- Impacto Esperado: ${strategy.expectedImpact}`,
-  ].filter(Boolean).join("\n")
+function signalProducts(sales: { topProfitProducts?: Array<{ product: string; profit: number; revenue: number; sales: number }> } | null | undefined) {
+  return (sales?.topProfitProducts || []).slice(0, 3)
 }
 
-function promotionActionAnswer(products: InventoryContextItem[]) {
+function commercialActionAnswer(
+  product: InventoryContextItem,
+  snapshot: OrionSnapshot,
+  health: OperationalHealthScore,
+  sales?: { topProfitProducts?: Array<{ product: string; profit: number; revenue: number; sales: number }> } | null
+) {
+  const strategy = buildCommercialStrategy(product, snapshot, health)
+  const details = productDetailsLine(product)
+
+  return buildScenarioExecutionPlan({
+    products: [product],
+    snapshot,
+    health,
+    targetProfit: strategy.expectedProfit,
+    signalProducts: signalProducts(sales),
+    context: `${strategy.diagnosis} ${details ? `Produto: ${productShortName(product)} (${details}).` : `Produto: ${productShortName(product)}.`}`,
+  })
+}
+
+function promotionActionAnswer(
+  products: InventoryContextItem[],
+  snapshot: OrionSnapshot,
+  health: OperationalHealthScore,
+  sales?: { topProfitProducts?: Array<{ product: string; profit: number; revenue: number; sales: number }> } | null
+) {
   const primary = products[0]
   if (!primary) return "Estoque insuficiente ou mal cadastrado para planejar campanha. Cadastre os custos e preços sugeridos."
-  const topList = products.slice(0, 3).map((item, index) => `${index + 1}. Foco em: ${productShortName(item)} (${pct(item.marginPct)} de margem)`)
-  return [
-    "Diagnóstico rápido:",
-    "Estes itens combinam margem e risco de encalhe. Aja hoje.",
-    "",
-    "O que fazer agora:",
-    ...topList,
-    "",
-    `Limite de preço no principal: não venda abaixo de ${primary.minimumSafePrice ? brl(primary.minimumSafePrice) : "um piso validado pelo custo"}.`,
-  ].join("\n")
+  return buildScenarioExecutionPlan({
+    products,
+    snapshot,
+    health,
+    targetProfit: expectedProductProfit(primary),
+    signalProducts: signalProducts(sales),
+    context: "Campanha de giro com comparação de margem, velocidade, tráfego e liquidez.",
+  })
+}
+
+function expectedProductProfit(product: InventoryContextItem) {
+  const salePrice = product.suggestedPrice || product.purchasePrice * 1.2
+  return Math.max(0, round(salePrice - product.purchasePrice - ESTIMATED_BUNDLE_COST))
+}
+
+function pressureGoalFromSnapshot(snapshot: OrionSnapshot) {
+  const forecast = snapshot.executive.liquidityForecast
+  const immediateObligations = forecast.overduePayables + forecast.todayPayables + forecast.payables7d
+  const immediateInflows = forecast.overdueReceivables + forecast.todayReceivables + forecast.receivables7d
+  return Math.max(0, round(immediateObligations - immediateInflows - snapshot.finance.reconciledCashBalance))
+}
+
+function financialGoalAnswer(
+  contexts: Record<string, unknown>,
+  snapshot: OrionSnapshot,
+  question: string,
+  health: OperationalHealthScore
+) {
+  const inventory = contexts.inventory as { products?: InventoryContextItem[] } | null
+  const sales = contexts.sales as { topProfitProducts?: Array<{ product: string; profit: number; revenue: number; sales: number }> } | null
+  const products = selectPromotionProducts(contexts).filter((product) => product.suggestedPrice > 0 || product.purchasePrice > 0)
+  const explicitGoal = parseMoneyTarget(question)
+  const pressureGoal = pressureGoalFromSnapshot(snapshot)
+  const goal = explicitGoal || pressureGoal
+
+  if (!inventory?.products?.length || !products.length) {
+    return buildScenarioExecutionPlan({
+      products: [],
+      snapshot,
+      health,
+      targetProfit: explicitGoal || pressureGoal,
+      signalProducts: signalProducts(sales),
+      context: "Meta financeira solicitada, mas sem produto ativo seguro para execução.",
+    })
+  }
+
+  const primary = products[0]
+  const goalLabel = explicitGoal
+    ? `Gerar ${brl(explicitGoal)} de lucro operacional.`
+    : pressureGoal > 0
+      ? `Cobrir pressão operacional estimada em ${brl(pressureGoal)} nos próximos dias.`
+      : `Gerar lucro incremental com o estoque ativo, começando por ${productShortName(primary)}.`
+
+  return buildScenarioExecutionPlan({
+    products,
+    snapshot,
+    health,
+    targetProfit: goal || expectedProductProfit(primary),
+    signalProducts: signalProducts(sales),
+    context: `${healthLabel(health)}. ${goalLabel}`,
+  })
 }
 
 function unidentifiedProductActionAnswer() {
@@ -995,13 +1050,17 @@ function buildAnswer(intent: OrionBusinessIntent, contexts: Record<string, unkno
   const hasSpecificProduct = questionLooksProductSpecific(question)
   const health = calculateOperationalHealth(snapshot)
 
+  if (intent === "financial_goal_execution") {
+    return financialGoalAnswer(contexts, snapshot, question, health)
+  }
+
   if (questionReferencesUnidentifiedProduct(question) || (intent === "pricing_analysis" && !hasSpecificProduct)) {
     return unidentifiedProductActionAnswer()
   }
 
   if ((intent === "inventory_product_analysis" || intent === "pricing_analysis") && product && hasSpecificProduct) {
     if (asksForCommercialAction(question)) {
-      return commercialActionAnswer(product, snapshot, health)
+      return commercialActionAnswer(product, snapshot, health, sales)
     }
 
     const priceLine = product.minimumSafePrice
@@ -1027,7 +1086,7 @@ function buildAnswer(intent: OrionBusinessIntent, contexts: Record<string, unkno
   if (intent === "promotion_recommendation") {
     if (product && questionLooksProductSpecific(question)) {
       if (asksForCommercialAction(question)) {
-        return commercialActionAnswer(product, snapshot, health)
+        return commercialActionAnswer(product, snapshot, health, sales)
       }
       return [
         `Diagnóstico: ${product.name} parado há ${product.daysInStock} dias. Margem: ${pct(product.marginPct)}.`,
@@ -1038,7 +1097,7 @@ function buildAnswer(intent: OrionBusinessIntent, contexts: Record<string, unkno
 
     const products = selectPromotionProducts(contexts)
     if (!products.length) return "Estoque inconsistente para campanhas de giro. Arrume os cadastros primeiro."
-    return promotionActionAnswer(products)
+    return promotionActionAnswer(products, snapshot, health, sales)
   }
 
   if (intent === "purchase_capacity_analysis") {
@@ -1103,6 +1162,8 @@ function buildAnswer(intent: OrionBusinessIntent, contexts: Record<string, unkno
 
   if (intent === "executive_business_overview") {
     const { liquidityForecast } = snapshot.executive
+    const products = selectPromotionProducts(contexts)
+    const primary = products[0]
 
     const pressureInfo = liquidityForecast.pressureWindowStartDays !== null
       ? liquidityForecast.pressureWindowStartDays === 0
@@ -1115,37 +1176,32 @@ function buildAnswer(intent: OrionBusinessIntent, contexts: Record<string, unkno
       ? `Existem ${hotLeads.length} leads de alta intenção aguardando retorno imediato.`
       : "Leads ativos estão em dia ou em fase de prospecção."
 
-    return [
-      "DIAGNÓSTICO EXECUTIVO",
-      `Leitura operacional: ${healthLabel(health)}.`,
-      `Resumo Financeiro: Caixa ${brl(snapshot.finance.reconciledCashBalance)} | Recebíveis próximos: ${brl(liquidityForecast.receivables7d)} | Obrigações próximas: ${brl(liquidityForecast.payables7d)}`,
-      "",
-      "ANÁLISE DE LIQUIDEZ",
-      pressureInfo,
-      `Impacto: ${health.healthReason}`,
-      "",
-      "ESTRATÉGIA DE CRM",
-      leadSummary,
-      "Ação: priorize o fechamento dos leads de alta intenção para injetar capital antes da janela de pressão.",
-      "",
-      "ESTRATÉGIA DE ESTOQUE",
-      `Itens Parados: ${snapshot.stock.stuckItems.length} unidades há mais de 30 dias.`,
-      "Ação: Inicie queima de gordura nos itens de menor liquidez para liberar capital de giro.",
-    ].join("\n")
+    return buildScenarioExecutionPlan({
+      products,
+      snapshot,
+      health,
+      targetProfit: primary ? expectedProductProfit(primary) : null,
+      signalProducts: signalProducts(sales),
+      context: `Leitura operacional: ${healthLabel(health)}. Caixa ${brl(snapshot.finance.reconciledCashBalance)}, recebíveis próximos ${brl(liquidityForecast.receivables7d)} e obrigações próximas ${brl(liquidityForecast.payables7d)}. ${pressureInfo} ${leadSummary}`,
+    })
   }
 
-  return [
-    `Resumo do Dia: Caixa ${brl(snapshot.finance.reconciledCashBalance)}, Estoque travando ${snapshot.stock.stuckItems.length} itens.`,
-    "O que fazer agora:",
-    "1. Limpe o CRM de leads sem resposta.",
-    "2. Rode ações focadas no estoque mais antigo.",
-    "3. Segure custo fixo.",
-  ].join("\n")
+  const products = selectPromotionProducts(contexts)
+  const primary = products[0]
+  return buildScenarioExecutionPlan({
+    products,
+    snapshot,
+    health,
+    targetProfit: primary ? expectedProductProfit(primary) : null,
+    signalProducts: signalProducts(sales),
+    context: `Caixa em ${brl(snapshot.finance.reconciledCashBalance)} e ${snapshot.stock.stuckItems.length} item${snapshot.stock.stuckItems.length === 1 ? "" : "s"} acima da idade ideal de estoque.`,
+  })
 }
 
 function buildSummary(intent: OrionBusinessIntent, matchedRecords: number) {
   if (matchedRecords === 0) return "A ORION consultou as áreas necessárias, mas não encontrou registros específicos suficientes."
   const byIntent: Record<OrionBusinessIntent, string> = {
+    financial_goal_execution: "Plano de execução comercial montado a partir de meta financeira, estoque ativo, margem e liquidez.",
     inventory_product_analysis: "Produto consultado no estoque real da empresa.",
     pricing_analysis: "Preço analisado com base em custo, preço sugerido e margem interna.",
     purchase_capacity_analysis: "Recompra avaliada cruzando caixa, estoque, vendas e margem.",
@@ -1176,6 +1232,7 @@ export async function buildOrionBusinessContext(
   ])
 
   const contexts = Object.fromEntries(Object.entries({
+    question: cleanQuestion,
     inventory,
     sales,
     crm,

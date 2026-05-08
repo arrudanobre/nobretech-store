@@ -63,6 +63,7 @@ export type OrionChartInterpretation = {
 }
 
 export type OrionBusinessIntent =
+  | "financial_goal_execution"
   | "inventory_product_analysis"
   | "pricing_analysis"
   | "purchase_capacity_analysis"
