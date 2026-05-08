@@ -6,7 +6,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { SignOutButton } from "@clerk/nextjs"
 import { cn } from "@/lib/utils"
-import { BarChart3, Package, ShoppingCart, ShieldCheck, AlertTriangle, FileText, Users, Truck, DollarSign, Settings, Calculator, ListChecks, ChevronDown, Menu, X, LogOut, Mail, type LucideIcon } from "lucide-react"
+import { BarChart3, Package, ShoppingCart, ShieldCheck, AlertTriangle, FileText, Users, Truck, DollarSign, Settings, Calculator, ListChecks, ChevronDown, Menu, X, LogOut, Mail, BrainCircuit, type LucideIcon } from "lucide-react"
 import { useState, useEffect, createContext, useContext, useCallback } from "react"
 import { supabase } from "@/lib/supabase"
 import { canAccess, roleLabels, type PermissionKey, type UserRole } from "@/lib/permissions"
@@ -59,6 +59,7 @@ export function useBadgeCount() {
 
 const staticNavItems: (Omit<NavItem, "badge"> & { badge?: { count?: number; defaultCount?: number; color: string; source?: "db"; countKey?: string } })[] = [
   { label: "Dashboard", href: "/dashboard", icon: BarChart3 },
+  { label: "ORION AI", href: "/orion", icon: BrainCircuit, permission: "finance.view" },
   { label: "Estoque", href: "/estoque", icon: Package, badge: { defaultCount: 0, color: "bg-royal-500", source: "db", countKey: "estoque" } },
   { label: "Vendas", href: "/vendas", icon: ShoppingCart },
   { label: "Avaliação de Recebimento", href: "/avaliacao", icon: Calculator },
@@ -311,6 +312,7 @@ export function Sidebar({ currentUser }: { currentUser: DashboardUser }) {
 
 export function MobileNav({ isOpen, onOpenChange, currentUser }: { isOpen: boolean; onOpenChange: (open: boolean) => void; currentUser: DashboardUser }) {
   const pathname = usePathname()
+  const isOrionPage = pathname?.startsWith("/orion")
   const { counts } = useBadgeCount()
 
   useEffect(() => {
@@ -446,7 +448,10 @@ export function MobileNav({ isOpen, onOpenChange, currentUser }: { isOpen: boole
         </div>
       )}
 
-      <nav className="fixed bottom-0 left-0 right-0 z-40 flex md:hidden bg-white border-t border-gray-200 safe-bottom">
+      <nav className={cn(
+        "fixed bottom-0 left-0 right-0 z-40 flex md:hidden border-t safe-bottom",
+        isOrionPage ? "border-white/10 bg-[#05070d]" : "border-gray-200 bg-white"
+      )}>
         {tabs.map((tab) => {
           const isActive = tab.menu ? isOpen : pathname === tab.href || (tab.href !== "/dashboard" && pathname?.startsWith(tab.href))
           const Icon = tab.icon
@@ -455,11 +460,11 @@ export function MobileNav({ isOpen, onOpenChange, currentUser }: { isOpen: boole
               <div className="w-12 h-12 rounded-full bg-royal-500 flex items-center justify-center shadow-lg animate-pulse-glow">
                 <Icon className="w-6 h-6 text-white" />
               </div>
-              <span className="mt-0.5 text-[11px] font-semibold text-royal-500">{tab.label}</span>
+              <span className={cn("mt-0.5 text-[11px] font-semibold", isOrionPage ? "text-sky-200" : "text-royal-500")}>{tab.label}</span>
             </>
           ) : (
             <>
-              <Icon className={cn("w-5 h-5 mt-0.5", isActive ? "text-royal-500" : "")} />
+              <Icon className={cn("w-5 h-5 mt-0.5", isActive ? (isOrionPage ? "text-sky-200" : "text-royal-500") : "")} />
               <span className="mt-0.5">{tab.label}</span>
             </>
           )
@@ -472,7 +477,7 @@ export function MobileNav({ isOpen, onOpenChange, currentUser }: { isOpen: boole
                 onClick={() => onOpenChange(!isOpen)}
                 className={cn(
                   "flex flex-col items-center justify-center flex-1 py-2 text-xs transition-colors",
-                  isActive ? "text-royal-500" : "text-gray-400"
+                  isActive ? (isOrionPage ? "text-sky-200" : "text-royal-500") : (isOrionPage ? "text-slate-500" : "text-gray-400")
                 )}
               >
                 {content}
@@ -487,7 +492,7 @@ export function MobileNav({ isOpen, onOpenChange, currentUser }: { isOpen: boole
               className={cn(
                 "flex flex-col items-center justify-center flex-1 py-2 text-xs transition-colors",
                 tab.primary ? "-mt-5" : "",
-                isActive && !tab.primary ? "text-royal-500" : tab.primary ? "" : "text-gray-400"
+                isActive && !tab.primary ? (isOrionPage ? "text-sky-200" : "text-royal-500") : tab.primary ? "" : (isOrionPage ? "text-slate-500" : "text-gray-400")
               )}
             >
               {content}
@@ -499,7 +504,7 @@ export function MobileNav({ isOpen, onOpenChange, currentUser }: { isOpen: boole
   )
 }
 
-function UserHeader({ currentUser }: { currentUser: DashboardUser }) {
+function UserHeader({ currentUser, dark = false }: { currentUser: DashboardUser; dark?: boolean }) {
   const [open, setOpen] = useState(false)
   const displayName = currentUser.name || currentUser.email || "Usuário"
   const displayEmail = currentUser.email || "Email não informado"
@@ -511,7 +516,12 @@ function UserHeader({ currentUser }: { currentUser: DashboardUser }) {
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
-        className="flex min-h-12 items-center gap-2 rounded-2xl border border-slate-200/80 bg-white/85 p-1.5 pr-2.5 text-left shadow-sm shadow-navy-900/5 backdrop-blur transition hover:border-royal-200 hover:bg-white hover:shadow-md"
+        className={cn(
+          "flex min-h-12 items-center gap-2 rounded-2xl p-1.5 pr-2.5 text-left shadow-sm backdrop-blur transition hover:shadow-md",
+          dark
+            ? "border-white/10 bg-white/[0.08] text-white shadow-black/20 hover:border-sky-300/30 hover:bg-white/[0.12]"
+            : "border-slate-200/80 bg-white/85 shadow-navy-900/5 hover:border-royal-200 hover:bg-white"
+        )}
       >
         {currentUser.avatarUrl ? (
           <img src={currentUser.avatarUrl} alt={displayName} className="h-8 w-8 rounded-full object-cover ring-1 ring-slate-200" />
@@ -521,10 +531,10 @@ function UserHeader({ currentUser }: { currentUser: DashboardUser }) {
           </div>
         )}
         <div className="hidden min-w-0 sm:block">
-          <p className="max-w-36 truncate text-[12px] font-bold leading-tight text-navy-900">{displayName}</p>
-          <p className="mt-0.5 text-[10px] font-semibold leading-tight text-royal-600">{roleLabel}</p>
+          <p className={cn("max-w-36 truncate text-[12px] font-bold leading-tight", dark ? "text-white" : "text-navy-900")}>{displayName}</p>
+          <p className={cn("mt-0.5 text-[10px] font-semibold leading-tight", dark ? "text-sky-200" : "text-royal-600")}>{roleLabel}</p>
         </div>
-        <ChevronDown className={cn("hidden h-3.5 w-3.5 text-slate-400 transition sm:block", open ? "rotate-180" : "")} />
+        <ChevronDown className={cn("hidden h-3.5 w-3.5 transition sm:block", dark ? "text-white/45" : "text-slate-400", open ? "rotate-180" : "")} />
       </button>
 
       {open && (
@@ -582,6 +592,8 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
   const [counts, setCounts] = useState<Record<string, number>>({ estoque: 0, garantias: 0 })
   const [refreshKey, setRefreshKey] = useState(0)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const pathname = usePathname()
+  const isOrionPage = pathname?.startsWith("/orion")
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), [])
 
@@ -642,34 +654,40 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
         <Sidebar currentUser={currentUser} />
         <MobileNav isOpen={mobileMenuOpen} onOpenChange={setMobileMenuOpen} currentUser={currentUser} />
         {/* Main content */}
-        <main className="md:ml-64 pb-20 md:pb-0 min-h-screen">
+        <main className={cn("md:ml-64 pb-20 md:pb-0 min-h-screen", isOrionPage ? "bg-[#05070d]" : "")}>
           {/* Top bar */}
-          <header className="sticky top-0 z-30 bg-surface/80 backdrop-blur-xl border-b border-gray-100">
+          <header className={cn(
+            "sticky top-0 z-30 backdrop-blur-xl border-b",
+            isOrionPage ? "bg-[#05070d]/90 border-white/10" : "bg-surface/80 border-gray-100"
+          )}>
             <div className="flex items-center justify-between h-14 px-4 sm:px-6">
               <div className="flex items-center gap-2 md:hidden">
                 <button
                   type="button"
                   aria-label="Abrir menu"
                   onClick={() => setMobileMenuOpen(true)}
-                  className="mr-1 rounded-xl border border-gray-200 bg-white p-2 text-navy-900 shadow-sm"
+                  className={cn(
+                    "mr-1 rounded-xl border p-2 shadow-sm",
+                    isOrionPage ? "border-white/10 bg-white/[0.08] text-white" : "border-gray-200 bg-white text-navy-900"
+                  )}
                 >
                   <Menu className="h-4 w-4" />
                 </button>
                 <NobretechLogoMark />
                 <div className="leading-tight">
-                  <span className="block font-display font-bold text-sm font-syne text-navy-900">NOBRETECH</span>
-                  <span className="block text-[10px] text-gray-400">Store</span>
+                  <span className={cn("block font-display font-bold text-sm font-syne", isOrionPage ? "text-white" : "text-navy-900")}>NOBRETECH</span>
+                  <span className={cn("block text-[10px]", isOrionPage ? "text-white/40" : "text-gray-400")}>Store</span>
                 </div>
               </div>
-              <h1 className="hidden md:block font-display font-semibold text-navy-900 font-syne">
+              <h1 className={cn("hidden md:block font-display font-semibold font-syne", isOrionPage ? "text-white" : "text-navy-900")}>
                 {title}
               </h1>
               <div className="flex items-center gap-2">
-                <UserHeader currentUser={currentUser} />
+                <UserHeader currentUser={currentUser} dark={isOrionPage} />
               </div>
             </div>
           </header>
-          <div className="p-4 sm:p-6 max-w-7xl mx-auto">
+          <div className={cn(isOrionPage ? "max-w-none p-0" : "p-4 sm:p-6 max-w-7xl mx-auto")}>
             {children}
           </div>
         </main>

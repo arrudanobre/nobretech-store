@@ -52,8 +52,49 @@ const clerkLocalization = {
 }
 
 export const metadata: Metadata = {
-  title: "Nobretech Store",
-  description: "Gestão completa de dispositivos Apple e Garmin seminovos",
+  metadataBase: new URL("https://nobretechstore.com.br"),
+  title: {
+    default: "Nobretech Store",
+    template: "%s | Nobretech Store",
+  },
+  description: "Portal oficial de garantia e compra verificada da Nobretech Store.",
+  openGraph: {
+    title: "Nobretech Store",
+    description: "Portal oficial de garantia e compra verificada da Nobretech Store.",
+    siteName: "Nobretech Store",
+    url: "https://nobretechstore.com.br",
+    locale: "pt_BR",
+    type: "website",
+    images: [
+      {
+        url: "/og-nobretech-v2.png",
+        width: 1200,
+        height: 630,
+        alt: "Nobretech Store - Compra verificada, garantia e transparência",
+        type: "image/png",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Nobretech Store",
+    description: "Portal oficial de garantia e compra verificada da Nobretech Store.",
+    images: [
+      {
+        url: "/og-nobretech-v2.png",
+        alt: "Nobretech Store - Compra verificada, garantia e transparência",
+      },
+    ],
+  },
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/icon.png", sizes: "512x512", type: "image/png" },
+    ],
+    shortcut: "/favicon.ico",
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",

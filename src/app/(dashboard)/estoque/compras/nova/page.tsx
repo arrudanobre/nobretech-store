@@ -1,19 +1,36 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { ArrowLeft, Calculator, Copy, ImageIcon, Package, Plus, Save, Trash2, Truck, Upload, X } from "lucide-react"
+import { ArrowLeft, Calculator, ChevronDown, ChevronUp, Copy, ImageIcon, Info, Package, Plus, Save, Trash2, Truck, Upload, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
+import { ColorSwatchPicker } from "@/components/products/color-swatch-picker"
 import { useToast } from "@/components/ui/toaster"
 import { supabase } from "@/lib/supabase"
-import { CATEGORIES, GRADES, PRODUCT_CATALOG } from "@/lib/constants"
+import { GRADES } from "@/lib/constants"
 import { formatBRL, getComputedInventoryStatus, mapLifecycleToLegacyCompatibleStatus } from "@/lib/helpers"
 import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
+import {
+  accessoryUsuallyHasSerial,
+  buildLegacyCatalogConfig,
+  createOrLinkModelColor,
+  createOrReuseCatalogColor,
+  DEFAULT_COLOR_SUGGESTIONS,
+  getCatalogCategory,
+  getCategoryOptions,
+  isAccessoryProduct,
+  loadCatalogConfig,
+  mergeColorOptions,
+  normalizeCatalogName,
+  type CatalogColor,
+  type CatalogConfig,
+} from "@/lib/catalog-config"
+import { cn } from "@/lib/utils"
 
 type ProductMode = "catalog" | "manual"
 
@@ -34,12 +51,12 @@ type PurchaseLine = {
   batteryHealth: string
   imeis: string
   serials: string
+  accessoryHasSerial: boolean
   notes: string
   imageFile: File | null
   imagePreviewUrl: string
 }
 
-const categoryOptions = CATEGORIES.map((category) => ({ label: category.label, value: category.value }))
 const gradeOptions = GRADES.map((grade) => ({ label: grade.label, value: grade.value }))
 const paymentOptions = [
   { label: "Pix", value: "pix" },
@@ -78,6 +95,7 @@ function newLine(overrides: Partial<PurchaseLine> = {}): PurchaseLine {
     batteryHealth: "",
     imeis: "",
     serials: "",
+    accessoryHasSerial: false,
     notes: "",
     imageFile: null,
     imagePreviewUrl: "",
@@ -104,22 +122,42 @@ function splitValues(value: string) {
     .filter(Boolean)
 }
 
-function selectedModelFor(line: PurchaseLine) {
-  const catalog = PRODUCT_CATALOG[line.category as keyof typeof PRODUCT_CATALOG]
-  return catalog?.models?.[line.modelIdx] as any
+function selectedModelFor(line: PurchaseLine, catalogConfig: CatalogConfig) {
+  return getCatalogCategory(catalogConfig, line.category)?.models?.[line.modelIdx] as any
 }
 
-function lineProductName(line: PurchaseLine) {
+function lineProductName(line: PurchaseLine, catalogConfig: CatalogConfig) {
   if (line.mode === "manual") return line.manualName.trim() || "Produto manual"
-  const model = selectedModelFor(line)
-  return [model?.name, line.storage, line.color].filter(Boolean).join(" ").trim() || "Produto do catalogo"
+  const model = selectedModelFor(line, catalogConfig)
+  return [model?.name, isLineAccessory(line, catalogConfig) ? null : line.storage, line.color].filter(Boolean).join(" ").trim() || "Produto do catalogo"
 }
 
-function needsChecklistLater(line: PurchaseLine) {
+function isLineAccessory(line: PurchaseLine, catalogConfig: CatalogConfig) {
+  const category = getCatalogCategory(catalogConfig, line.category)
+  const model = selectedModelFor(line, catalogConfig)
+  return isAccessoryProduct({
+    mode: line.mode,
+    category: line.category,
+    categoryLabel: category?.label,
+    name: line.mode === "manual" ? line.manualName : model?.name,
+    productType: category?.productType,
+  })
+}
+
+function lineProductType(line: PurchaseLine, catalogConfig: CatalogConfig) {
+  const category = getCatalogCategory(catalogConfig, line.category)
+  if (line.mode === "manual") return "accessory"
+  if (category?.productType) return category.productType
+  return isLineAccessory(line, catalogConfig) ? "accessory" : "device"
+}
+
+function needsChecklistLater(line: PurchaseLine, catalogConfig: CatalogConfig) {
+  if (isLineAccessory(line, catalogConfig)) return false
   return line.mode === "catalog" && ["iphone", "ipad"].includes(line.category) && line.grade !== "Lacrado"
 }
 
-function shouldCreateOneInventoryRowPerUnit(line: PurchaseLine, imeis: string[], serials: string[]) {
+function shouldCreateOneInventoryRowPerUnit(line: PurchaseLine, imeis: string[], serials: string[], catalogConfig: CatalogConfig) {
+  if (isLineAccessory(line, catalogConfig) && !line.accessoryHasSerial) return false
   if (imeis.length > 0 || serials.length > 0) return true
   return line.mode === "catalog" && ["iphone", "ipad", "applewatch", "airpods", "macbook"].includes(line.category)
 }
@@ -146,6 +184,7 @@ export default function NewInventoryPurchasePage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [suppliers, setSuppliers] = useState<Array<{ label: string; value: string }>>([])
   const [accounts, setAccounts] = useState<Array<{ label: string; value: string }>>([])
+  const [catalogConfig, setCatalogConfig] = useState<CatalogConfig>(() => buildLegacyCatalogConfig())
   const [purchase, setPurchase] = useState({
     supplier_id: "",
     supplier_name: "",
@@ -158,6 +197,8 @@ export default function NewInventoryPurchasePage() {
     notes: "",
   })
   const [lines, setLines] = useState<PurchaseLine[]>([newLine()])
+  const [collapsedLineIds, setCollapsedLineIds] = useState<Set<string>>(() => new Set())
+  const categoryOptions = useMemo(() => getCategoryOptions(catalogConfig), [catalogConfig])
   const imagePreviewUrlsRef = useRef(new Set<string>())
 
   useEffect(() => {
@@ -184,6 +225,7 @@ export default function NewInventoryPurchasePage() {
       })))
     }
     loadOptions()
+    loadCatalogConfig({ refresh: true }).then(setCatalogConfig)
   }, [])
 
   const totals = useMemo(() => {
@@ -207,8 +249,10 @@ export default function NewInventoryPurchasePage() {
   const canSave = totals.totalQty > 0 && totals.productsAmount > 0 && lines.every((line) => {
     if (toNumber(line.unitCost) <= 0 || Math.max(1, Math.floor(toNumber(line.quantity))) <= 0) return false
     if (line.mode === "manual") return line.manualName.trim().length > 0
-    const model = selectedModelFor(line)
-    return Boolean(model && (line.storage || !(model.storage || model.sizes)) && (line.color || !model.colors))
+    const model = selectedModelFor(line, catalogConfig)
+    const colorOptions = (model?.colors || []) as CatalogColor[]
+    const colorOk = Boolean(line.color) || (isLineAccessory(line, catalogConfig) && colorOptions.length === 0)
+    return Boolean(model && (isLineAccessory(line, catalogConfig) || line.storage || !(model.storage || model.sizes)) && colorOk)
   })
 
   const updatePurchase = (field: string, value: string) => {
@@ -224,11 +268,21 @@ export default function NewInventoryPurchasePage() {
         next.storage = ""
         next.color = ""
         next.colorHex = ""
+        next.imeis = ""
+        next.serials = ""
+        next.batteryHealth = ""
+        next.accessoryHasSerial = false
+      }
+      if (field === "modelIdx") {
+        next.storage = ""
+        next.color = ""
+        next.colorHex = ""
       }
       if (field === "mode" && value === "manual" && !next.manualName) {
         next.category = "accessories"
         next.manualName = accessorySuggestions[0]
         next.grade = "Lacrado"
+        next.accessoryHasSerial = accessoryUsuallyHasSerial(accessorySuggestions[0])
       }
       if (field === "suggestedPrice") {
         const landedCost = toNumber(next.unitCost) + totals.freightPerUnit + totals.otherPerUnit
@@ -240,10 +294,14 @@ export default function NewInventoryPurchasePage() {
   }
 
   const updateLineImage = (id: string, file: File | null) => {
-    if (file && !file.type.startsWith("image/")) {
+    const extension = file?.name.toLowerCase().split(".").pop() || ""
+    const acceptedExtensions = new Set(["jpg", "jpeg", "png", "webp", "heic", "heif"])
+    const acceptedTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"])
+
+    if (file && ((file.type && !acceptedTypes.has(file.type)) || !acceptedExtensions.has(extension))) {
       toast({
         title: "Arquivo inválido",
-        description: "Envie uma imagem em JPG, PNG ou WebP.",
+        description: "Envie uma imagem em JPG, PNG, WebP ou HEIC.",
         type: "error",
       })
       return
@@ -275,7 +333,7 @@ export default function NewInventoryPurchasePage() {
   }
 
   const addLine = (mode: ProductMode = "catalog") => {
-    setLines((prev) => [...prev, newLine(mode === "manual" ? { mode, category: "accessories", manualName: accessorySuggestions[0] } : {})])
+    setLines((prev) => [...prev, newLine(mode === "manual" ? { mode, category: "accessories", manualName: accessorySuggestions[0], accessoryHasSerial: accessoryUsuallyHasSerial(accessorySuggestions[0]) } : {})])
   }
 
   const duplicateLine = (line: PurchaseLine) => {
@@ -294,11 +352,77 @@ export default function NewInventoryPurchasePage() {
     })
   }
 
+  const toggleLineCollapsed = (id: string) => {
+    setCollapsedLineIds((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const manualColorOptionsFor = (line: PurchaseLine) => {
+    const category = getCatalogCategory(catalogConfig, line.category)
+    const configured = mergeColorOptions(category?.colors)
+    return configured.length ? configured : DEFAULT_COLOR_SUGGESTIONS.slice(0, 8)
+  }
+
+  const createColorForLine = async (line: PurchaseLine, color: CatalogColor) => {
+    const category = getCatalogCategory(catalogConfig, line.category)
+    const model = selectedModelFor(line, catalogConfig)
+    const modelColors = (model?.colors || []) as CatalogColor[]
+    const existing = modelColors.find((item) => normalizeCatalogName(item.name) === normalizeCatalogName(color.name))
+    if (existing) {
+      setLines((prev) => prev.map((item) => item.id === line.id ? { ...item, color: existing.name, colorHex: existing.hex } : item))
+      return
+    }
+    const linkedColor = await createOrLinkModelColor({
+      categoryId: category?.id,
+      subcategoryId: model?.subcategoryId,
+      color,
+      existingColors: modelColors,
+    })
+    setCatalogConfig((config) => ({
+      categories: config.categories.map((item) => item.value === line.category ? {
+        ...item,
+        models: item.models.map((model, index) => index === line.modelIdx ? {
+          ...model,
+          colors: [...(model.colors || []), linkedColor],
+        } : model),
+      } : item),
+    }))
+    setLines((prev) => prev.map((item) => item.id === line.id ? { ...item, color: linkedColor.name, colorHex: linkedColor.hex } : item))
+  }
+
+  const createManualColorForLine = async (line: PurchaseLine, color: CatalogColor) => {
+    const category = getCatalogCategory(catalogConfig, line.category)
+    const existingColors = manualColorOptionsFor(line)
+    const existing = existingColors.find((item) => normalizeCatalogName(item.name) === normalizeCatalogName(color.name))
+    if (existing?.id) {
+      setLines((prev) => prev.map((item) => item.id === line.id ? { ...item, color: existing.name, colorHex: existing.hex } : item))
+      return
+    }
+
+    const resolvedColor = await createOrReuseCatalogColor({
+      categoryId: category?.id,
+      color,
+      existingColors,
+    })
+
+    setCatalogConfig((config) => ({
+      categories: config.categories.map((item) => item.value === line.category ? {
+        ...item,
+        colors: mergeColorOptions(item.colors, [resolvedColor]),
+      } : item),
+    }))
+    setLines((prev) => prev.map((item) => item.id === line.id ? { ...item, color: resolvedColor.name, colorHex: resolvedColor.hex } : item))
+  }
+
   const findOrCreateCatalog = async (line: PurchaseLine) => {
     if (line.mode === "manual") return null
-    const model = selectedModelFor(line)
+    const model = selectedModelFor(line, catalogConfig)
     if (!model?.name) return null
-    const storage = line.storage || null
+    const storage = isLineAccessory(line, catalogConfig) ? null : line.storage || null
     const color = line.color || null
 
     const { data: existing } = await (supabase.from("product_catalog") as any)
@@ -410,22 +534,27 @@ export default function NewInventoryPurchasePage() {
         const landedUnitCost = roundMoney(unitCost + totals.freightPerUnit + totals.otherPerUnit)
         const suggestedPrice = roundMoney(toNumber(line.suggestedPrice) || Math.ceil(landedUnitCost * (1 + toNumber(line.marginPct) / 100)))
         const catalogId = catalogIds.get(line.id) || null
-        const productName = lineProductName(line)
-        const checklistRequired = needsChecklistLater(line)
-        const isSealedElectronic = line.mode === "catalog" && ["iphone", "ipad", "applewatch"].includes(line.category) && line.grade === "Lacrado"
+        const productName = lineProductName(line, catalogConfig)
+        const productType = lineProductType(line, catalogConfig)
+        const categoryInfo = getCatalogCategory(catalogConfig, line.category)
+        const selectedModel = selectedModelFor(line, catalogConfig)
+        const isAccessory = isLineAccessory(line, catalogConfig)
+        const attributeSummary = [isAccessory ? null : line.storage, line.color].filter(Boolean).join(" · ") || null
+        const checklistRequired = needsChecklistLater(line, catalogConfig)
+        const isSealedElectronic = !isAccessory && line.mode === "catalog" && ["iphone", "ipad", "applewatch"].includes(line.category) && line.grade === "Lacrado"
         const conditionNotes = [
           line.mode === "manual" ? `Acessorio: ${productName}` : null,
           line.notes || null,
           checklistRequired ? "Checklist tecnico pendente" : null,
         ].filter(Boolean).join(" · ") || null
 
-        const splitByUnit = shouldCreateOneInventoryRowPerUnit(line, imeis, serials)
+        const splitByUnit = shouldCreateOneInventoryRowPerUnit(line, imeis, serials, catalogConfig)
         const rowsToCreate = splitByUnit ? quantity : 1
 
         for (let index = 0; index < rowsToCreate; index += 1) {
-          const imei = splitByUnit ? imeis[index] || null : null
-          const serial = splitByUnit ? serials[index] || null : null
-          const battery = isSealedElectronic ? 100 : toNumber(line.batteryHealth) || null
+          const imei = isAccessory ? null : splitByUnit ? imeis[index] || null : null
+          const serial = isAccessory && !line.accessoryHasSerial ? null : splitByUnit ? serials[index] || null : null
+          const battery = isAccessory ? null : isSealedElectronic ? 100 : toNumber(line.batteryHealth) || null
           const lifecycleStatus = getComputedInventoryStatus({
             status: "active",
             purchase_price: landedUnitCost,
@@ -457,6 +586,11 @@ export default function NewInventoryPurchasePage() {
             notes: line.mode === "manual" ? productName : line.notes || null,
             quantity: splitByUnit ? 1 : quantity,
             status: mapLifecycleToLegacyCompatibleStatus(lifecycleStatus),
+            product_type: productType,
+            category_name_snapshot: categoryInfo?.label || line.category,
+            subcategory_name_snapshot: line.mode === "manual" ? productName : selectedModel?.name || null,
+            color_name_snapshot: line.color || null,
+            attribute_summary_snapshot: attributeSummary,
           })
 
           purchaseItemPayloads.push({
@@ -606,117 +740,234 @@ export default function NewInventoryPurchasePage() {
               </div>
             </div>
 
-            <div className="divide-y divide-gray-100">
+            <div className="space-y-4 bg-gray-50/40 p-4">
               {lines.map((line, index) => {
-                const model = selectedModelFor(line)
-                const storageOptions = ((model?.storage || model?.sizes || []) as string[]).map((value) => ({ label: value, value }))
-                const colorOptions = ((model?.colors || []) as Array<{ name: string; hex: string }>).map((color) => ({ label: color.name, value: color.name }))
+                const model = selectedModelFor(line, catalogConfig)
+                const accessoryLine = isLineAccessory(line, catalogConfig)
+                const storageOptions = accessoryLine ? [] : ((model?.storage || model?.sizes || []) as string[]).map((value) => ({ label: value, value }))
+                const colorOptions = ((model?.colors || []) as CatalogColor[])
+                const manualColorOptions = manualColorOptionsFor(line)
                 const quantity = Math.max(1, Math.floor(toNumber(line.quantity)))
                 const unitCost = toNumber(line.unitCost)
                 const landedCost = roundMoney(unitCost + totals.freightPerUnit + totals.otherPerUnit)
                 const suggested = toNumber(line.suggestedPrice) || Math.ceil(landedCost * (1 + toNumber(line.marginPct) / 100))
+                const collapsed = collapsedLineIds.has(line.id)
+                const categoryInfo = getCatalogCategory(catalogConfig, line.category)
+                const canShowBattery = !accessoryLine
+                const batteryValue = canShowBattery && line.grade === "Lacrado" && ["iphone", "ipad", "applewatch"].includes(line.category) ? "100" : line.batteryHealth
 
                 return (
-                  <div key={line.id} className="p-4 space-y-4">
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-xs font-bold uppercase tracking-wider text-gray-400">Item {index + 1}</span>
-                          {needsChecklistLater(line) && <Badge variant="yellow">Checklist depois</Badge>}
-                          <Badge variant="gray">{quantity} un.</Badge>
+                  <div key={line.id} className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
+                    <div className="flex flex-col gap-4 border-b border-gray-100 p-4 sm:p-5 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="flex min-w-0 gap-4">
+                        <label className="group flex h-20 w-20 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-2xl border border-dashed border-royal-200 bg-royal-50/40 text-royal-600 transition hover:bg-royal-50">
+                          {line.imagePreviewUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={line.imagePreviewUrl} alt={`Imagem de ${lineProductName(line, catalogConfig)}`} className="h-full w-full object-cover" />
+                          ) : (
+                            <span className="flex flex-col items-center gap-1 text-[11px] font-bold">
+                              <ImageIcon className="h-5 w-5" />
+                              Imagem
+                            </span>
+                          )}
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif"
+                            className="hidden"
+                            onChange={(event) => updateLineImage(line.id, event.target.files?.[0] || null)}
+                          />
+                        </label>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-xs font-bold uppercase tracking-wider text-royal-700">Item {index + 1}</span>
+                            <Badge variant="gray">{quantity} un.</Badge>
+                            {line.mode === "manual" ? <Badge variant="blue">Fora do catálogo</Badge> : null}
+                            {needsChecklistLater(line, catalogConfig) && <Badge variant="yellow">Checklist depois</Badge>}
+                          </div>
+                          <h4 className="mt-2 truncate text-lg font-bold text-navy-900">{lineProductName(line, catalogConfig)}</h4>
+                          <p className="mt-1 text-sm text-gray-500">
+                            Custo final unitário: <strong className="text-navy-900">{formatBRL(landedCost)}</strong>
+                            <span className="mx-2 text-gray-300">•</span>
+                            Sugerido {formatBRL(suggested || 0)}
+                          </p>
                         </div>
-                        <h4 className="mt-1 text-lg font-semibold text-navy-900">{lineProductName(line)}</h4>
-                        <p className="text-sm text-gray-500">
-                          Custo final unitario: <strong className="text-navy-900">{formatBRL(landedCost)}</strong> · sugerido {formatBRL(suggested || 0)}
-                        </p>
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex shrink-0 flex-wrap items-center gap-2">
                         <Button variant="ghost" size="sm" onClick={() => duplicateLine(line)}>
                           <Copy className="w-4 h-4" /> Duplicar
                         </Button>
                         <Button variant="ghost" size="sm" onClick={() => removeLine(line.id)} disabled={lines.length === 1}>
                           <Trash2 className="w-4 h-4" /> Remover
                         </Button>
+                        <Button variant="outline" size="icon" onClick={() => toggleLineCollapsed(line.id)} title={collapsed ? "Expandir item" : "Recolher item"}>
+                          {collapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+                        </Button>
                       </div>
                     </div>
 
-                    <div className="grid gap-3 lg:grid-cols-6">
-                      <Select label="Tipo" value={line.mode} onChange={(event) => updateLine(line.id, "mode", event.target.value)} options={[{ label: "Catalogo", value: "catalog" }, { label: "Manual/outro", value: "manual" }]} />
-                      <Select label="Categoria" value={line.category} onChange={(event) => updateLine(line.id, "category", event.target.value)} options={categoryOptions} />
-                      {line.mode === "catalog" ? (
-                        <>
-                          <div className="lg:col-span-2">
-                            <Select label="Modelo" value={String(line.modelIdx)} onChange={(event) => updateLine(line.id, "modelIdx", event.target.value)} options={(PRODUCT_CATALOG[line.category as keyof typeof PRODUCT_CATALOG]?.models || []).map((item: any, idx: number) => ({ label: item.name, value: String(idx) }))} />
+                    {!collapsed ? (
+                      <div className="space-y-5 p-4 sm:p-5">
+                        {line.mode === "manual" ? (
+                          <div className="flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
+                            <Info className="mt-0.5 h-4 w-4 shrink-0" />
+                            <p>Este item será cadastrado como Manual/Outro, fora do catálogo de produtos.</p>
                           </div>
-                          <Select label="Armazenamento" value={line.storage} onChange={(event) => updateLine(line.id, "storage", event.target.value)} options={[{ label: "Selecionar", value: "" }, ...storageOptions]} />
-                          <Select label="Cor" value={line.color} onChange={(event) => {
-                            const color = (model?.colors || []).find((item: any) => item.name === event.target.value)
-                            updateLine(line.id, "color", event.target.value)
-                            if (color?.hex) updateLine(line.id, "colorHex", color.hex)
-                          }} options={[{ label: "Selecionar", value: "" }, ...colorOptions]} />
-                        </>
-                      ) : (
-                        <div className="lg:col-span-4">
-                          <Input label="Nome do produto" value={line.manualName} onChange={(event) => updateLine(line.id, "manualName", event.target.value)} placeholder="Ex: Capa para iPad Pro 11, Carregador Turbo 35W iPhone..." />
-                        </div>
-                      )}
-                    </div>
+                        ) : null}
 
-                    <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-6">
-                      <Select label="Condicao" value={line.grade} onChange={(event) => updateLine(line.id, "grade", event.target.value)} options={gradeOptions} />
-                      <Input label="Quantidade" type="number" min="1" value={line.quantity} onChange={(event) => updateLine(line.id, "quantity", event.target.value)} />
-                      <Input label="Custo un." inputMode="decimal" value={line.unitCost} onChange={(event) => updateLine(line.id, "unitCost", event.target.value)} placeholder="0,00" />
-                      <Input label="Margem %" inputMode="decimal" value={line.marginPct} onChange={(event) => updateLine(line.id, "marginPct", event.target.value)} />
-                      <Input label="Preco sugerido" inputMode="decimal" value={line.suggestedPrice} onChange={(event) => updateLine(line.id, "suggestedPrice", event.target.value)} placeholder={String(suggested || "")} />
-                      <Input label="Bateria %" type="number" min="0" max="100" disabled={line.grade === "Lacrado" || line.mode === "manual"} value={line.grade === "Lacrado" && ["iphone", "ipad", "applewatch"].includes(line.category) ? "100" : line.batteryHealth} onChange={(event) => updateLine(line.id, "batteryHealth", event.target.value)} />
-                    </div>
+                        <BatchLineSection number={1} title={line.mode === "manual" ? "Informações do produto" : "Produto"}>
+                          <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-12">
+                            <div className="min-w-0 md:col-span-3">
+                              <Select label="Tipo" value={line.mode} onChange={(event) => updateLine(line.id, "mode", event.target.value)} options={[{ label: "Catálogo", value: "catalog" }, { label: "Manual/outro", value: "manual" }]} />
+                            </div>
+                            <div className="min-w-0 md:col-span-3">
+                              <Select label="Categoria" value={line.category} onChange={(event) => updateLine(line.id, "category", event.target.value)} options={categoryOptions} />
+                            </div>
+                            {line.mode === "catalog" ? (
+                              <>
+                                <div className="min-w-0 md:col-span-3">
+                                  <Select label="Modelo" value={String(line.modelIdx)} onChange={(event) => updateLine(line.id, "modelIdx", event.target.value)} options={(categoryInfo?.models || []).map((item: any, idx: number) => ({ label: item.name, value: String(idx) }))} />
+                                </div>
+                                {!accessoryLine ? (
+                                  <div className="min-w-0 md:col-span-3">
+                                    <Select label="Armazenamento" value={line.storage} onChange={(event) => updateLine(line.id, "storage", event.target.value)} options={[{ label: "Selecionar", value: "" }, ...storageOptions]} />
+                                  </div>
+                                ) : null}
+                              </>
+                            ) : (
+                              <div className="min-w-0 md:col-span-6">
+                                <Input label="Nome do produto" value={line.manualName} onChange={(event) => updateLine(line.id, "manualName", event.target.value)} placeholder="Ex: Capa para iPad, Cabo USB-C, Apple Pencil..." />
+                              </div>
+                            )}
+                          </div>
+                        </BatchLineSection>
 
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <Textarea label="IMEIs (um por linha)" value={line.imeis} onChange={(event) => updateLine(line.id, "imeis", event.target.value)} placeholder={"356...\n356..."} />
-                      <Textarea label="Seriais (um por linha)" value={line.serials} onChange={(event) => updateLine(line.id, "serials", event.target.value)} placeholder={"F2L...\nG6T..."} />
-                    </div>
-                    <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50/70 p-3">
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                        <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
-                          {line.imagePreviewUrl ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={line.imagePreviewUrl} alt={`Imagem de ${lineProductName(line)}`} className="h-full w-full object-cover" />
+                        <BatchLineSection number={2} title="Cor" subtitle={line.mode === "manual" ? "Opcional para itens fora do catálogo." : undefined}>
+                          <ColorSwatchPicker
+                            colors={line.mode === "manual" ? manualColorOptions : colorOptions}
+                            value={line.color}
+                            subtitle={line.mode === "manual" ? "Cores globais ou livres para este item." : `Cores disponíveis para ${model?.name || "este modelo"}`}
+                            allowNoColor={line.mode === "manual"}
+                            allowOutOfCatalog={line.mode === "catalog"}
+                            noColorLabel="Sem cor"
+                            onClear={() => {
+                              updateLine(line.id, "color", "")
+                              updateLine(line.id, "colorHex", "")
+                            }}
+                            onChange={(color) => {
+                              updateLine(line.id, "color", color.name)
+                              updateLine(line.id, "colorHex", color.hex)
+                            }}
+                            onCreateColor={(color) => line.mode === "manual" ? createManualColorForLine(line, color) : createColorForLine(line, color)}
+                            createLabel={line.mode === "manual" ? "Adicionar nova cor" : "Adicionar nova cor ao modelo"}
+                            emptyMessage={line.mode === "manual" ? "Nenhuma cor global configurada. Use uma sugestão ou adicione uma nova cor." : "Nenhuma cor configurada para este modelo."}
+                          />
+                        </BatchLineSection>
+
+                        <BatchLineSection number={3} title="Detalhes comerciais">
+                          <div className={cn("grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2", canShowBattery ? "lg:grid-cols-6" : "lg:grid-cols-5")}>
+                            <Select label="Condição" value={line.grade} onChange={(event) => updateLine(line.id, "grade", event.target.value)} options={gradeOptions} />
+                            <Input label="Quantidade" type="number" min="1" value={line.quantity} onChange={(event) => updateLine(line.id, "quantity", event.target.value)} />
+                            <Input label="Custo unitário" inputMode="decimal" value={line.unitCost} onChange={(event) => updateLine(line.id, "unitCost", event.target.value)} placeholder="0,00" />
+                            <Input label="Margem %" inputMode="decimal" value={line.marginPct} onChange={(event) => updateLine(line.id, "marginPct", event.target.value)} />
+                            <Input label="Preço sugerido" inputMode="decimal" value={line.suggestedPrice} onChange={(event) => updateLine(line.id, "suggestedPrice", event.target.value)} placeholder={String(suggested || "")} />
+                            {canShowBattery ? (
+                              <Input label="Bateria %" type="number" min="0" max="100" disabled={line.grade === "Lacrado"} value={batteryValue} onChange={(event) => updateLine(line.id, "batteryHealth", event.target.value)} />
+                            ) : null}
+                          </div>
+                        </BatchLineSection>
+
+                        <BatchLineSection number={4} title="Identificação">
+                          {accessoryLine ? (
+                            <div className="space-y-3 rounded-2xl border border-gray-100 bg-gray-50/80 p-4">
+                              <label className="flex items-start gap-3 text-sm text-navy-900">
+                                <input
+                                  type="checkbox"
+                                  checked={line.accessoryHasSerial}
+                                  onChange={(event) => setLines((prev) => prev.map((item) => item.id === line.id ? { ...item, accessoryHasSerial: event.target.checked, serials: event.target.checked ? item.serials : "" } : item))}
+                                  className="mt-0.5 h-5 w-5 shrink-0 rounded border-gray-300 accent-royal-500"
+                                />
+                                <span className="min-w-0">
+                                  <span className="block font-semibold">Este item possui serial</span>
+                                  <span className="mt-1 block text-xs leading-5 text-gray-500">Quando ativado, o lote salvará um número de série por unidade.</span>
+                                </span>
+                              </label>
+                              {line.accessoryHasSerial ? (
+                                <Textarea label="Séries, um por linha" value={line.serials} onChange={(event) => updateLine(line.id, "serials", event.target.value)} placeholder={"F2L...\nG6T..."} />
+                              ) : null}
+                            </div>
                           ) : (
-                            <ImageIcon className="h-6 w-6 text-gray-300" />
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <Textarea label="IMEIs (um por linha)" value={line.imeis} onChange={(event) => updateLine(line.id, "imeis", event.target.value)} placeholder={"356...\n356..."} />
+                              <Textarea label="Seriais (um por linha)" value={line.serials} onChange={(event) => updateLine(line.id, "serials", event.target.value)} placeholder={"F2L...\nG6T..."} />
+                            </div>
                           )}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-semibold text-navy-900">Imagem do item</p>
-                          <p className="text-xs leading-5 text-gray-500">
-                            Opcional. Use uma foto limpa do produto; ela será aplicada ao item criado no estoque.
-                          </p>
-                          {line.imageFile ? (
-                            <p className="mt-1 truncate text-xs font-medium text-gray-600">{line.imageFile.name}</p>
-                          ) : null}
-                        </div>
-                        <div className="flex shrink-0 gap-2">
-                          <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3 text-sm font-semibold text-navy-900 shadow-sm transition-colors hover:border-royal-200 hover:text-royal-600">
-                            <Upload className="h-4 w-4" />
-                            {line.imageFile ? "Trocar" : "Enviar"}
-                            <input
-                              type="file"
-                              accept="image/jpeg,image/png,image/webp"
-                              className="hidden"
-                              onChange={(event) => updateLineImage(line.id, event.target.files?.[0] || null)}
+                        </BatchLineSection>
+
+                        <BatchLineSection number={5} title="Observações">
+                          <div className="relative">
+                            <Textarea
+                              value={line.notes}
+                              maxLength={500}
+                              onChange={(event) => updateLine(line.id, "notes", event.target.value)}
+                              placeholder="Marcas de uso, caixa, acessórios inclusos, origem..."
+                              className="min-h-[120px] pb-8"
                             />
-                          </label>
-                          {line.imageFile ? (
-                            <Button variant="ghost" size="icon" onClick={() => updateLineImage(line.id, null)} title="Remover imagem">
-                              <X className="h-4 w-4" />
-                            </Button>
-                          ) : null}
-                        </div>
+                            <span className="absolute bottom-3 right-3 text-xs font-medium text-gray-400">{line.notes.length}/500</span>
+                          </div>
+                        </BatchLineSection>
+
+                        <BatchLineSection number={6} title="Imagem do item" subtitle="Use JPG, PNG, WebP ou HEIC. A foto será aplicada ao item criado no estoque.">
+                          <div
+                            className="rounded-2xl border border-dashed border-gray-200 bg-gray-50/70 p-4 transition hover:border-royal-200 hover:bg-royal-50/30"
+                            onDragOver={(event) => event.preventDefault()}
+                            onDrop={(event) => {
+                              event.preventDefault()
+                              updateLineImage(line.id, event.dataTransfer.files?.[0] || null)
+                            }}
+                          >
+                            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                              <div className="flex min-w-0 items-center gap-3">
+                                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-royal-600 shadow-sm">
+                                  <Upload className="h-5 w-5" />
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="text-sm font-semibold text-navy-900">Arraste e solte ou clique para enviar</p>
+                                  <p className="text-xs text-gray-500">{line.imageFile ? line.imageFile.name : "Tamanho máximo: 10MB"}</p>
+                                </div>
+                              </div>
+                              <div className="flex shrink-0 gap-2">
+                                <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 text-sm font-semibold text-navy-900 shadow-sm transition-colors hover:border-royal-200 hover:text-royal-600">
+                                  <Upload className="h-4 w-4" />
+                                  Selecionar arquivo
+                                  <input
+                                    type="file"
+                                    accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif"
+                                    className="hidden"
+                                    onChange={(event) => updateLineImage(line.id, event.target.files?.[0] || null)}
+                                  />
+                                </label>
+                                {line.imageFile ? (
+                                  <Button variant="ghost" size="icon" onClick={() => updateLineImage(line.id, null)} title="Remover imagem">
+                                    <X className="h-4 w-4" />
+                                  </Button>
+                                ) : null}
+                              </div>
+                            </div>
+                          </div>
+                        </BatchLineSection>
                       </div>
-                    </div>
-                    <Textarea label="Observacoes do item" value={line.notes} onChange={(event) => updateLine(line.id, "notes", event.target.value)} placeholder="Marcas de uso, caixa, acessorios inclusos, origem..." />
+                    ) : null}
                   </div>
                 )
               })}
+              <button
+                type="button"
+                onClick={() => addLine("manual")}
+                className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-gray-200 bg-white text-sm font-semibold text-royal-600 transition hover:border-royal-200 hover:bg-royal-50/40"
+              >
+                <Plus className="h-4 w-4" />
+                Adicionar novo item ao lote
+              </button>
             </div>
           </section>
         </div>
@@ -774,5 +1025,27 @@ export default function NewInventoryPurchasePage() {
         </aside>
       </div>
     </div>
+  )
+}
+
+function BatchLineSection({
+  number,
+  title,
+  subtitle,
+  children,
+}: {
+  number: number
+  title: string
+  subtitle?: string
+  children: ReactNode
+}) {
+  return (
+    <section className="min-w-0 border-t border-gray-100 pt-5 first:border-t-0 first:pt-0">
+      <div className="mb-3 min-w-0">
+        <h5 className="text-sm font-bold text-royal-700">{number}. {title}</h5>
+        {subtitle ? <p className="mt-1 text-xs leading-5 text-gray-500">{subtitle}</p> : null}
+      </div>
+      <div className="min-w-0">{children}</div>
+    </section>
   )
 }

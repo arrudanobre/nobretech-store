@@ -14,14 +14,14 @@ type ProductImageManagerProps = ProductAssetInput & {
   onImageChange?: (image: ProductImageRecord | null) => void
 }
 
-const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp"]
-const ACCEPTED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"]
+const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"]
+const ACCEPTED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"]
 const MAX_BYTES = 10 * 1024 * 1024
 
 function validateClientFile(file: File) {
   const extension = file.name.toLowerCase().slice(file.name.lastIndexOf("."))
-  if (!ACCEPTED_TYPES.includes(file.type) || !ACCEPTED_EXTENSIONS.includes(extension)) {
-    return "Use uma imagem JPG, PNG ou WebP."
+  if ((file.type && !ACCEPTED_TYPES.includes(file.type)) || !ACCEPTED_EXTENSIONS.includes(extension)) {
+    return "Use uma imagem JPG, PNG, WebP ou HEIC."
   }
   if (file.size > MAX_BYTES) return "A imagem precisa ter no máximo 10MB."
   return null
@@ -159,13 +159,13 @@ export function ProductImageManager({
                   ? "Asset estático por modelo/cor"
                   : "Fallback visual da categoria"}
             </p>
-            <p className="mt-1 text-xs text-gray-500">JPG, PNG ou WebP. Máximo 10MB.</p>
+            <p className="mt-1 text-xs text-gray-500">JPG, PNG, WebP ou HEIC. Máximo 10MB.</p>
           </div>
 
           <input
             ref={inputRef}
             type="file"
-            accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif"
             className="hidden"
             onChange={(event) => handleUpload(event.target.files?.[0])}
           />

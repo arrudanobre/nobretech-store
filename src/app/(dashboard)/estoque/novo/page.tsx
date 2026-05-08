@@ -8,10 +8,23 @@ import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
+import { ColorSwatchPicker } from "@/components/products/color-swatch-picker"
 import { useToast } from "@/components/ui/toaster"
 import { supabase } from "@/lib/supabase"
 import { formatBRL, getComputedInventoryStatus, mapLifecycleToLegacyCompatibleStatus } from "@/lib/helpers"
-import { CATEGORIES, CHECKLIST_TEMPLATES, GRADES, PRODUCT_CATALOG } from "@/lib/constants"
+import { CHECKLIST_TEMPLATES, GRADES } from "@/lib/constants"
+import {
+  accessoryUsuallyHasSerial,
+  buildLegacyCatalogConfig,
+  createOrLinkModelColor,
+  getCatalogCategory,
+  getCategoryOptions,
+  isAccessoryProduct,
+  loadCatalogConfig,
+  normalizeCatalogName,
+  type CatalogColor,
+  type CatalogConfig,
+} from "@/lib/catalog-config"
 
 type Step = 1 | 2 | 3
 type ProductMode = "catalog" | "manual"
@@ -33,13 +46,12 @@ const ACCESSORY_SUGGESTIONS = [
   "Película para iPhone",
 ]
 
-const categoryOptions = CATEGORIES.map((category) => ({ label: category.label, value: category.value }))
-
 export default function AddProductPage() {
   const router = useRouter()
   const { toast } = useToast()
   const [step, setStep] = useState<Step>(1)
   const [mode, setMode] = useState<ProductMode>("catalog")
+  const [catalogConfig, setCatalogConfig] = useState<CatalogConfig>(() => buildLegacyCatalogConfig())
   const [category, setCategory] = useState("iphone")
   const [modelIdx, setModelIdx] = useState(0)
   const [suppliers, setSuppliers] = useState<any[]>([])
@@ -54,6 +66,7 @@ export default function AddProductPage() {
     imei: "",
     imei2: "",
     serial_number: "",
+    accessory_has_serial: false,
     ios_version: "",
     battery_health: "",
     condition_notes: "",
@@ -68,14 +81,24 @@ export default function AddProductPage() {
   })
 
   const models = useMemo(() => {
-    const cat = PRODUCT_CATALOG[category as keyof typeof PRODUCT_CATALOG]
-    return cat ? cat.models : []
-  }, [category])
+    return getCatalogCategory(catalogConfig, category)?.models || []
+  }, [catalogConfig, category])
 
   const selectedModel = models[modelIdx] as any
+  const selectedModelColors = (selectedModel?.colors || []) as CatalogColor[]
   const isManual = mode === "manual"
+  const currentCategory = getCatalogCategory(catalogConfig, category)
+  const categoryOptions = useMemo(() => getCategoryOptions(catalogConfig), [catalogConfig])
+  const isAccessory = isAccessoryProduct({
+    mode,
+    category,
+    categoryLabel: currentCategory?.label,
+    name: isManual ? formData.manual_name : selectedModel?.name,
+    productType: currentCategory?.productType,
+  })
+  const resolvedProductType = isManual ? "accessory" : currentCategory?.productType || (isAccessory ? "accessory" : "device")
   const isSealedElectronic = mode === "catalog" && ["iphone", "ipad", "applewatch"].includes(category) && formData.grade === "Lacrado"
-  const showBatteryField = !isManual && !isSealedElectronic
+  const showBatteryField = !isAccessory && !isSealedElectronic
   const productName = useMemo(() => {
     if (isManual) return formData.manual_name.trim()
     const parts = [selectedModel?.name, formData.storage, formData.color].filter(Boolean)
@@ -103,14 +126,15 @@ export default function AddProductPage() {
   const canProceed = useMemo(() => {
     if (step === 1) {
       if (isManual) return formData.manual_name.trim().length > 0 && category
-      return Boolean(category && selectedModel && (formData.storage || !(selectedModel.storage || selectedModel.sizes)) && (formData.color || !selectedModel.colors))
+      const colorOk = Boolean(formData.color) || (isAccessory && selectedModelColors.length === 0)
+      return Boolean(category && selectedModel && (isAccessory || formData.storage || !(selectedModel.storage || selectedModel.sizes)) && colorOk)
     }
     if (step === 2) {
       const hasValues = Number(formData.purchase_price || 0) > 0 && Boolean(formData.purchase_date) && Number(formData.quantity || 0) > 0
       return hasValues && (!requiresChecklist || checklistProgress >= 80)
     }
     return true
-  }, [step, isManual, formData, category, selectedModel, requiresChecklist, checklistProgress])
+  }, [step, isManual, formData, category, selectedModel, selectedModelColors.length, isAccessory, requiresChecklist, checklistProgress])
 
   useEffect(() => {
     async function fetchSuppliers() {
@@ -121,6 +145,7 @@ export default function AddProductPage() {
       })))
     }
     fetchSuppliers()
+    loadCatalogConfig({ refresh: true }).then(setCatalogConfig)
   }, [])
 
   useEffect(() => {
@@ -180,7 +205,32 @@ export default function AddProductPage() {
   const handleCategoryChange = (value: string) => {
     setCategory(value)
     setModelIdx(0)
-    setFormData((prev) => ({ ...prev, storage: "", color: "", colorHex: "" }))
+    setFormData((prev) => ({ ...prev, storage: "", color: "", colorHex: "", accessory_has_serial: false, serial_number: "", imei: "", imei2: "", battery_health: "" }))
+  }
+
+  const createColor = async (color: CatalogColor) => {
+    const current = getCatalogCategory(catalogConfig, category)
+    const existing = selectedModelColors.find((item) => normalizeCatalogName(item.name) === normalizeCatalogName(color.name))
+    if (existing) {
+      setFormData((prev) => ({ ...prev, color: existing.name, colorHex: existing.hex }))
+      return
+    }
+    const linkedColor = await createOrLinkModelColor({
+      categoryId: current?.id,
+      subcategoryId: selectedModel?.subcategoryId,
+      color,
+      existingColors: selectedModelColors,
+    })
+    setCatalogConfig((config) => ({
+      categories: config.categories.map((item) => item.value === category ? {
+        ...item,
+        models: item.models.map((model, index) => index === modelIdx ? {
+          ...model,
+          colors: [...(model.colors || []), linkedColor],
+        } : model),
+      } : item),
+    }))
+    setFormData((prev) => ({ ...prev, color: linkedColor.name, colorHex: linkedColor.hex }))
   }
 
   const updateChecklistItem = (idx: number, status: string, note?: string) => {
@@ -193,7 +243,7 @@ export default function AddProductPage() {
 
   const findOrCreateCatalog = async () => {
     if (isManual) return null
-    const storage = formData.storage || null
+    const storage = isAccessory ? null : formData.storage || null
     const color = formData.color || null
     const { data: existing } = await (supabase.from("product_catalog") as any)
       .select("id")
@@ -243,6 +293,7 @@ export default function AddProductPage() {
       }
 
       const manualName = isManual ? productName : ""
+      const attributeSummary = [isAccessory ? null : formData.storage, formData.color].filter(Boolean).join(" · ") || null
       const selectedSupplier = suppliers.find((supplier) => supplier.value === formData.supplier_id)
       const supplierName = formData.supplier_name || selectedSupplier?.label || null
       const notes = manualName || formData.condition_notes || null
@@ -251,8 +302,8 @@ export default function AddProductPage() {
         purchase_price: Number(formData.purchase_price || 0),
         purchase_date: formData.purchase_date,
         grade: formData.grade || null,
-        imei: formData.imei || null,
-        serial_number: formData.serial_number || null,
+        imei: isAccessory ? null : formData.imei || null,
+        serial_number: isAccessory && !formData.accessory_has_serial ? null : formData.serial_number || null,
         catalog_id: catalogId,
         notes,
         condition_notes: formData.condition_notes || notes,
@@ -261,9 +312,9 @@ export default function AddProductPage() {
       const { error } = await (supabase.from("inventory") as any).insert({
         company_id: company.id,
         catalog_id: catalogId,
-        imei: formData.imei || null,
-        imei2: formData.imei2 || null,
-        serial_number: formData.serial_number || null,
+        imei: isAccessory ? null : formData.imei || null,
+        imei2: isAccessory ? null : formData.imei2 || null,
+        serial_number: isAccessory && !formData.accessory_has_serial ? null : formData.serial_number || null,
         grade: formData.grade || (isManual ? "Lacrado" : null),
         condition_notes: formData.condition_notes || manualName || null,
         purchase_price: Number(formData.purchase_price),
@@ -273,12 +324,17 @@ export default function AddProductPage() {
         supplier_name: formData.type === "supplier" ? supplierName : null,
         origin: "purchase",
         suggested_price: suggestedPrice || null,
-        ios_version: formData.ios_version || null,
-        battery_health: isSealedElectronic ? 100 : formData.battery_health ? Number(formData.battery_health) : null,
+        ios_version: isAccessory ? null : formData.ios_version || null,
+        battery_health: isAccessory ? null : isSealedElectronic ? 100 : formData.battery_health ? Number(formData.battery_health) : null,
         notes,
         checklist_id: checklistId,
         quantity: formData.type === "own" ? Math.max(1, Number(formData.quantity || 1)) : 1,
         status: mapLifecycleToLegacyCompatibleStatus(lifecycleStatus),
+        product_type: resolvedProductType,
+        category_name_snapshot: currentCategory?.label || category,
+        subcategory_name_snapshot: isManual ? productName || null : selectedModel?.name || null,
+        color_name_snapshot: formData.color || null,
+        attribute_summary_snapshot: attributeSummary,
       } as any)
 
       if (error) throw error
@@ -336,7 +392,10 @@ export default function AddProductPage() {
               <p className="font-semibold text-navy-900">Produto do catálogo</p>
               <p className="text-xs text-gray-500 mt-1">iPhone, iPad, Apple Watch, AirPods, MacBook ou Garmin.</p>
             </button>
-            <button onClick={() => setMode("manual")} className={`rounded-xl border p-4 text-left transition-all ${mode === "manual" ? "border-royal-500 bg-royal-100/30" : "border-gray-100 hover:border-gray-200"}`}>
+            <button onClick={() => {
+              setMode("manual")
+              setFormData((prev) => ({ ...prev, imei: "", imei2: "", battery_health: "", ios_version: "", accessory_has_serial: accessoryUsuallyHasSerial(prev.manual_name) }))
+            }} className={`rounded-xl border p-4 text-left transition-all ${mode === "manual" ? "border-royal-500 bg-royal-100/30" : "border-gray-100 hover:border-gray-200"}`}>
               <p className="font-semibold text-navy-900">Acessório / outros</p>
               <p className="text-xs text-gray-500 mt-1">Capas, películas, Apple Pencil, cabos, fontes e itens fora do catálogo.</p>
             </button>
@@ -349,31 +408,41 @@ export default function AddProductPage() {
               <Input label="Nome do produto" placeholder="Ex: Capa para iPad 10ª geração" value={formData.manual_name} onChange={(e) => updateField("manual_name", e.target.value)} />
               <div className="flex flex-wrap gap-2">
                 {ACCESSORY_SUGGESTIONS.map((suggestion) => (
-                  <button key={suggestion} onClick={() => updateField("manual_name", suggestion)} className="px-3 py-1.5 rounded-full border border-gray-200 text-xs text-gray-600 hover:border-royal-500">
+                  <button key={suggestion} onClick={() => setFormData((prev) => ({ ...prev, manual_name: suggestion, accessory_has_serial: accessoryUsuallyHasSerial(suggestion), serial_number: accessoryUsuallyHasSerial(suggestion) ? prev.serial_number : "" }))} className="px-3 py-1.5 rounded-full border border-gray-200 text-xs text-gray-600 hover:border-royal-500">
                     {suggestion}
                   </button>
                 ))}
               </div>
+              <label className="flex items-start gap-3 rounded-2xl border border-gray-100 bg-gray-50 p-3 text-sm text-navy-900">
+                <input
+                  type="checkbox"
+                  checked={formData.accessory_has_serial}
+                  onChange={(event) => setFormData((prev) => ({ ...prev, accessory_has_serial: event.target.checked, serial_number: event.target.checked ? prev.serial_number : "" }))}
+                  className="mt-0.5 h-5 w-5 shrink-0 accent-royal-500"
+                />
+                <span>
+                  <span className="block font-semibold">Este acessório possui serial</span>
+                  <span className="mt-1 block text-xs text-gray-500">Use para Apple Pencil, AirPods, Apple Watch, Garmin, Magic Keyboard e similares.</span>
+                </span>
+              </label>
+              {formData.accessory_has_serial ? (
+                <Input label="Número de série" placeholder="Serial Number" value={formData.serial_number} onChange={(e) => updateField("serial_number", e.target.value)} />
+              ) : null}
             </div>
           ) : (
             <div className="space-y-4">
               <Select label="Modelo" value={modelIdx.toString()} onChange={(e) => setModelIdx(Number(e.target.value))} options={models.map((model: any, index) => ({ label: model.name, value: index.toString() }))} />
-              {(selectedModel?.storage || selectedModel?.sizes) && (
+              {!isAccessory && (selectedModel?.storage || selectedModel?.sizes) && (
                 <Select label="Armazenamento / tamanho" value={formData.storage} onChange={(e) => updateField("storage", e.target.value)} placeholder="Selecione" options={(selectedModel.storage || selectedModel.sizes).map((value: string) => ({ label: value, value }))} />
               )}
-              {selectedModel?.colors && (
-                <div>
-                  <label className="block text-sm font-medium text-navy-900 mb-2">Cor</label>
-                  <div className="flex flex-wrap gap-2">
-                    {selectedModel.colors.map((color: { name: string; hex: string }) => (
-                      <button key={color.name} onClick={() => setFormData((prev) => ({ ...prev, color: color.name, colorHex: color.hex }))} className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-medium ${formData.color === color.name ? "border-royal-500 ring-2 ring-royal-500/20" : "border-gray-200 hover:border-gray-300"}`}>
-                        <span className="w-5 h-5 rounded-full border border-gray-300" style={{ backgroundColor: color.hex }} />
-                        {color.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+              <ColorSwatchPicker
+                colors={selectedModelColors}
+                value={formData.color}
+                subtitle={`Cores disponíveis para ${selectedModel?.name || "este modelo"}`}
+                onChange={(color) => setFormData((prev) => ({ ...prev, color: color.name, colorHex: color.hex }))}
+                onCreateColor={createColor}
+                createLabel="Adicionar nova cor ao modelo"
+              />
             </div>
           )}
 
@@ -388,7 +457,7 @@ export default function AddProductPage() {
             </div>
           </div>
 
-          {!isManual && (
+          {!isAccessory && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Input label="IMEI 1" placeholder="Opcional para lacrado" value={formData.imei} onChange={(e) => updateField("imei", e.target.value.replace(/\D/g, "").slice(0, 15))} />
               <Input label="IMEI 2" placeholder="Opcional" value={formData.imei2} onChange={(e) => updateField("imei2", e.target.value.replace(/\D/g, "").slice(0, 15))} />
@@ -465,7 +534,7 @@ export default function AddProductPage() {
             </div>
             <div className="min-w-0">
               <p className="font-semibold text-navy-900">{productName || "Produto sem nome"}</p>
-              <p className="text-sm text-gray-500">{CATEGORIES.find((item) => item.value === category)?.label} · {formData.grade}</p>
+              <p className="text-sm text-gray-500">{currentCategory?.label || category} · {formData.grade}</p>
               <p className="text-sm text-gray-500">{formData.imei ? `IMEI ${formData.imei}` : formData.serial_number ? `Serial ${formData.serial_number}` : "Sem IMEI/serial"}</p>
             </div>
           </div>

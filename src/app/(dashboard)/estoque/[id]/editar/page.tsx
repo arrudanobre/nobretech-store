@@ -8,8 +8,20 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select } from "@/components/ui/select"
 import { useToast } from "@/components/ui/toaster"
 import { ProductImageManager } from "@/components/products/product-image-manager"
+import { ColorSwatchPicker } from "@/components/products/color-swatch-picker"
 import { supabase } from "@/lib/supabase"
-import { CATEGORIES, GRADES, PRODUCT_CATALOG } from "@/lib/constants"
+import { GRADES } from "@/lib/constants"
+import {
+  buildLegacyCatalogConfig,
+  createOrLinkModelColor,
+  getCatalogCategory,
+  getCategoryOptions,
+  isAccessoryProduct,
+  loadCatalogConfig,
+  normalizeCatalogName,
+  type CatalogColor,
+  type CatalogConfig,
+} from "@/lib/catalog-config"
 import { fetchProductImageMap, type ProductImageRecord } from "@/lib/product-images"
 import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 import {
@@ -42,7 +54,6 @@ const STATUS_OPTIONS = [
   { value: "under_repair", label: "Em reparo" },
   { value: "returned", label: "Devolvido" },
 ]
-const categoryOptions = CATEGORIES.map((category) => ({ label: category.label, value: category.value }))
 type ProductMode = "catalog" | "manual"
 
 type LinkedSaleInfo = {
@@ -122,6 +133,7 @@ export default function EditProductPage() {
   const [catalogName, setCatalogName] = useState("")
   const [productName, setProductName] = useState("")
   const [mode, setMode] = useState<ProductMode>("catalog")
+  const [catalogConfig, setCatalogConfig] = useState<CatalogConfig>(() => buildLegacyCatalogConfig())
   const [catalogId, setCatalogId] = useState<string | null>(null)
   const [linkedSale, setLinkedSale] = useState<LinkedSaleInfo | null>(null)
   const [linkedPurchase, setLinkedPurchase] = useState<LinkedPurchaseInfo | null>(null)
@@ -139,6 +151,7 @@ export default function EditProductPage() {
     colorHex: "",
     imei: "",
     serial_number: "",
+    accessory_has_serial: false,
     grade: "",
     status: "in_stock",
     purchase_price: "",
@@ -152,17 +165,25 @@ export default function EditProductPage() {
     supplier_name: "",
   })
   const models = useMemo(() => {
-    const cat = PRODUCT_CATALOG[category as keyof typeof PRODUCT_CATALOG]
-    return cat ? cat.models : []
-  }, [category])
+    return getCatalogCategory(catalogConfig, category)?.models || []
+  }, [catalogConfig, category])
   const selectedModel = models[modelIdx] as any
   const storageOptions = (selectedModel?.storage || selectedModel?.sizes || []) as string[]
-  const colorOptions = (selectedModel?.colors || []) as { name: string; hex: string }[]
+  const colorOptions = (selectedModel?.colors || []) as CatalogColor[]
+  const currentCategory = getCatalogCategory(catalogConfig, category)
+  const categoryOptions = useMemo(() => getCategoryOptions(catalogConfig), [catalogConfig])
   const generatedCatalogName = useMemo(() => {
     if (mode === "manual") return productName.trim() || catalogName
     return [selectedModel?.name, formData.storage, formData.color].filter(Boolean).join(" ").trim()
   }, [catalogName, formData.color, formData.storage, mode, productName, selectedModel?.name])
-  const isAccessory = mode === "manual"
+  const isAccessory = isAccessoryProduct({
+    mode,
+    category,
+    categoryLabel: currentCategory?.label,
+    name: mode === "manual" ? productName || catalogName : selectedModel?.name,
+    productType: currentCategory?.productType,
+  })
+  const resolvedProductType = mode === "manual" ? "accessory" : currentCategory?.productType || (isAccessory ? "accessory" : "device")
   const isSealed = formData.grade === "Lacrado"
   const cost = parseFloat(formData.purchase_price) || 0
   const suggested = parseFloat(formData.suggested_price) || 0
@@ -192,10 +213,10 @@ export default function EditProductPage() {
         .filter((model) => rawName.includes(model.name))
         .sort((a, b) => b.name.length - a.name.length)[0]?.index ?? -1
     }
-    const categoryValue = catalog?.category || Object.entries(PRODUCT_CATALOG).find(([, group]: any) =>
+    const categoryValue = catalog?.category || catalogConfig.categories.find((group) =>
       findBestModelIndex(group.models) >= 0
-    )?.[0] || "iphone"
-    const group = PRODUCT_CATALOG[categoryValue as keyof typeof PRODUCT_CATALOG]
+    )?.value || "iphone"
+    const group = getCatalogCategory(catalogConfig, categoryValue)
     const modelIndex = Math.max(0, findBestModelIndex(group?.models || []))
     const model = group?.models[modelIndex] as any
     const storage = catalog?.storage || (model?.storage || model?.sizes || []).find((value: string) => rawName.includes(value.toLowerCase())) || ""
@@ -237,6 +258,7 @@ export default function EditProductPage() {
         colorHex: "",
         imei: item.imei || "",
         serial_number: item.serial_number || "",
+        accessory_has_serial: Boolean(item.serial_number),
         grade: item.grade || "",
         status: item.origin === "trade_in" && item.status === "trade_in_received"
           ? "trade_in_received"
@@ -296,7 +318,8 @@ export default function EditProductPage() {
         }
       } else {
         const selection = inferCatalogSelection(item)
-        const hasDeviceSignals = Boolean(item.imei || item.serial_number || item.battery_health || item.ios_version || selection.storage || selection.color || getProductName(item).toLowerCase().includes("iphone"))
+        const fallbackName = item.notes || item.condition_notes?.replace(/^Acessório:\s*/, "") || "Produto manual"
+        const hasDeviceSignals = !isAccessoryProduct({ category: selection.categoryValue, name: fallbackName }) && Boolean(item.imei || item.battery_health || item.ios_version || selection.storage || selection.color || getProductName(item).toLowerCase().includes("iphone"))
         setMode(hasDeviceSignals ? "catalog" : "manual")
         setCategory(selection.categoryValue)
         setModelIdx(selection.modelIndex)
@@ -309,8 +332,7 @@ export default function EditProductPage() {
             ? "trade_in_received"
             : getComputedInventoryStatus(item),
         }))
-        const fallbackName = item.notes || item.condition_notes?.replace(/^Acessório:\s*/, "") || "Produto manual"
-        setCatalogName(hasDeviceSignals ? getProductName({ model: (PRODUCT_CATALOG[selection.categoryValue as keyof typeof PRODUCT_CATALOG]?.models[selection.modelIndex] as any)?.name, storage: selection.storage, color: selection.color }) : fallbackName)
+        setCatalogName(hasDeviceSignals ? getProductName({ model: (getCatalogCategory(catalogConfig, selection.categoryValue)?.models[selection.modelIndex] as any)?.name, storage: selection.storage, color: selection.color }) : fallbackName)
         setProductName(hasDeviceSignals ? "" : fallbackName)
       }
 
@@ -370,7 +392,11 @@ export default function EditProductPage() {
     } finally {
       setLoading(false)
     }
-  }, [productId, router, toast])
+  }, [catalogConfig, productId, router, toast])
+
+  useEffect(() => {
+    loadCatalogConfig({ refresh: true }).then(setCatalogConfig)
+  }, [])
 
   useEffect(() => {
     fetchProduct()
@@ -384,13 +410,38 @@ export default function EditProductPage() {
   const handleCategoryChange = (value: string) => {
     setCategory(value)
     setModelIdx(0)
-    setFormData((prev) => ({ ...prev, storage: "", color: "", colorHex: "" }))
+    setFormData((prev) => ({ ...prev, storage: "", color: "", colorHex: "", imei: "", battery_health: "", ios_version: "", accessory_has_serial: false, serial_number: "" }))
+  }
+
+  const createColor = async (color: CatalogColor) => {
+    const current = getCatalogCategory(catalogConfig, category)
+    const existing = colorOptions.find((item) => normalizeCatalogName(item.name) === normalizeCatalogName(color.name))
+    if (existing) {
+      setFormData((prev) => ({ ...prev, color: existing.name, colorHex: existing.hex }))
+      return
+    }
+    const linkedColor = await createOrLinkModelColor({
+      categoryId: current?.id,
+      subcategoryId: selectedModel?.subcategoryId,
+      color,
+      existingColors: colorOptions,
+    })
+    setCatalogConfig((config) => ({
+      categories: config.categories.map((item) => item.value === category ? {
+        ...item,
+        models: item.models.map((model, index) => index === modelIdx ? {
+          ...model,
+          colors: [...(model.colors || []), linkedColor],
+        } : model),
+      } : item),
+    }))
+    setFormData((prev) => ({ ...prev, color: linkedColor.name, colorHex: linkedColor.hex }))
   }
 
   const findOrCreateCatalog = async () => {
     if (mode === "manual") return null
     if (!selectedModel) throw new Error("Selecione um modelo do catálogo")
-    const storage = formData.storage || null
+    const storage = isAccessory ? null : formData.storage || null
     const color = formData.color || null
 
     const { data: existing, error: findError } = await (supabase.from("product_catalog") as any)
@@ -424,6 +475,7 @@ export default function EditProductPage() {
     try {
       const nextCatalogId = await findOrCreateCatalog()
       const trimmedProductName = productName.trim()
+      const attributeSummary = [isAccessory ? null : formData.storage, formData.color].filter(Boolean).join(" · ") || null
       const customCatalogName = mode === "catalog" && trimmedProductName && trimmedProductName !== generatedCatalogName
         ? trimmedProductName
         : ""
@@ -432,8 +484,8 @@ export default function EditProductPage() {
         purchase_price: parseFloat(formData.purchase_price) || 0,
         purchase_date: formData.purchase_date || null,
         grade: formData.grade || null,
-        imei: formData.imei || null,
-        serial_number: formData.serial_number || null,
+        imei: isAccessory ? null : formData.imei || null,
+        serial_number: isAccessory && !formData.accessory_has_serial ? null : formData.serial_number || null,
         catalog_id: nextCatalogId,
         notes: mode === "manual" ? (trimmedProductName || notes || formData.condition_notes || null) : (customCatalogName || null),
         condition_notes: formData.condition_notes || null,
@@ -445,20 +497,25 @@ export default function EditProductPage() {
 
       const updateData: Record<string, any> = {
         catalog_id: nextCatalogId,
-        imei: formData.imei || null,
-        serial_number: formData.serial_number || null,
+        imei: isAccessory ? null : formData.imei || null,
+        serial_number: isAccessory && !formData.accessory_has_serial ? null : formData.serial_number || null,
         grade: formData.grade || null,
         status: resolvedStatus,
         purchase_price: parseFloat(formData.purchase_price) || 0,
         suggested_price: formData.suggested_price ? parseFloat(formData.suggested_price) : null,
         purchase_date: formData.purchase_date,
-        battery_health: isSealed && !isAccessory ? 100 : formData.battery_health ? parseInt(formData.battery_health) : null,
-        ios_version: formData.ios_version || null,
+        battery_health: isAccessory ? null : isSealed ? 100 : formData.battery_health ? parseInt(formData.battery_health) : null,
+        ios_version: isAccessory ? null : formData.ios_version || null,
         condition_notes: formData.condition_notes || null,
         quantity: resolvedType === "own" ? Math.max(1, parseInt(formData.quantity) || 1) : 1,
         type: resolvedType,
         supplier_name: isTradeInItem ? null : (formData.supplier_name || null),
         notes: mode === "manual" ? (trimmedProductName || null) : (customCatalogName ? `Nome: ${customCatalogName}` : null),
+        product_type: resolvedProductType,
+        category_name_snapshot: currentCategory?.label || category,
+        subcategory_name_snapshot: mode === "manual" ? trimmedProductName || null : selectedModel?.name || null,
+        color_name_snapshot: formData.color || null,
+        attribute_summary_snapshot: attributeSummary,
       }
 
       const { error } = await (supabase.from("inventory") as any)
@@ -599,7 +656,7 @@ export default function EditProductPage() {
                     }}
                     options={models.map((model: any, index) => ({ label: model.name, value: index.toString() }))}
                   />
-                  {storageOptions.length > 0 ? (
+                  {!isAccessory && storageOptions.length > 0 ? (
                     <Select
                       label="Armazenamento / tamanho"
                       value={formData.storage}
@@ -615,24 +672,14 @@ export default function EditProductPage() {
                   )}
                 </div>
 
-                {colorOptions.length > 0 ? (
-                  <div>
-                    <label className="mb-2 block text-sm font-semibold text-navy-900">Cor</label>
-                    <div className="flex flex-wrap gap-2">
-                      {colorOptions.map((color) => (
-                        <button
-                          key={color.name}
-                          type="button"
-                          onClick={() => setFormData((prev) => ({ ...prev, color: color.name, colorHex: color.hex }))}
-                          className={`flex min-h-[44px] items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition-all ${formData.color === color.name ? "border-royal-500 ring-2 ring-royal-500/20" : "border-gray-200 hover:border-gray-300"}`}
-                        >
-                          <span className="h-5 w-5 rounded-full border border-gray-300" style={{ backgroundColor: color.hex }} />
-                          {color.name}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
+                <ColorSwatchPicker
+                  colors={colorOptions}
+                  value={formData.color}
+                  subtitle={`Cores disponíveis para ${selectedModel?.name || "este modelo"}`}
+                  onChange={(color) => setFormData((prev) => ({ ...prev, color: color.name, colorHex: color.hex }))}
+                  onCreateColor={createColor}
+                  createLabel="Adicionar nova cor ao modelo"
+                />
 
                 <div className="rounded-2xl border border-royal-100 bg-royal-50/50 p-4">
                   <p className="text-xs font-bold uppercase tracking-wider text-royal-600">Nome gerado pelo catálogo</p>
@@ -686,10 +733,31 @@ export default function EditProductPage() {
                   />
                 </>
               ) : (
-                <div className="lg:col-span-2 rounded-2xl border border-gray-100 bg-gray-50 p-4">
-                  <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Produto manual</p>
-                  <p className="mt-1 text-lg font-bold text-navy-900">{productName || catalogName}</p>
-                  <p className="text-sm text-gray-500">Use o campo acima para ajustar o nome exibido no estoque e na venda.</p>
+                <div className="space-y-3 lg:col-span-2">
+                  <label className="flex items-start gap-3 rounded-2xl border border-gray-100 bg-gray-50 p-4 text-sm text-navy-900">
+                    <input
+                      type="checkbox"
+                      checked={formData.accessory_has_serial}
+                      onChange={(event) => setFormData((prev) => ({ ...prev, accessory_has_serial: event.target.checked, serial_number: event.target.checked ? prev.serial_number : "" }))}
+                      className="mt-0.5 h-5 w-5 shrink-0 accent-royal-500"
+                    />
+                    <span>
+                      <span className="block font-semibold">Este acessório possui serial</span>
+                      <span className="mt-1 block text-xs text-gray-500">Ative apenas para itens rastreáveis, como Pencil, AirPods, Garmin e teclados.</span>
+                    </span>
+                  </label>
+                  {formData.accessory_has_serial ? (
+                    <Input
+                      label="Nº de Série"
+                      value={formData.serial_number}
+                      onChange={(e) => updateField("serial_number", e.target.value)}
+                    />
+                  ) : (
+                    <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                      <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Acessório sem serial</p>
+                      <p className="mt-1 text-sm text-gray-500">IMEI, bateria, capacidade e rede móvel não se aplicam a este item.</p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

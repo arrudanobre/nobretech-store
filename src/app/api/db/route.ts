@@ -2,6 +2,13 @@ import { NextResponse } from "next/server"
 import { pool } from "@/lib/db"
 import { requireApiAuthContext } from "@/lib/auth-context"
 import { canAccess, canDeleteSensitiveRecords, canEditFinance, canManageUsers } from "@/lib/permissions"
+import {
+  getNextChartAccountCode,
+  inferParentCodeFromChartCode,
+  normalizeChartAccountCode,
+  sortOrderFromChartCode,
+  type ChartAccountCodeSource,
+} from "@/lib/finance-chart-account-codes"
 
 type Filter = { op: "eq" | "neq" | "gte" | "lte" | "in" | "match" | "or"; column?: string; value: unknown }
 type Order = { column: string; ascending?: boolean }
@@ -29,6 +36,12 @@ const TABLES_WITH_COMPANY = new Set([
   "sales_additional_items",
   "sale_payments",
   "product_images",
+  "product_categories",
+  "product_subcategories",
+  "product_attributes",
+  "product_attribute_options",
+  "product_colors",
+  "product_subcategory_colors",
   "audit_logs",
   "transactions",
   "financial_account_movements",
@@ -36,6 +49,14 @@ const TABLES_WITH_COMPANY = new Set([
 ])
 
 const COMPANY_SELF_SCOPED_TABLES = new Set(["companies"])
+const CATALOG_CONFIG_TABLES = new Set([
+  "product_categories",
+  "product_subcategories",
+  "product_attributes",
+  "product_attribute_options",
+  "product_colors",
+  "product_subcategory_colors",
+])
 const SENSITIVE_AUDIT_TABLES = new Set([
   "companies",
   "users",
@@ -51,6 +72,12 @@ const SENSITIVE_AUDIT_TABLES = new Set([
   "sales",
   "sales_additional_items",
   "sale_payments",
+  "product_categories",
+  "product_subcategories",
+  "product_attributes",
+  "product_attribute_options",
+  "product_colors",
+  "product_subcategory_colors",
 ])
 
 const FINANCE_TABLES = new Set([
@@ -90,6 +117,22 @@ const JSON_COLUMNS: Record<string, Set<string>> = {
   checklists: new Set(["items"]),
   trade_ins: new Set(["checklist_data"]),
   audit_logs: new Set(["old_data", "new_data"]),
+}
+
+const OPTIONAL_COLUMNS: Record<string, Set<string>> = {
+  inventory: new Set([
+    "product_type",
+    "category_name_snapshot",
+    "subcategory_name_snapshot",
+    "color_name_snapshot",
+    "attribute_summary_snapshot",
+  ]),
+  product_categories: new Set(["normalized_name", "deleted_at", "product_type"]),
+  product_subcategories: new Set(["normalized_name", "deleted_at"]),
+  product_attributes: new Set(["normalized_name", "deleted_at"]),
+  product_attribute_options: new Set(["normalized_name", "deleted_at"]),
+  product_colors: new Set(["normalized_name", "deleted_at"]),
+  product_subcategory_colors: new Set(["is_active", "updated_at", "deleted_at"]),
 }
 
 const NUMERIC_COLUMNS = new Set([
@@ -176,6 +219,59 @@ function normalizeValue(table: string, column: string, value: unknown) {
   return value
 }
 
+function normalizedName(value: unknown) {
+  return String(value || "").trim().toLowerCase()
+}
+
+function normalizeCatalogConfigRow(table: string, row: Record<string, unknown>) {
+  if (!CATALOG_CONFIG_TABLES.has(table)) return row
+  if (table === "product_attribute_options") {
+    const sourceName = row.label || row.value
+    return {
+      ...row,
+      ...(sourceName ? { normalized_name: row.normalized_name || normalizedName(sourceName) } : {}),
+      ...(row.label && !row.value ? { value: row.label } : {}),
+    }
+  }
+  if (table === "product_categories") {
+    return {
+      ...row,
+      ...(row.name || row.normalized_name ? { normalized_name: row.normalized_name || normalizedName(row.name) } : {}),
+    }
+  }
+  if (["product_subcategories", "product_attributes", "product_colors"].includes(table)) {
+    return {
+      ...row,
+      ...(row.name || row.normalized_name ? { normalized_name: row.normalized_name || normalizedName(row.name) } : {}),
+    }
+  }
+  return row
+}
+
+async function getTableColumns(table: string) {
+  const result = await pool.query<{ column_name: string }>(
+    `
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = $1
+    `,
+    [table]
+  )
+  return new Set(result.rows.map((row) => row.column_name))
+}
+
+async function filterOptionalColumns(table: string, rows: Record<string, unknown>[]) {
+  const optional = OPTIONAL_COLUMNS[table]
+  if (!optional || rows.length === 0) return rows
+  if (!rows.some((row) => Object.keys(row || {}).some((column) => optional.has(column)))) return rows
+
+  const existingColumns = await getTableColumns(table)
+  return rows.map((row) => Object.fromEntries(
+    Object.entries(row).filter(([column]) => !optional.has(column) || existingColumns.has(column))
+  ))
+}
+
 function normalizeOutputValue(column: string, value: unknown): unknown {
   if (Array.isArray(value)) return value.map((item) => normalizeOutput(item))
   if (value && typeof value === "object") return normalizeOutput(value)
@@ -198,6 +294,67 @@ function normalizeOutput(row: unknown): unknown {
 
 function normalizeRows(rows: Record<string, unknown>[]) {
   return rows.map((row) => normalizeOutput(row) as Record<string, unknown>)
+}
+
+async function getFinanceChartAccountCodes(companyId: string) {
+  const result = await pool.query<ChartAccountCodeSource>(
+    `
+      SELECT id, code, parent_code, level
+      FROM finance_chart_accounts
+      WHERE company_id = $1::uuid
+    `,
+    [companyId]
+  )
+  return result.rows
+}
+
+async function resolveFinanceChartAccountInsertCodes(rows: Record<string, unknown>[], companyId: string) {
+  if (rows.length === 0) return rows
+
+  const scopedAccounts: ChartAccountCodeSource[] = await getFinanceChartAccountCodes(companyId)
+
+  return rows.map((row) => {
+    const nextRow = { ...row }
+    const requestedCode = normalizeChartAccountCode(nextRow.code)
+    if (!requestedCode) return nextRow
+
+    const parentCode = normalizeChartAccountCode(nextRow.parent_code) || inferParentCodeFromChartCode(requestedCode)
+    const isMainAccount = Number(nextRow.level || 0) === 1 || !parentCode
+    const codeAlreadyExists = scopedAccounts.some((account) => normalizeChartAccountCode(account.code) === requestedCode)
+    const finalCode = codeAlreadyExists
+      ? getNextChartAccountCode(scopedAccounts, isMainAccount ? null : parentCode)
+      : requestedCode
+
+    nextRow.code = finalCode
+    if (!isMainAccount && parentCode && !nextRow.parent_code) nextRow.parent_code = parentCode
+    if (codeAlreadyExists || !nextRow.sort_order) nextRow.sort_order = Number(sortOrderFromChartCode(finalCode))
+
+    scopedAccounts.push({
+      code: normalizeChartAccountCode(nextRow.code),
+      parent_code: normalizeChartAccountCode(nextRow.parent_code),
+      level: Number(nextRow.level || (isMainAccount ? 1 : 2)),
+    })
+
+    return nextRow
+  })
+}
+
+async function validateFinanceChartAccountUpdateCode(valuesObject: Record<string, unknown>, oldRows: Record<string, unknown>[], companyId: string) {
+  const requestedCode = normalizeChartAccountCode(valuesObject.code)
+  if (!requestedCode) return null
+
+  const currentId = oldRows.length === 1 ? String(oldRows[0].id || "") : ""
+  const scopedAccounts = await getFinanceChartAccountCodes(companyId)
+  const conflict = scopedAccounts.some((account) => (
+    normalizeChartAccountCode(account.code) === requestedCode &&
+    (!currentId || account.id !== currentId)
+  ))
+
+  if (!conflict) return null
+
+  const parentCode = normalizeChartAccountCode(valuesObject.parent_code) || inferParentCodeFromChartCode(requestedCode)
+  const suggestedCode = getNextChartAccountCode(scopedAccounts, parentCode || null, currentId)
+  return `Este código já está em uso. O sistema sugeriu o próximo código disponível: ${suggestedCode}.`
 }
 
 function splitTopLevel(value: string) {
@@ -405,6 +562,14 @@ function assertMutationAllowed(table: string, action: string, values: Record<str
     if (action !== "select" && action !== "update") {
       return "Empresas não podem ser criadas ou removidas por este endpoint."
     }
+  }
+
+  if (CATALOG_CONFIG_TABLES.has(table) && action === "delete") {
+    return "Itens do catálogo devem ser desativados, não excluídos fisicamente."
+  }
+
+  if (CATALOG_CONFIG_TABLES.has(table) && action !== "select" && !canAccess(role, "settings.edit")) {
+    return "Apenas owner pode alterar configurações do catálogo."
   }
 
   if (OWNER_ONLY_FINANCE_TABLES.has(table) && action !== "select" && !canAccess(role, "finance.tax_settings")) {
@@ -669,13 +834,18 @@ export async function POST(request: Request) {
       const inputRows = (Array.isArray(body.values) ? body.values : [body.values]) as Record<string, unknown>[]
       const permissionError = assertMutationAllowed(table, action, inputRows, role)
       if (permissionError) return forbidden(permissionError)
-      const rows: Record<string, unknown>[] = inputRows.map((row) => ({
+      const normalizedRows: Record<string, unknown>[] = inputRows.map((row) => ({
         ...(row || {}),
         ...(tableHasCompany ? { company_id: companyId } : {}),
         ...(table === "audit_logs" ? { user_id: appUserId } : {}),
       }))
         .map((row) => table === "audit_logs" ? normalizeAuditLogRow(row) : row)
         .map((row) => table === "inventory" ? normalizeInventoryTradeInRow(row) : row)
+        .map((row) => normalizeCatalogConfigRow(table, row))
+      const filteredRows = await filterOptionalColumns(table, normalizedRows)
+      const rows = table === "finance_chart_accounts"
+        ? await resolveFinanceChartAccountInsertCodes(filteredRows, companyId)
+        : filteredRows
       if (rows.length === 0) return NextResponse.json({ data: [], error: null })
 
       const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))) as string[]
@@ -719,7 +889,8 @@ export async function POST(request: Request) {
         )
       }
 
-      const valuesObject = { ...(body.values || {}) }
+      const normalizedValuesObject = normalizeCatalogConfigRow(table, { ...(body.values || {}) })
+      const [valuesObject = {}] = await filterOptionalColumns(table, [normalizedValuesObject])
       const permissionError = assertMutationAllowed(table, action, valuesArray(valuesObject), role)
       if (permissionError) return forbidden(permissionError)
       if (isCompanyScoped(table)) delete valuesObject.company_id
@@ -730,6 +901,13 @@ export async function POST(request: Request) {
       const auditParams = [...params]
       addCompanyScope(table, companyId, auditWhere, auditParams)
       const oldRows = await selectRowsForAudit(table, auditWhere, auditParams)
+
+      if (table === "finance_chart_accounts") {
+        const codeConflictMessage = await validateFinanceChartAccountUpdateCode(valuesObject, oldRows, companyId)
+        if (codeConflictMessage) {
+          return NextResponse.json({ data: null, error: { message: codeConflictMessage } }, { status: 409 })
+        }
+      }
 
       if (table === "inventory") {
         const inventoryTradeInError = validateInventoryTradeInUpdate(valuesObject, oldRows)

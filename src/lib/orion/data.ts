@@ -1,0 +1,1461 @@
+import "server-only"
+
+import crypto from "crypto"
+import { pool } from "@/lib/db"
+import { estimateOpenAICostUsd } from "@/lib/orion/cost"
+import {
+  humanizeChartLabel,
+  humanizeDaysInStock,
+  humanizeMargin,
+  humanizeOrionText,
+} from "@/lib/orion/executive-translation"
+import { filterOperationalStock } from "@/lib/orion/inventory-filter"
+import { classifyLead, isActionableLead } from "@/lib/orion/lead-classification"
+import { enrichAnalysisWithConfidence } from "@/lib/orion/confidence-engine"
+import { deduplicateAnalysis } from "@/lib/orion/insight-deduplication"
+import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
+import { calculateOperationalHealth } from "./operational-health-engine"
+import type { OperationalHealthScore } from "./operational-health-engine"
+import type {
+  OrionActionPlanItem,
+  OrionAnalysis,
+  OrionChart,
+  OrionChartInterpretation,
+  OrionHistoryItem,
+  OrionInsight,
+  OrionOperationalContext,
+  OrionPriorityFocus,
+  OrionSnapshot,
+  OrionUsageSummary,
+} from "@/lib/orion/types"
+
+const CACHE_MINUTES = 30
+
+type SaleRow = {
+  id: string
+  sale_date: string
+  sale_price: string | number | null
+  net_amount: string | number | null
+  supplier_cost: string | number | null
+  notes: string | null
+  sale_status: string | null
+  payment_method: string | null
+  marketing_campaign_id: string | null
+  marketing_lead_id: string | null
+  sale_origin: string | null
+  purchase_price: string | number | null
+  product_name: string | null
+  product_category: string | null
+}
+
+type AdditionalItemRow = {
+  sale_id: string
+  type: string
+  cost_price: string | number | null
+  sale_price: string | number | null
+  profit: string | number | null
+}
+
+type CampaignRow = {
+  id: string
+  name: string
+  channel: string
+  budget_amount: string | number | null
+  actual_spend: string | number | null
+}
+
+type LeadRow = {
+  id: string
+  campaign_id: string | null
+  name: string
+  source: string | null
+  origin: string | null
+  status: string
+  product_interest: string | null
+  next_action: string | null
+  next_action_at: string | null
+  created_at: string
+}
+
+type TransactionRow = {
+  id: string
+  type: string
+  category: string | null
+  description: string | null
+  amount: string | number | null
+  date: string | null
+  due_date: string | null
+  status: string | null
+  source_type: string | null
+  chart_financial_type: string | null
+  chart_affects_owner_equity: boolean | null
+  chart_statement_section: string | null
+}
+
+type MovementRow = {
+  movement_date: string
+  type: string
+  category: string | null
+  amount: string | number | null
+  balance_after: string | number | null
+  source: string | null
+  is_canceled: boolean | null
+}
+
+function number(value: unknown) {
+  const parsed = Number(value ?? 0)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function round(value: number, places = 2) {
+  const factor = 10 ** places
+  return Math.round((value + Number.EPSILON) * factor) / factor
+}
+
+function brl(value: number) {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    maximumFractionDigits: 0,
+  }).format(value)
+}
+
+function pct(value: number) {
+  return `${round(value, 1).toLocaleString("pt-BR")}%`
+}
+
+function dateKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
+}
+
+function addDays(date: Date, days: number) {
+  const next = new Date(date)
+  next.setDate(next.getDate() + days)
+  return next
+}
+
+function dateKeyFromValue(value: string | null | undefined) {
+  if (!value) return ""
+  const parsed = new Date(value)
+  if (!Number.isFinite(parsed.getTime())) return ""
+  return dateKey(parsed)
+}
+
+function daysBetweenDates(from: string | null | undefined, to = new Date()) {
+  if (!from) return 0
+  const parsed = new Date(from)
+  if (!Number.isFinite(parsed.getTime())) return 0
+  return Math.max(0, Math.floor((to.getTime() - parsed.getTime()) / 86400000))
+}
+
+function safeName(parts: Array<string | null | undefined>) {
+  const label = parts.map((part) => String(part || "").trim()).filter(Boolean).join(" ")
+  return label || "Produto sem nome"
+}
+
+function isOwnerEquityCategory(category: string | null | undefined) {
+  const normalized = String(category || "").toLowerCase()
+  return normalized.includes("aporte do proprietário")
+    || normalized.includes("retirada de lucro")
+    || normalized.includes("sócio")
+    || normalized.includes("socio")
+}
+
+function startOfWeek(date: Date) {
+  const next = new Date(date)
+  const day = next.getDay()
+  const diff = day === 0 ? -6 : 1 - day
+  next.setDate(next.getDate() + diff)
+  next.setHours(0, 0, 0, 0)
+  return next
+}
+
+function weekLabel(date: Date) {
+  return `${String(date.getDate()).padStart(2, "0")}/${String(date.getMonth() + 1).padStart(2, "0")}`
+}
+
+function pushInsight(
+  list: OrionInsight[],
+  input: Omit<OrionInsight, "action_title" | "action_summary" | "action_priority" | "future_actionable" | "confidence_score"> & {
+    action_title?: string
+    action_summary?: string
+    action_priority?: OrionInsight["action_priority"]
+    future_actionable?: boolean
+    confidence_score?: number
+  }
+) {
+  list.push({
+    action_title: input.recommended_action.slice(0, 80),
+    action_summary: input.expected_impact,
+    action_priority: input.priority,
+    future_actionable: true,
+    confidence_score: 0.82,
+    ...input,
+  })
+}
+
+const priorityWeight = {
+  critical: 4,
+  high: 3,
+  medium: 2,
+  low: 1,
+} as const
+
+function strongestInsight(analysis: Pick<OrionAnalysis, "alerts" | "risks" | "recommendations" | "opportunities">) {
+  return [
+    ...analysis.alerts,
+    ...analysis.risks,
+    ...analysis.recommendations,
+    ...analysis.opportunities,
+  ].sort((a, b) => priorityWeight[b.priority] - priorityWeight[a.priority])[0]
+}
+
+function buildChartInterpretations(snapshot: OrionSnapshot): OrionChartInterpretation[] {
+  const revenue = snapshot.sales.weeklyRevenue
+  const lastRevenue = revenue.at(-1)?.value || 0
+  const previousRevenue = revenue.at(-2)?.value || 0
+  const margin = snapshot.sales.marginTrend
+  const lastMargin = margin.at(-1)?.value || 0
+  const oldStock = snapshot.stock.agingBuckets.find((bucket) => bucket.label === "46+d")?.value || 0
+  const leadFunnelTotal = snapshot.marketing.leadFunnel.reduce((sum, point) => sum + point.value, 0)
+  const targetStock = snapshot.stock.stuckItems[0]
+  const targetLead = snapshot.marketing.forgottenLeads[0]
+  const leadDetail = targetLead
+    ? `${targetLead.name}${targetLead.productInterest ? ` demonstrou interesse em ${targetLead.productInterest}` : ""}${targetLead.campaignName ? ` pela campanha ${targetLead.campaignName}` : ""}.`
+    : ""
+
+  return [
+    {
+      title: "Vendas por semana",
+      metric: "revenue",
+      interpretation: lastRevenue < previousRevenue
+        ? "A última semana perdeu tração. Revise CRM e campanha antes de buscar novos gastos."
+        : "Movimento recente monitorado. Use este gráfico para confirmar aceleração antes de ampliar campanha.",
+    },
+    {
+      title: "Margem por semana",
+      metric: "margin",
+      interpretation: lastMargin < 15
+        ? "Margem pressionada. Evite desconto agressivo até entender custo e condição de pagamento."
+        : "Margem sob controle. O próximo ganho vem de priorizar produtos com melhor giro e lucro.",
+    },
+    {
+      title: "Funil de leads",
+      metric: "leads",
+      interpretation: leadFunnelTotal
+        ? targetLead
+          ? `Comece pelo CRM: ${leadDetail} Envie uma mensagem direta hoje antes de abrir nova campanha.`
+          : "O funil precisa virar rotina diária. Leads parados devem ser tratados antes de nova campanha."
+        : "CRM sem volume suficiente para leitura segura. Cadastre origem, estágio e próxima ação dos leads.",
+    },
+    {
+      title: "Estoque por idade",
+      metric: "items",
+      interpretation: oldStock
+        ? targetStock
+          ? `Sugiro campanha de 48h para ${targetStock.name}: anuncie por ${brl(targetStock.suggestedPrice)} e use garantia, parcelamento e pronta entrega antes de reduzir preço.`
+          : "Itens acima de 46 dias pedem campanha controlada para liberar capital sem destruir margem."
+        : snapshot.sales.topProducts[0]
+          ? `Estoque saudável. Para acelerar sem desconto amplo, anuncie hoje ${snapshot.sales.topProducts[0].label} com CTA para WhatsApp e parcelamento.`
+          : "Estoque saudável. Mantenha giro com ofertas seletivas e CTA direto para WhatsApp.",
+    },
+  ]
+}
+
+function makePriorityFocus(analysis: OrionAnalysis, snapshot: OrionSnapshot, health?: OperationalHealthScore): OrionPriorityFocus {
+  const strongest = strongestInsight(analysis)
+  if (strongest) {
+    return {
+      title: strongest.title,
+      area: strongest.category,
+      priority: strongest.priority,
+      reason: strongest.insight,
+      risk_if_ignored: strongest.risk,
+      next_action: strongest.recommended_action,
+    }
+  }
+
+  const operationalHealth = health || calculateOperationalHealth(snapshot)
+
+  if (operationalHealth.level === "critical") {
+    return {
+      title: "Otimizar caixa e focar em giro",
+      area: "caixa",
+      priority: "critical",
+      reason: operationalHealth.healthReason,
+      risk_if_ignored: "Uma recompra agressiva pode pressionar liquidez e travar obrigações próximas.",
+      next_action: purchaseAction(snapshot),
+    }
+  }
+
+  if (operationalHealth.level === "attention" && snapshot.executive.cashBalance < 0) {
+    return {
+      title: "Otimizar caixa sem parar giro",
+      area: "caixa",
+      priority: "high",
+      reason: operationalHealth.healthReason,
+      risk_if_ignored: "Expandir despesas agora pode forçar desconto para gerar liquidez urgente.",
+      next_action: purchaseAction(snapshot),
+    }
+  }
+
+  return {
+    title: "Aumentar ritmo comercial com controle",
+    area: "venda",
+    priority: "medium",
+    reason: "A operação está funcional. O foco é converter melhor sem perder margem.",
+    risk_if_ignored: "A operação pode ficar apenas reativa e perder oportunidades de giro saudável.",
+    next_action: "Escolher um produto de boa margem, revisar leads ativos e rodar uma campanha segura.",
+  }
+}
+
+function buildExecutiveSummary(focus: OrionPriorityFocus, snapshot: OrionSnapshot) {
+  if (focus.area.toLowerCase().includes("crm")) {
+    return `Vinícius, o principal gargalo hoje está no CRM. Existem ${snapshot.executive.leadsWithoutFollowUp} leads sem follow-up e isso precisa ser tratado antes de abrir nova campanha.`
+  }
+  if (focus.area.toLowerCase().includes("caixa") || focus.area.toLowerCase().includes("financeiro")) {
+    return `Vinícius, seu caixa pede cautela. A prioridade é preservar liquidez e transformar pipeline em venda antes de uma recompra agressiva.`
+  }
+  if (focus.area.toLowerCase().includes("estoque")) {
+    return `Vinícius, a ORION vê capital parado no estoque. O foco de hoje deve ser girar os itens mais antigos sem sacrificar margem.`
+  }
+  if (focus.area.toLowerCase().includes("campanha")) {
+    return `Vinícius, campanhas precisam de ajuste fino. Escale apenas o que tem evidência de ROI e corte dispersão de verba.`
+  }
+  return `Vinícius, a operação está monitorada. A prioridade agora é ${focus.title.toLowerCase()} com ação objetiva ainda hoje.`
+}
+
+function primaryCommercialProduct(snapshot: OrionSnapshot) {
+  return snapshot.stock.stuckItems[0] || null
+}
+
+function leadActionText(snapshot: OrionSnapshot) {
+  const lead = snapshot.marketing.forgottenLeads.find((item) => item.classification !== "lost")
+  if (!lead) {
+    return "Agora: mantenha o CRM limpo e cadastre próxima ação apenas para leads com intenção ativa."
+  }
+  const product = lead.productInterest ? ` sobre ${lead.productInterest}` : ""
+  const campaign = lead.campaignName ? ` da campanha ${lead.campaignName}` : ""
+  return `Agora: comece por ${lead.name}${product}${campaign}. Envie: "Oi, ${lead.name}. Vi seu interesse${product}. Tenho uma condição pronta entrega com garantia e parcelamento. Quer que eu te mande as opções agora?"`
+}
+
+function leadCountText(count: number) {
+  return count === 1 ? "Existe 1 lead" : `Existem ${count} leads`
+}
+
+function calibratedStockPriority(
+  item: OrionSnapshot["stock"]["stuckItems"][number],
+  health: OperationalHealthScore,
+  snapshot: OrionSnapshot
+): OrionInsight["priority"] {
+  const forecast = snapshot.executive.liquidityForecast
+  const pressureImmediate = forecast.pressureWindowStartDays === 0
+    || (forecast.pressureWindowStartDays !== null && forecast.pressureWindowStartDays <= 7)
+    || forecast.overduePayables > forecast.overdueReceivables
+  const remainingMarginPct = item.suggestedPrice > 0 && item.purchasePrice > 0
+    ? ((item.suggestedPrice - item.purchasePrice) / item.suggestedPrice) * 100
+    : 0
+  const hasDiscountRoom = remainingMarginPct >= 8 && item.suggestedPrice > item.purchasePrice
+  const slowSku = item.daysInStock >= 46
+
+  if (slowSku && hasDiscountRoom && pressureImmediate && (health.level === "critical" || health.level === "attention")) {
+    return "critical"
+  }
+  if (item.daysInStock >= 31) return "high"
+  return "medium"
+}
+
+function stockCampaignAction(snapshot: OrionSnapshot) {
+  const item = primaryCommercialProduct(snapshot)
+  if (!item) {
+    const demand = snapshot.sales.topProducts[0]?.label
+    return demand
+      ? `use ${demand} apenas como sinal de demanda histórica e anuncie somente produtos atualmente ativos no estoque.`
+      : "anuncie somente produtos atualmente ativos no estoque, com garantia, parcelamento e chamada para WhatsApp."
+  }
+  const safePrice = item.suggestedPrice || item.purchasePrice
+  return `faça uma campanha de 48h para ${item.name} por ${brl(safePrice)}. Use story + WhatsApp, destaque garantia, parcelamento e pronta entrega; só reduza preço se não houver resposta.`
+}
+
+function marginAction(snapshot: OrionSnapshot) {
+  const item = primaryCommercialProduct(snapshot)
+  if (item) {
+    const minimumPrice = item.purchasePrice > 0 ? brl(item.purchasePrice * 1.08) : "o piso calculado pelo custo"
+    return `Agora: antes de negociar ${item.name}, defina piso mínimo de ${minimumPrice} e ofereça brinde/parcelamento antes de desconto.`
+  }
+  const demand = snapshot.sales.topProducts.slice(0, 2).map((item) => item.label).join(" e ")
+  return demand
+    ? `Agora: use ${demand} apenas como referência de demanda e defina piso somente para itens ativos no estoque antes de autorizar oferta.`
+    : "Agora: defina piso somente para itens ativos no estoque antes de autorizar oferta."
+}
+
+function purchaseAction(snapshot: OrionSnapshot) {
+  const product = primaryCommercialProduct(snapshot)
+  const fastProducts = snapshot.sales.topProducts.slice(0, 3).map((item) => item.label).filter(Boolean)
+  const fastLine = fastProducts.length ? ` Histórico de vendas indica demanda por: ${fastProducts.join(", ")}.` : ""
+  if (!product) {
+    return `Agora: pause compras amplas e anuncie somente itens ativos no estoque. ${fastLine}`.trim()
+  }
+  return `Agora: pause compras amplas e libere caixa vendendo ${product.name} primeiro. Para acelerar, ${stockCampaignAction(snapshot)}${fastLine}`
+}
+
+function buildDailyActionPlan(snapshot: OrionSnapshot, health?: OperationalHealthScore): OrionActionPlanItem[] {
+  const actions: OrionActionPlanItem[] = []
+
+  if (snapshot.executive.leadsWithoutFollowUp > 0) {
+    actions.push({
+      title: "Reengajar leads acionáveis sem follow-up",
+      area: "CRM",
+      priority: snapshot.executive.leadsWithoutFollowUp >= 10 ? "high" : "medium",
+      reason: snapshot.executive.leadsWithoutFollowUp === 1
+        ? "Existe 1 lead interno sem próxima ação clara."
+        : `Existem ${snapshot.executive.leadsWithoutFollowUp} leads internos sem próxima ação clara.`,
+      expected_impact: "Aumentar chance de conversão ainda hoje com baixo custo incremental.",
+      recommended_action: leadActionText(snapshot),
+    })
+  }
+
+  const operationalHealth = health || calculateOperationalHealth(snapshot)
+  if (operationalHealth.level === "critical" || operationalHealth.level === "attention") {
+    actions.push({
+      title: "Evitar recompra agressiva",
+      area: "caixa",
+      priority: operationalHealth.level === "critical" ? "critical" : "high",
+      reason: operationalHealth.healthReason,
+      expected_impact: "Preservar liquidez e reduzir risco de compra sem giro imediato.",
+      recommended_action: purchaseAction(snapshot),
+    })
+  }
+
+  if (snapshot.stock.stuckItems.length > 0) {
+    const item = snapshot.stock.stuckItems[0]
+    actions.push({
+      title: "Girar estoque parado com campanha controlada",
+      area: "estoque",
+      priority: calibratedStockPriority(item, operationalHealth, snapshot),
+      reason: `${item.name} está ${humanizeDaysInStock(item.daysInStock)}.`,
+      expected_impact: "Liberar capital parado sem transformar desconto em hábito.",
+      recommended_action: `Agora: ${stockCampaignAction(snapshot)}`,
+    })
+  }
+
+  if (snapshot.marketing.campaigns.some((campaign) => campaign.roi > 1.5)) {
+    const campaign = [...snapshot.marketing.campaigns].sort((a, b) => b.roi - a.roi)[0]
+    actions.push({
+      title: "Replicar campanha com melhor ROI",
+      area: "campanha",
+      priority: "medium",
+      reason: `${campaign.name} concentra o melhor ROI do snapshot, com ${round(campaign.roi, 2)}x.`,
+      expected_impact: "Escalar o que já provou retorno antes de testar novas mensagens.",
+      recommended_action: "Agora: repetir o criativo vencedor por 48h com orçamento controlado e medir conversas no WhatsApp.",
+    })
+  }
+
+  if (snapshot.executive.marginPct30d < 15) {
+    actions.push({
+      title: "Proteger margem antes de acelerar vendas",
+      area: "financeiro",
+      priority: "high",
+      reason: `A operação está com ${humanizeMargin(snapshot.executive.marginPct30d)}.`,
+      expected_impact: "Evitar crescimento com lucro fraco.",
+      recommended_action: marginAction(snapshot),
+    })
+  }
+
+  if (!actions.length) {
+    actions.push({
+      title: "Acelerar produto com maior potencial",
+      area: "venda",
+      priority: "medium",
+      reason: "O cenário atual não mostra bloqueio crítico imediato.",
+      expected_impact: "Gerar crescimento com controle de margem e caixa.",
+      recommended_action: (() => {
+        const product = primaryCommercialProduct(snapshot)
+        return product
+          ? `Agora: priorize ${product.name}. Poste oferta com garantia e parcelamento, chame leads antigos acionáveis e revise o resultado em 48h.`
+          : "Agora: anuncie somente itens ativos no estoque, use o histórico de vendas como sinal de demanda e mantenha leads não acionáveis fora da abordagem ativa."
+      })(),
+    })
+  }
+
+  return actions
+    .sort((a, b) => priorityWeight[b.priority] - priorityWeight[a.priority])
+    .slice(0, 3)
+}
+
+function answerQuestionSummary(
+  snapshot: OrionSnapshot,
+  question: string,
+  fallback: string,
+  operationalContext?: OrionOperationalContext | null,
+  health?: OperationalHealthScore
+) {
+  if (operationalContext?.answer) return operationalContext.answer
+
+  const normalized = question.toLowerCase()
+  if (normalized.includes("top") && normalized.includes("produto")) {
+    const products = snapshot.sales.topProducts.slice(0, 3)
+    if (!products.length) {
+      return "Vinícius, não encontrei dados suficientes para ranquear produtos com segurança. Posso usar vendas, margem ou estoque parado como critério quando houver histórico."
+    }
+    return [
+      "Vinícius, os 3 produtos mais relevantes agora são:",
+      ...products.map((product, index) => `${index + 1}. ${product.label} - ${brl(product.value)} em vendas recentes`),
+      "Minha sugestão: priorize o primeiro para caixa e cruze com estoque parado antes de aplicar desconto.",
+    ].join("\n")
+  }
+
+  if (normalized.includes("lead") || normalized.includes("follow")) {
+    if (!snapshot.marketing.forgottenLeads.length) {
+      return "Vinícius, não encontrei leads acionáveis esquecidos no momento. A próxima prioridade é manter próxima ação cadastrada em todos os leads novos."
+    }
+    return [
+      `Vinícius, existem ${snapshot.executive.leadsWithoutFollowUp} leads sem follow-up claro.`,
+      ...snapshot.marketing.forgottenLeads.slice(0, 3).map((lead, index) => `${index + 1}. ${lead.name} - ${lead.productInterest || "produto não informado"} (${lead.daysWithoutAction} dia(s) sem ação)`),
+      "Minha sugestão: trate estes antes de abrir nova campanha.",
+    ].join("\n")
+  }
+
+  if (normalized.includes("caixa") || normalized.includes("recompra")) {
+    const operationalHealth = health || calculateOperationalHealth(snapshot)
+    if (operationalHealth.level === "critical") {
+      return `Vinícius, a pressão de caixa exige ação imediata. ${operationalHealth.healthReason} Aja rápido: ${purchaseAction(snapshot)}`
+    }
+    if (operationalHealth.level === "attention" && snapshot.executive.cashBalance < 0) {
+      return `Vinícius, o caixa contábil pede cautela, mas a operação resiste. ${operationalHealth.healthReason} ${purchaseAction(snapshot)}`
+    }
+    return `Vinícius, o caixa permite uma reposição seletiva. Priorize produtos com giro rápido e preserve margem antes de ampliar compra.`
+  }
+
+  if (normalized.includes("estoque") || normalized.includes("parado")) {
+    if (!snapshot.stock.stuckItems.length) return "Vinícius, o estoque não mostra itens críticos acima de 30 dias no momento. Mantenha monitoramento semanal para evitar capital parado."
+    const item = snapshot.stock.stuckItems[0]
+    return `Vinícius, o item mais urgente é ${item.name}, ${humanizeDaysInStock(item.daysInStock)}. Agora, ${stockCampaignAction(snapshot)}`
+  }
+
+  return fallback
+}
+
+function emptyAnalysis(snapshot: OrionSnapshot, precomputedHealth?: OperationalHealthScore): OrionAnalysis {
+  const metrics = [
+    { label: "Receita recente", value: brl(snapshot.executive.revenue30d), tone: "neutral" as const },
+    { label: "Margem recente", value: pct(snapshot.executive.marginPct30d), tone: snapshot.executive.marginPct30d >= 18 ? "positive" as const : "warning" as const },
+    {
+      label: "Caixa",
+      value: brl(snapshot.executive.cashBalance),
+      delta: snapshot.finance.cashBalanceSource === "reconciled_balance_after" ? "Saldo reconciliado" : "Saldo estimado pelas contas",
+      tone: snapshot.executive.cashBalance > 0 ? "positive" as const : "danger" as const,
+    },
+    { label: "Leads sem follow-up", value: String(snapshot.executive.leadsWithoutFollowUp), tone: snapshot.executive.leadsWithoutFollowUp ? "warning" as const : "positive" as const },
+  ]
+
+  const charts: OrionChart[] = [
+    {
+      title: "Vendas por semana",
+      type: "area",
+      metric: "revenue",
+      insight: "Movimento recente monitorado para identificar queda ou aceleração de vendas.",
+      data: snapshot.sales.weeklyRevenue,
+    },
+    {
+      title: "Margem por semana",
+      type: "line",
+      metric: "margin",
+      insight: "Margem acompanhada junto com descontos, custo principal e itens adicionais.",
+      data: snapshot.sales.marginTrend,
+    },
+    {
+      title: "Funil de leads",
+      type: "bar",
+      metric: "leads",
+      insight: "CRM agrupado por estágio para encontrar gargalos de conversão.",
+      data: snapshot.marketing.leadFunnel,
+    },
+    {
+      title: "Estoque por idade",
+      type: "bar",
+      metric: "items",
+      insight: "Itens ativos por idade para priorizar campanha antes de desconto agressivo.",
+      data: snapshot.stock.agingBuckets,
+    },
+  ]
+  const health = precomputedHealth || calculateOperationalHealth(snapshot)
+  const priorityFocus: OrionPriorityFocus = {
+      title: snapshot.executive.leadsWithoutFollowUp
+      ? "Recuperar leads sem follow-up"
+      : health.level === "critical"
+        ? "Otimizar caixa e focar em giro"
+        : snapshot.executive.stuckStockCount
+          ? "Girar estoque parado"
+          : "Acelerar venda com margem",
+    area: snapshot.executive.leadsWithoutFollowUp
+      ? "CRM"
+      : health.level === "critical" || health.level === "attention"
+        ? "caixa"
+        : snapshot.executive.stuckStockCount
+          ? "estoque"
+          : "venda",
+    priority: health.level === "critical" || snapshot.executive.stuckStockCount >= 3 ? "high" : "medium",
+    reason: snapshot.executive.leadsWithoutFollowUp
+      ? `${leadCountText(snapshot.executive.leadsWithoutFollowUp)} sem próxima ação clara.`
+      : health.level === "critical"
+        ? health.healthReason
+        : `Receita recente em ${brl(snapshot.executive.revenue30d)} e margem em ${pct(snapshot.executive.marginPct30d)}.`,
+    risk_if_ignored: "A operação pode perder velocidade e transformar oportunidade quente em capital parado.",
+    next_action: "Revisar CRM, caixa e estoque parado antes de abrir nova campanha.",
+  }
+  const executiveSummary = buildExecutiveSummary(priorityFocus, snapshot)
+
+  return {
+    summary: executiveSummary,
+    executive_summary: executiveSummary,
+    priority_focus: priorityFocus,
+    daily_action_plan: [],
+    alerts: [],
+    recommendations: [],
+    chart_interpretations: buildChartInterpretations(snapshot),
+    risks: [],
+    opportunities: [],
+    metrics,
+    charts,
+    confidence_score: 0.78,
+  }
+}
+
+export function buildLocalOrionAnalysis(
+  snapshot: OrionSnapshot,
+  question?: string | null,
+  operationalContext?: OrionOperationalContext | null,
+  precomputedHealth?: OperationalHealthScore
+): OrionAnalysis {
+  const health = precomputedHealth || calculateOperationalHealth(snapshot)
+  const analysis = emptyAnalysis(snapshot, health)
+  const revenueDelta = snapshot.executive.revenuePrevious30d
+    ? ((snapshot.executive.revenue30d - snapshot.executive.revenuePrevious30d) / snapshot.executive.revenuePrevious30d) * 100
+    : 0
+
+  if (revenueDelta < -10) {
+    pushInsight(analysis.alerts, {
+      title: "Queda relevante de conversão em vendas",
+      category: "vendas",
+      priority: "high",
+      insight: `A receita dos últimos 30 dias caiu ${pct(Math.abs(revenueDelta))} contra os 30 dias anteriores.`,
+      evidence: `${brl(snapshot.executive.revenue30d)} agora versus ${brl(snapshot.executive.revenuePrevious30d)} no período anterior.`,
+      recommended_action: "Revisar campanhas ativas, leads sem follow-up e itens de giro lento ainda hoje.",
+      expected_impact: "Recuperar pipeline e reduzir perda de intenção de compra.",
+      risk: "Sem ação rápida, estoque parado e CAC podem pressionar a margem.",
+    })
+  }
+
+  if (snapshot.stock.stuckItems.length > 0) {
+    const item = snapshot.stock.stuckItems[0]
+    pushInsight(analysis.alerts, {
+      title: "Estoque parado exige campanha",
+      category: "estoque",
+      priority: calibratedStockPriority(item, health, snapshot),
+      insight: `${item.name} está ${humanizeDaysInStock(item.daysInStock)}.`,
+      evidence: `${item.name} ainda pode ser trabalhado com preço de referência de ${brl(item.suggestedPrice)} antes de desconto agressivo.`,
+      recommended_action: `Agora: ${stockCampaignAction(snapshot)}`,
+      expected_impact: "Melhora de giro sem sacrificar margem além do necessário.",
+      risk: "Quanto maior o tempo em estoque, maior a chance de desconto forçado.",
+    })
+  }
+
+  if (snapshot.executive.leadsWithoutFollowUp > 0) {
+    pushInsight(analysis.recommendations, {
+      title: "Follow-ups pendentes no CRM",
+      category: "crm",
+      priority: snapshot.executive.leadsWithoutFollowUp >= 10 ? "high" : "medium",
+      insight: `Você possui ${snapshot.executive.leadsWithoutFollowUp} leads sem follow-up claro.`,
+      evidence: snapshot.marketing.forgottenLeads.slice(0, 3).map((lead) => `${lead.name}${lead.productInterest ? ` (${lead.productInterest})` : ""}${lead.campaignName ? ` via ${lead.campaignName}` : ""}`).join(", ") || "Leads internos sem próxima ação.",
+      recommended_action: leadActionText(snapshot),
+      expected_impact: "Aumenta a conversão com baixo custo incremental.",
+      risk: "Leads quentes esfriam rápido quando ficam sem retorno.",
+    })
+  }
+
+  if (health.level === "attention" || health.level === "critical") {
+    pushInsight(analysis.risks, {
+      title: health.level === "critical" ? "Crise de Liquidez" : "Liquidez ajustada",
+      category: "caixa",
+      priority: health.level === "critical" ? "critical" : "high",
+      insight: health.healthReason,
+      evidence: `Saldo reconciliado: ${brl(snapshot.finance.reconciledCashBalance)}. Recebíveis: ${brl(snapshot.executive.pendingReceivables)}.`,
+      recommended_action: purchaseAction(snapshot),
+      expected_impact: "Diminuir o estrangulamento financeiro.",
+      risk: "Recomprar sem giro agora pode forçar parada operacional em 15 dias.",
+    })
+  } else {
+    pushInsight(analysis.opportunities, {
+      title: "Caixa permite reposição seletiva",
+      category: "financeiro",
+      priority: "medium",
+      insight: "Há espaço para reposição seletiva se o foco for produto de giro rápido.",
+      evidence: `Saldo reconciliado atual de ${brl(snapshot.finance.reconciledCashBalance)} e ${snapshot.executive.sales30d} vendas nos últimos 30 dias.`,
+      recommended_action: `Se for recomprar, priorize os itens com venda recente: ${snapshot.sales.topProducts.slice(0, 3).map((item) => item.label).join(", ") || "produtos de maior saída"}.`,
+      expected_impact: "Aumenta disponibilidade dos itens com maior chance de conversão.",
+      risk: "Reposição ampla demais dilui caixa em produtos menos previsíveis.",
+    })
+  }
+
+  if (snapshot.marketing.campaigns.some((campaign) => campaign.roi > 1.5)) {
+    const campaign = [...snapshot.marketing.campaigns].sort((a, b) => b.roi - a.roi)[0]
+    pushInsight(analysis.opportunities, {
+      title: "Campanha com ROI positivo",
+      category: "campanhas",
+      priority: "medium",
+      insight: `${campaign.name} está performando melhor que as demais campanhas.`,
+      evidence: `ROI ${round(campaign.roi, 2)}x, ${campaign.sales} venda(s) e ${campaign.leads} lead(s).`,
+      recommended_action: "Replicar criativo, oferta e canal antes de aumentar orçamento.",
+      expected_impact: "Escala com menor risco de desperdiçar verba.",
+      risk: "Aumentar verba sem isolar o motivo da performance pode reduzir ROI.",
+    })
+  }
+
+  analysis.priority_focus = makePriorityFocus(analysis, snapshot, health)
+  analysis.executive_summary = buildExecutiveSummary(analysis.priority_focus, snapshot)
+  analysis.summary = analysis.executive_summary
+  analysis.daily_action_plan = buildDailyActionPlan(snapshot, health)
+  analysis.chart_interpretations = buildChartInterpretations(snapshot)
+
+  if (question) {
+    const answer = answerQuestionSummary(snapshot, question, analysis.executive_summary, operationalContext, health)
+    analysis.summary = answer
+    analysis.executive_summary = answer
+  }
+
+  // Apply deduplication → confidence enrichment pipeline
+  const deduplicated = deduplicateAnalysis(analysis, snapshot, health)
+  const enriched = enrichAnalysisWithConfidence(deduplicated, snapshot)
+  return enriched
+}
+
+export async function collectOrionSnapshot(companyId: string, companyName: string): Promise<OrionSnapshot> {
+  const today = new Date()
+  const start30 = dateKey(addDays(today, -29))
+  const previousStart = dateKey(addDays(today, -59))
+  const previousEnd = dateKey(addDays(today, -30))
+  const start90 = dateKey(addDays(today, -89))
+
+  const [
+    stockResult,
+    salesResult,
+    additionalItemsResult,
+    campaignsResult,
+    leadsResult,
+    transactionsResult,
+    latestMovementResult,
+    movementsResult,
+    accountsResult,
+  ] = await Promise.all([
+    pool.query(
+      `
+        SELECT
+          i.id,
+          i.status,
+          i.purchase_price,
+          i.suggested_price,
+          i.purchase_date,
+          i.quantity,
+          COALESCE(i.category_name_snapshot, pc.category, i.product_type, 'Outros') AS category,
+          COALESCE(i.subcategory_name_snapshot, pc.model, pc.variant) AS product_model,
+          COALESCE(i.color_name_snapshot, pc.color) AS color
+        FROM inventory i
+        LEFT JOIN product_catalog pc ON pc.id = i.catalog_id
+        WHERE i.company_id = $1::uuid
+      `,
+      [companyId]
+    ),
+    pool.query<SaleRow>(
+      `
+        SELECT
+          s.id,
+          s.sale_date,
+          s.sale_price,
+          s.net_amount,
+          s.supplier_cost,
+          s.notes,
+          s.sale_status,
+          s.payment_method,
+          s.marketing_campaign_id,
+          s.marketing_lead_id,
+          s.sale_origin,
+          i.purchase_price,
+          COALESCE(i.subcategory_name_snapshot, pc.model, pc.variant) AS product_name,
+          COALESCE(i.category_name_snapshot, pc.category, i.product_type, 'Outros') AS product_category
+        FROM sales s
+        LEFT JOIN inventory i ON i.id = s.inventory_id
+        LEFT JOIN product_catalog pc ON pc.id = i.catalog_id
+        WHERE s.company_id = $1::uuid
+          AND s.sale_date >= $2::date
+          AND COALESCE(s.sale_status, 'completed') <> 'cancelled'
+        ORDER BY s.sale_date ASC
+      `,
+      [companyId, previousStart]
+    ),
+    pool.query<AdditionalItemRow>(
+      `
+        SELECT ai.sale_id, ai.type, ai.cost_price, ai.sale_price, ai.profit
+        FROM sales_additional_items ai
+        JOIN sales s ON s.id = ai.sale_id
+        WHERE ai.company_id = $1::uuid
+          AND s.sale_date >= $2::date
+          AND COALESCE(s.sale_status, 'completed') <> 'cancelled'
+      `,
+      [companyId, previousStart]
+    ),
+    pool.query<CampaignRow>(
+      `
+        SELECT id, name, channel, budget_amount, actual_spend
+        FROM marketing_campaigns
+        WHERE company_id = $1::uuid
+        ORDER BY created_at DESC
+        LIMIT 24
+      `,
+      [companyId]
+    ),
+    pool.query<LeadRow>(
+      `
+        SELECT id, campaign_id, name, source, origin, status, product_interest, next_action, next_action_at, created_at
+        FROM marketing_leads
+        WHERE company_id = $1::uuid
+          AND created_at >= $2::date
+        ORDER BY created_at DESC
+        LIMIT 200
+      `,
+      [companyId, start90]
+    ),
+    pool.query<TransactionRow>(
+      `
+        SELECT
+          t.id,
+          t.type,
+          t.category,
+          t.description,
+          t.amount,
+          t.date,
+          t.due_date,
+          t.status,
+          t.source_type,
+          ca.financial_type AS chart_financial_type,
+          ca.affects_owner_equity AS chart_affects_owner_equity,
+          ca.statement_section AS chart_statement_section
+        FROM transactions t
+        LEFT JOIN finance_chart_accounts ca ON ca.id = t.chart_account_id
+        WHERE t.company_id = $1::uuid
+          AND COALESCE(t.status, 'pending') <> 'cancelled'
+          AND (
+            t.date >= $2::date
+            OR t.due_date >= $2::date
+            OR (COALESCE(t.status, 'pending') = 'pending' AND t.due_date IS NOT NULL)
+          )
+        ORDER BY COALESCE(t.due_date, t.date) ASC
+      `,
+      [companyId, start90]
+    ),
+    pool.query<{ balance_after: string | number | null }>(
+      `
+        SELECT balance_after
+        FROM financial_account_movements
+        WHERE company_id = $1::uuid
+          AND COALESCE(is_canceled, FALSE) = FALSE
+        ORDER BY movement_date DESC, created_at DESC, id DESC
+        LIMIT 1
+      `,
+      [companyId]
+    ),
+    pool.query<MovementRow>(
+      `
+        SELECT movement_date, type, category, amount, balance_after, source, is_canceled
+        FROM financial_account_movements
+        WHERE company_id = $1::uuid
+          AND COALESCE(is_canceled, FALSE) = FALSE
+          AND movement_date >= $2::date
+        ORDER BY movement_date ASC, created_at ASC, id ASC
+      `,
+      [companyId, start90]
+    ),
+    pool.query(
+      `
+        SELECT name, current_balance
+        FROM finance_accounts
+        WHERE company_id = $1::uuid
+          AND COALESCE(is_active, TRUE) = TRUE
+        ORDER BY name ASC
+      `,
+      [companyId]
+    ),
+  ])
+
+  const additionalBySale = new Map<string, AdditionalItemRow[]>()
+  for (const item of additionalItemsResult.rows) {
+    const list = additionalBySale.get(item.sale_id) || []
+    list.push(item)
+    additionalBySale.set(item.sale_id, list)
+  }
+
+  const saleFacts = salesResult.rows.map((sale) => {
+    const totals = calcSaleTotals({
+      salePrice: sale.sale_price,
+      mainCost: sale.purchase_price,
+      supplierCost: sale.supplier_cost,
+      qty: parseQtyFromNotes(sale.notes),
+      additionalItems: additionalBySale.get(sale.id) || [],
+    })
+    return {
+      ...sale,
+      revenue: number(sale.sale_price),
+      netRevenue: number(sale.net_amount ?? sale.sale_price),
+      profit: totals.lucroTotal,
+      marginPct: totals.margemTotal,
+    }
+  })
+
+  const sales30 = saleFacts.filter((sale) => String(sale.sale_date) >= start30)
+  const salesPrevious30 = saleFacts.filter((sale) => String(sale.sale_date) >= previousStart && String(sale.sale_date) <= previousEnd)
+  const revenue30d = sales30.reduce((sum, sale) => sum + sale.revenue, 0)
+  const revenuePrevious30d = salesPrevious30.reduce((sum, sale) => sum + sale.revenue, 0)
+  const profit30d = sales30.reduce((sum, sale) => sum + sale.profit, 0)
+
+  const stockRows = stockResult.rows.map((row) => ({
+    id: String(row.id),
+    status: String(row.status || ""),
+    purchasePrice: number(row.purchase_price),
+    suggestedPrice: number(row.suggested_price),
+    purchaseDate: String(row.purchase_date || ""),
+    quantity: number(row.quantity || 1) || 1,
+    category: String(row.category || "Outros"),
+    name: safeName([row.category, row.product_model, row.color]),
+    color: row.color ? String(row.color) : null,
+    daysInStock: daysBetweenDates(String(row.purchase_date || "")),
+  }))
+  const activeStock = filterOperationalStock(stockRows)
+  const stuckItems = activeStock
+    .filter((row) => row.daysInStock >= 30)
+    .sort((a, b) => b.daysInStock - a.daysInStock)
+    .slice(0, 12)
+
+  const bucketDefs = [
+    { label: "0-15d", min: 0, max: 15 },
+    { label: "16-30d", min: 16, max: 30 },
+    { label: "31-45d", min: 31, max: 45 },
+    { label: "46+d", min: 46, max: 9999 },
+  ]
+  const agingBuckets = bucketDefs.map((bucket) => ({
+    label: bucket.label,
+    value: activeStock.filter((row) => row.daysInStock >= bucket.min && row.daysInStock <= bucket.max).length,
+  }))
+
+  const weeks = Array.from({ length: 8 }, (_, index) => startOfWeek(addDays(today, -7 * (7 - index))))
+  const weeklyRevenue = weeks.map((weekStart) => {
+    const weekEnd = addDays(weekStart, 6)
+    const weekSales = saleFacts.filter((sale) => {
+      const key = String(sale.sale_date)
+      return key >= dateKey(weekStart) && key <= dateKey(weekEnd)
+    })
+    return {
+      label: weekLabel(weekStart),
+      value: round(weekSales.reduce((sum, sale) => sum + sale.revenue, 0)),
+      secondary: weekSales.length,
+    }
+  })
+  const marginTrend = weeks.map((weekStart) => {
+    const weekEnd = addDays(weekStart, 6)
+    const weekSales = saleFacts.filter((sale) => {
+      const key = String(sale.sale_date)
+      return key >= dateKey(weekStart) && key <= dateKey(weekEnd)
+    })
+    const revenue = weekSales.reduce((sum, sale) => sum + sale.revenue, 0)
+    const profit = weekSales.reduce((sum, sale) => sum + sale.profit, 0)
+    return {
+      label: weekLabel(weekStart),
+      value: revenue ? round((profit / revenue) * 100, 1) : 0,
+      secondary: round(profit),
+    }
+  })
+
+  const groupSales = (key: "product_name" | "product_category" | "payment_method") => {
+    const map = new Map<string, { revenue: number; count: number }>()
+    for (const sale of sales30) {
+      const label = String(sale[key] || "Não informado")
+      const entry = map.get(label) || { revenue: 0, count: 0 }
+      entry.revenue += sale.revenue
+      entry.count += 1
+      map.set(label, entry)
+    }
+    return Array.from(map, ([label, value]) => ({ label, value: round(value.revenue), secondary: value.count }))
+      .sort((a, b) => b.value - a.value)
+  }
+
+  const campaignMap = new Map(campaignsResult.rows.map((campaign) => [campaign.id, campaign]))
+  const leadsByCampaign = new Map<string, number>()
+  for (const lead of leadsResult.rows) {
+    if (!lead.campaign_id) continue
+    leadsByCampaign.set(lead.campaign_id, (leadsByCampaign.get(lead.campaign_id) || 0) + 1)
+  }
+  const campaignSales = new Map<string, { revenue: number; sales: number }>()
+  for (const sale of sales30) {
+    if (!sale.marketing_campaign_id) continue
+    const entry = campaignSales.get(sale.marketing_campaign_id) || { revenue: 0, sales: 0 }
+    entry.revenue += sale.revenue
+    entry.sales += 1
+    campaignSales.set(sale.marketing_campaign_id, entry)
+  }
+  const campaigns = Array.from(campaignMap.values()).map((campaign) => {
+    const sales = campaignSales.get(campaign.id) || { revenue: 0, sales: 0 }
+    const spend = number(campaign.actual_spend || campaign.budget_amount)
+    return {
+      id: campaign.id,
+      name: campaign.name,
+      channel: campaign.channel,
+      spend,
+      revenue: round(sales.revenue),
+      leads: leadsByCampaign.get(campaign.id) || 0,
+      sales: sales.sales,
+      roi: spend > 0 ? round(sales.revenue / spend, 2) : sales.revenue > 0 ? 99 : 0,
+    }
+  })
+
+  const leadStatusMap = new Map<string, number>()
+  const leadOriginMap = new Map<string, number>()
+  for (const lead of leadsResult.rows) {
+    leadStatusMap.set(lead.status, (leadStatusMap.get(lead.status) || 0) + 1)
+    const origin = lead.origin || lead.source || "Não informado"
+    leadOriginMap.set(origin, (leadOriginMap.get(origin) || 0) + 1)
+  }
+
+  const forgottenLeads = leadsResult.rows
+    .filter((lead) => isActionableLead(lead.status))
+    .filter((lead) => !lead.next_action_at || new Date(lead.next_action_at).getTime() < today.getTime())
+    .map((lead) => {
+      const daysWithoutAction = daysBetweenDates(lead.next_action_at || lead.created_at)
+
+      return {
+        id: lead.id,
+        name: lead.name,
+        status: lead.status,
+        campaignName: lead.campaign_id ? campaignMap.get(lead.campaign_id)?.name || null : null,
+        productInterest: lead.product_interest,
+        originalIntent: lead.product_interest, // Usando product_interest como proxy de intenção original
+        classification: classifyLead(lead.status, daysWithoutAction),
+        nextAction: lead.next_action,
+        nextActionAt: lead.next_action_at,
+        daysWithoutAction,
+      }
+    })
+    .sort((a, b) => b.daysWithoutAction - a.daysWithoutAction)
+    .slice(0, 20)
+
+  const transactionRows = transactionsResult.rows.map((row) => ({
+    type: String(row.type),
+    category: String(row.category || "Não informado"),
+    amount: number(row.amount),
+    date: String(row.date || row.due_date || ""),
+    dueDate: row.due_date ? String(row.due_date) : null,
+    status: String(row.status || "pending"),
+    sourceType: row.source_type ? String(row.source_type) : null,
+    financialType: row.chart_financial_type ? String(row.chart_financial_type) : null,
+    affectsOwnerEquity: Boolean(row.chart_affects_owner_equity),
+    statementSection: row.chart_statement_section ? String(row.chart_statement_section) : null,
+  }))
+  const movementRows = movementsResult.rows.map((row) => ({
+    movementDate: String(row.movement_date || ""),
+    type: String(row.type || ""),
+    category: String(row.category || "Não informado"),
+    amount: number(row.amount),
+    balanceAfter: number(row.balance_after),
+    source: String(row.source || ""),
+    isCanceled: Boolean(row.is_canceled),
+  }))
+  const accountCashBalance = accountsResult.rows.reduce((sum, account) => sum + number(account.current_balance), 0)
+  const reconciledCashBalance = latestMovementResult.rows[0] ? number(latestMovementResult.rows[0].balance_after) : accountCashBalance
+  const cashBalanceSource = latestMovementResult.rows[0] ? "reconciled_balance_after" as const : "finance_accounts" as const
+  const pendingReceivables = transactionRows
+    .filter((tx) => tx.type === "income" && tx.status === "pending")
+    .reduce((sum, tx) => sum + tx.amount, 0)
+  const pendingPayables = transactionRows
+    .filter((tx) => tx.type === "expense" && tx.status === "pending")
+    .reduce((sum, tx) => sum + tx.amount, 0)
+  const reconciledTransactions30d = transactionRows
+    .filter((tx) => tx.status === "reconciled" && tx.date >= start30)
+  const isOwnerEquityTransaction = (tx: typeof transactionRows[number]) => {
+    return tx.affectsOwnerEquity
+      || tx.financialType === "owner_equity"
+      || tx.statementSection === "equity"
+      || isOwnerEquityCategory(tx.category)
+  }
+  const isOperationalTransaction = (tx: typeof transactionRows[number]) => {
+    return !isOwnerEquityTransaction(tx)
+      && tx.financialType !== "transfer"
+      && tx.financialType !== "adjustment"
+      && tx.statementSection !== "transfer"
+      && tx.statementSection !== "adjustment"
+  }
+  const ownerEquityMovement30d = reconciledTransactions30d
+    .filter(isOwnerEquityTransaction)
+    .reduce((sum, tx) => sum + (tx.type === "income" ? tx.amount : -tx.amount), 0)
+  const operationalCashFlow30d = reconciledTransactions30d
+    .filter(isOperationalTransaction)
+    .reduce((sum, tx) => sum + (tx.type === "income" ? tx.amount : -tx.amount), 0)
+  const reconciledIncome30d = reconciledTransactions30d
+    .filter((tx) => tx.type === "income")
+    .reduce((sum, tx) => sum + tx.amount, 0)
+  const reconciledExpense30d = reconciledTransactions30d
+    .filter((tx) => tx.type === "expense")
+    .reduce((sum, tx) => sum + tx.amount, 0)
+
+  // Regra 3 — Liquidity Forecast Engine
+  const todayKey = dateKey(today)
+  const pendingDueTxs = transactionRows
+    .filter((tx) => tx.status === "pending" && tx.dueDate)
+    .map((tx) => ({ ...tx, dueKey: dateKeyFromValue(tx.dueDate) }))
+    .filter((tx) => tx.dueKey)
+
+  const dueSum = (type: "income" | "expense", predicate: (dueKey: string) => boolean) => {
+    return pendingDueTxs
+      .filter((tx) => tx.type === type && predicate(tx.dueKey))
+      .reduce((sum, tx) => sum + tx.amount, 0)
+  }
+
+  const overduePayables = dueSum("expense", (dueKey) => dueKey < todayKey)
+  const overdueReceivables = dueSum("income", (dueKey) => dueKey < todayKey)
+  const todayPayables = dueSum("expense", (dueKey) => dueKey === todayKey)
+  const todayReceivables = dueSum("income", (dueKey) => dueKey === todayKey)
+  const getFutureSum = (type: "income" | "expense", days: number) => {
+    const limitKey = dateKey(addDays(today, days))
+    return dueSum(type, (dueKey) => dueKey >= todayKey && dueKey <= limitKey)
+  }
+
+  const payables7d = getFutureSum("expense", 7)
+  const receivables7d = getFutureSum("income", 7)
+  const payables15d = getFutureSum("expense", 15)
+  const receivables15d = getFutureSum("income", 15)
+
+  // Regra 4 — Time-Based Operational Pressure
+  let pressureWindowStartDays: number | null = null
+  let pressureWindowEndDays: number | null = null
+  let runningBalance = reconciledCashBalance
+
+  for (let d = 0; d <= 30; d++) {
+    const dayKey = dateKey(addDays(today, d))
+    const dayTxs = pendingDueTxs.filter((tx) => d === 0 ? tx.dueKey <= dayKey : tx.dueKey === dayKey)
+
+    const dayIncome = dayTxs.filter((tx) => tx.type === "income").reduce((sum, tx) => sum + tx.amount, 0)
+    const dayExpense = dayTxs.filter((tx) => tx.type === "expense").reduce((sum, tx) => sum + tx.amount, 0)
+
+    runningBalance += (dayIncome - dayExpense)
+
+    if (runningBalance < 0 && pressureWindowStartDays === null) {
+      pressureWindowStartDays = d
+    }
+    if (runningBalance >= 0 && pressureWindowStartDays !== null && pressureWindowEndDays === null) {
+      pressureWindowEndDays = d
+    }
+  }
+  const cashFlowWeekly = weeks.map((weekStart) => {
+    const weekEnd = addDays(weekStart, 6)
+    const weekTxs = movementRows.filter((movement) => movement.movementDate >= dateKey(weekStart) && movement.movementDate <= dateKey(weekEnd))
+    const income = weekTxs.filter((tx) => tx.amount > 0).reduce((sum, tx) => sum + tx.amount, 0)
+    const expense = weekTxs.filter((tx) => tx.amount < 0).reduce((sum, tx) => sum + Math.abs(tx.amount), 0)
+    return { label: weekLabel(weekStart), value: round(income), secondary: round(expense), tertiary: round(income - expense) }
+  })
+  const expenseMap = new Map<string, number>()
+  for (const tx of transactionRows.filter((item) => item.type === "expense" && item.status !== "cancelled")) {
+    if (isOwnerEquityTransaction(tx)) continue
+    expenseMap.set(tx.category, (expenseMap.get(tx.category) || 0) + tx.amount)
+  }
+
+  const openLeads = leadsResult.rows.filter((lead) => isActionableLead(lead.status)).length
+  const convertedLeads = leadsResult.rows.filter((lead) => lead.status === "sold" || saleFacts.some((sale) => sale.marketing_lead_id === lead.id)).length
+  const activeStockValue = activeStock.reduce((sum, row) => sum + row.purchasePrice * row.quantity, 0)
+
+  return {
+    generatedAt: new Date().toISOString(),
+    companyName,
+    dataBasis: "internal",
+    executive: {
+      revenue30d: round(revenue30d),
+      revenuePrevious30d: round(revenuePrevious30d),
+      sales30d: sales30.length,
+      salesPrevious30d: salesPrevious30.length,
+      averageTicket30d: sales30.length ? round(revenue30d / sales30.length) : 0,
+      profit30d: round(profit30d),
+      marginPct30d: revenue30d ? round((profit30d / revenue30d) * 100, 1) : 0,
+      cashBalance: round(reconciledCashBalance),
+      pendingReceivables: round(pendingReceivables),
+      pendingPayables: round(pendingPayables),
+      leadsOpen: openLeads,
+      leadsWithoutFollowUp: forgottenLeads.length,
+      conversionRate30d: leadsResult.rows.length ? round((convertedLeads / leadsResult.rows.length) * 100, 1) : 0,
+      activeStockValue: round(activeStockValue),
+      stuckStockCount: stuckItems.length,
+      liquidityForecast: {
+        overduePayables: round(overduePayables),
+        overdueReceivables: round(overdueReceivables),
+        todayPayables: round(todayPayables),
+        todayReceivables: round(todayReceivables),
+        payables7d: round(payables7d),
+        receivables7d: round(receivables7d),
+        payables15d: round(payables15d),
+        receivables15d: round(receivables15d),
+        pressureWindowStartDays,
+        pressureWindowEndDays,
+      },
+    },
+    stock: {
+      totalItems: stockRows.length,
+      activeItems: activeStock.length,
+      reservedItems: stockRows.filter((row) => row.status === "reserved").length,
+      soldItems: stockRows.filter((row) => row.status === "sold").length,
+      averageActiveDays: activeStock.length ? round(activeStock.reduce((sum, row) => sum + row.daysInStock, 0) / activeStock.length, 1) : 0,
+      stuckItems,
+      agingBuckets,
+      topSlowCategories: Array.from(activeStock.reduce((map, row) => {
+        const current = map.get(row.category) || 0
+        map.set(row.category, current + row.daysInStock)
+        return map
+      }, new Map<string, number>()), ([label, value]) => ({ label, value: round(value) }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 6),
+    },
+    sales: {
+      weeklyRevenue,
+      marginTrend,
+      topProducts: groupSales("product_name").slice(0, 6),
+      lowProducts: groupSales("product_name").filter((item) => item.secondary && item.secondary <= 1).slice(-6).reverse(),
+      paymentMix: groupSales("payment_method").slice(0, 6),
+    },
+    marketing: {
+      campaigns,
+      leadFunnel: Array.from(leadStatusMap, ([label, value]) => ({ label: humanizeChartLabel(label), value })),
+      leadOrigins: Array.from(leadOriginMap, ([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value).slice(0, 8),
+      forgottenLeads,
+    },
+    finance: {
+      cashBalanceSource,
+      reconciledCashBalance: round(reconciledCashBalance),
+      accountCashBalance: round(accountCashBalance),
+      operationalCashFlow30d: round(operationalCashFlow30d),
+      ownerEquityMovement30d: round(ownerEquityMovement30d),
+      reconciledIncome30d: round(reconciledIncome30d),
+      reconciledExpense30d: round(reconciledExpense30d),
+      cashFlowWeekly,
+      expenseCategories: Array.from(expenseMap, ([label, value]) => ({ label, value: round(value) })).sort((a, b) => b.value - a.value).slice(0, 8),
+      accountBalances: accountsResult.rows.map((account) => ({ label: String(account.name), value: round(number(account.current_balance)) })),
+    },
+  }
+}
+
+export function getOrionCacheMinutes() {
+  return CACHE_MINUTES
+}
+
+export function hashOrionPrompt(input: unknown) {
+  return crypto.createHash("sha256").update(JSON.stringify(input)).digest("hex")
+}
+
+export function hasOrionLogTable() {
+  return pool
+    .query<{ exists: boolean }>(
+      `
+        SELECT EXISTS (
+          SELECT 1
+          FROM information_schema.tables
+          WHERE table_schema = current_schema()
+            AND table_name = 'orion_ai_analysis_logs'
+        ) AS exists
+      `
+    )
+    .then((result) => Boolean(result.rows[0]?.exists))
+    .catch(() => false)
+}
+
+export async function getCachedOrionAnalysis(companyId: string, analysisType: string, promptHash: string) {
+  if (!(await hasOrionLogTable())) return null
+  const result = await pool.query<{
+    response_json: OrionAnalysis
+    model: string | null
+    created_at: string
+  }>(
+    `
+      SELECT response_json, model, created_at
+      FROM orion_ai_analysis_logs
+      WHERE company_id = $1::uuid
+        AND analysis_type = $2
+        AND prompt_hash = $3
+        AND status IN ('success', 'local')
+        AND created_at >= NOW() - ($4::text || ' minutes')::interval
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    [companyId, analysisType, promptHash, CACHE_MINUTES]
+  )
+  return result.rows[0] || null
+}
+
+export async function getLatestOrionAnalysis(companyId: string) {
+  if (!(await hasOrionLogTable())) return null
+  const result = await pool.query<{ response_json: OrionAnalysis }>(
+    `
+      SELECT response_json
+      FROM orion_ai_analysis_logs
+      WHERE company_id = $1::uuid
+        AND status IN ('success', 'local')
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    [companyId]
+  )
+  return result.rows[0]?.response_json || null
+}
+
+export async function saveOrionAnalysisLog(input: {
+  companyId: string
+  userId: string
+  analysisType: string
+  question?: string | null
+  promptHash: string
+  model?: string | null
+  status: "success" | "error" | "local"
+  responseJson?: OrionAnalysis | null
+  snapshot?: unknown
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+  estimatedCostUsd?: number | null
+  errorMessage?: string | null
+}) {
+  if (!(await hasOrionLogTable())) return
+  await pool.query(
+    `
+      INSERT INTO orion_ai_analysis_logs (
+        company_id,
+        user_id,
+        analysis_type,
+        question,
+        prompt_hash,
+        model,
+        status,
+        response_json,
+        data_snapshot,
+        input_tokens,
+        output_tokens,
+        total_tokens,
+        estimated_cost_usd,
+        external_sources_enabled,
+        error_message
+      )
+      VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13, FALSE, $14)
+    `,
+    [
+      input.companyId,
+      input.userId,
+      input.analysisType,
+      input.question || null,
+      input.promptHash,
+      input.model || null,
+      input.status,
+      JSON.stringify(input.responseJson || null),
+      JSON.stringify(input.snapshot || null),
+      input.inputTokens || 0,
+      input.outputTokens || 0,
+      input.totalTokens || 0,
+      input.estimatedCostUsd ?? null,
+      input.errorMessage || null,
+    ]
+  )
+}
+
+export async function getOrionHistory(companyId: string): Promise<OrionHistoryItem[]> {
+  if (!(await hasOrionLogTable())) return []
+  const result = await pool.query<{
+    id: string
+    analysis_type: string
+    question: string | null
+    model: string | null
+    status: string
+    total_tokens: string | number | null
+    estimated_cost_usd: string | number | null
+    created_at: string
+    response_json: OrionAnalysis | null
+  }>(
+    `
+      SELECT id, analysis_type, question, model, status, total_tokens, estimated_cost_usd, created_at, response_json
+      FROM orion_ai_analysis_logs
+      WHERE company_id = $1::uuid
+      ORDER BY created_at DESC
+      LIMIT 12
+    `,
+    [companyId]
+  )
+
+  return result.rows.map((row) => {
+    const savedSummary = humanizeOrionText(row.response_json?.executive_summary || row.response_json?.summary || "Análise sem resumo salvo.")
+    return {
+      id: row.id,
+      analysisType: row.analysis_type,
+      question: row.question,
+      model: row.model,
+      status: row.status,
+      totalTokens: number(row.total_tokens),
+      estimatedCostUsd: row.estimated_cost_usd == null ? null : number(row.estimated_cost_usd),
+      createdAt: row.created_at,
+      summary: savedSummary.startsWith("Análise baseada nos dados internos")
+        ? "Análise executiva anterior salva no histórico da ORION."
+        : savedSummary,
+    }
+  })
+}
+
+export async function getOrionUsage(companyId: string): Promise<OrionUsageSummary> {
+  const monthlyLimit = process.env.ORION_AI_MONTHLY_CALL_LIMIT ? Number(process.env.ORION_AI_MONTHLY_CALL_LIMIT) : null
+  if (!(await hasOrionLogTable())) {
+    return {
+      callsThisMonth: 0,
+      inputTokensThisMonth: 0,
+      outputTokensThisMonth: 0,
+      totalTokensThisMonth: 0,
+      estimatedCostUsdThisMonth: null,
+      monthlyLimit: Number.isFinite(monthlyLimit) ? monthlyLimit : null,
+    }
+  }
+
+  const result = await pool.query<{
+    model: string | null
+    input_tokens: string | number | null
+    output_tokens: string | number | null
+    total_tokens: string | number | null
+    estimated_cost_usd: string | number | null
+  }>(
+    `
+      SELECT
+        model,
+        COALESCE(input_tokens, 0) AS input_tokens,
+        COALESCE(output_tokens, 0) AS output_tokens,
+        COALESCE(total_tokens, 0) AS total_tokens,
+        estimated_cost_usd
+      FROM orion_ai_analysis_logs
+      WHERE company_id = $1::uuid
+        AND created_at >= date_trunc('month', NOW())
+    `,
+    [companyId]
+  )
+  const callsThisMonth = result.rows.length
+  const inputTokensThisMonth = result.rows.reduce((sum, row) => sum + number(row.input_tokens), 0)
+  const outputTokensThisMonth = result.rows.reduce((sum, row) => sum + number(row.output_tokens), 0)
+  const totalTokensThisMonth = result.rows.reduce((sum, row) => sum + number(row.total_tokens), 0)
+  const estimatedCosts = result.rows
+    .map((row) => row.estimated_cost_usd == null
+      ? estimateOpenAICostUsd(row.model, number(row.input_tokens), number(row.output_tokens))
+      : number(row.estimated_cost_usd))
+    .filter((value): value is number => value !== null)
+
+  return {
+    callsThisMonth,
+    inputTokensThisMonth,
+    outputTokensThisMonth,
+    totalTokensThisMonth,
+    estimatedCostUsdThisMonth: estimatedCosts.length ? round(estimatedCosts.reduce((sum, value) => sum + value, 0), 6) : null,
+    monthlyLimit: Number.isFinite(monthlyLimit) ? monthlyLimit : null,
+  }
+}
