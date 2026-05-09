@@ -38,6 +38,152 @@ export type OrionChart = {
   data: OrionChartPoint[]
 }
 
+export type OrionExecutionProduct = {
+  id: string
+  name: string
+  quantity: number
+  price: number
+  cost: number
+  profit: number
+  marginPct: number
+  daysInStock: number
+  status: string
+  role: "premium" | "anchor" | "turnover" | "liquidity"
+  reason: string
+  conversionSpeed: "alta" | "media" | "baixa"
+}
+
+export type OrionExecutionBundle = {
+  id: string
+  name: string
+  tag: string
+  promotionMode: "conservative" | "balanced" | "aggressive"
+  items: string[]
+  addOns: Array<{
+    name: string
+    quantity: number
+    price: number
+    cost: number
+  }>
+  productPrice: number
+  discount: number
+  price: number
+  cost: number
+  profit: number
+  marginPct: number
+  minimumSafePrice: number
+  safeProfitFloor: number
+  promotionNote: string
+  goalUnits: number
+  projectedProfit: number
+  objective: string
+}
+
+export type OrionExecutionTrafficPlan = {
+  budgetDaily: number
+  durationDays: number
+  totalBudget: number
+  qualifiedConversationTarget: number
+  maxCpl: number
+  maxCac: number
+  channel: string
+  campaignType: string
+  pauseIf: string
+  scaleIf: string
+  expectedSales: number
+  calculationBasis: string[]
+}
+
+export type OrionExecutionWhatsappPlan = {
+  audience: string
+  firstApproach: string
+  followUp: string
+  sla: string
+  closingTrigger: string
+  operationalOrder: string[]
+}
+
+export type OrionExecutionTimelineItem = {
+  window: string
+  action: string
+  kpi: string
+  expectedTarget: string
+}
+
+export type OrionExecutionScenario = {
+  mode: "conservative" | "balanced" | "aggressive"
+  title: string
+  expectedProfit: number
+  marginPct: number
+  speed: string
+  risk: string
+  budgetDaily: number
+  maxCac: number
+  channel: string
+  bundleName: string
+  operationalEffort: string
+}
+
+export type OrionExecutionPayload = {
+  objective: {
+    title: string
+    diagnosis: string
+    targetProfit: number | null
+    maxPossibleProfit: number
+    gap: number
+    deadlineLabel: string | null
+    recommendedScenario: "conservative" | "balanced" | "aggressive"
+    financialGoal: {
+      headline: string
+      urgencyLevel: "stable" | "attention" | "urgent"
+      currentCash: number
+      grossCash: number
+      protectedWorkingCapital: number
+      liquidProfitAvailable: number
+      estimatedReceivableProfit: number
+      payables30d: number
+      receivables30d: number
+      reserveTarget: number
+      requiredNewProfit: number
+      projectedCashAfterCommitments: number
+      workingCapitalAfterPayables: number
+      profitBufferAfterPayables: number
+      replacementCapitalBasis: string
+      nextDueLabel: string | null
+      nextDueDays: number | null
+      strategy: string
+    }
+  }
+  priorityAction: {
+    product: OrionExecutionProduct | null
+    price: number
+    profit: number
+    urgency: string
+    salesArgument: string
+    cta: string
+    bundleName: string | null
+    risk: string
+    expectedReturn: number
+  } | null
+  products: OrionExecutionProduct[]
+  inventory: Array<{
+    id: string
+    name: string
+    quantity: number
+    price: number
+    cost: number
+    profit: number
+    marginPct: number
+    daysInStock: number
+    status: string
+  }>
+  bundles: OrionExecutionBundle[]
+  trafficPlan: OrionExecutionTrafficPlan | null
+  whatsappPlan: OrionExecutionWhatsappPlan | null
+  timeline72h: OrionExecutionTimelineItem[]
+  scenarios: OrionExecutionScenario[]
+}
+
 export type OrionPriorityFocus = {
   title: string
   area: string
@@ -183,8 +329,24 @@ export type OrionSnapshot = {
       receivables7d: number
       payables15d: number
       receivables15d: number
+      payables30d: number
+      receivables30d: number
       pressureWindowStartDays: number | null
       pressureWindowEndDays: number | null
+      nextPayables: Array<{
+        id: string
+        label: string
+        amount: number
+        dueDate: string
+        daysUntilDue: number
+      }>
+      nextReceivables: Array<{
+        id: string
+        label: string
+        amount: number
+        dueDate: string
+        daysUntilDue: number
+      }>
     }
   }
   stock: {
@@ -202,6 +364,17 @@ export type OrionSnapshot = {
       purchasePrice: number
       suggestedPrice: number
       status: string
+    }>
+    availableItems: Array<{
+      id: string
+      name: string
+      category: string
+      color: string | null
+      daysInStock: number
+      purchasePrice: number
+      suggestedPrice: number
+      status: string
+      quantity: number
     }>
     agingBuckets: OrionChartPoint[]
     topSlowCategories: OrionChartPoint[]
@@ -247,6 +420,10 @@ export type OrionSnapshot = {
     ownerEquityMovement30d: number
     reconciledIncome30d: number
     reconciledExpense30d: number
+    reconciledSalesRevenue30d: number
+    reconciledSalesProfit30d: number
+    availableSalesProfit: number
+    profitWindowStart: string
     cashFlowWeekly: OrionChartPoint[]
     expenseCategories: OrionChartPoint[]
     accountBalances: OrionChartPoint[]
@@ -256,6 +433,8 @@ export type OrionSnapshot = {
 export type OrionApiPayload = {
   snapshot: OrionSnapshot
   analysis: OrionAnalysis
+  execution: OrionExecutionPayload
+  strategicCopilotAnswer?: string
   operationalContext?: OrionOperationalContext
   history: OrionHistoryItem[]
   usage: OrionUsageSummary

@@ -28,6 +28,8 @@ type Scenario = {
   trafficBudgetDaily: number
   trafficDurationDays: number
   healthyCac: number
+  healthyCpl: number
+  qualifiedConversations: number
   channel: string
   campaignType: string
   cta: string
@@ -142,6 +144,16 @@ function scenarioHealthyCac(mode: ScenarioMode, unitProfitValue: number, pressur
   const pressureMultiplier = pressure === "high" ? 0.9 : pressure === "medium" ? 0.8 : 0.7
   const modeMultiplier = mode === "conservative" ? 0.16 : mode === "balanced" ? 0.14 : 0.1
   return Math.max(15, Math.round(unitProfitValue * modeMultiplier * pressureMultiplier))
+}
+
+function scenarioCloseRate(mode: ScenarioMode) {
+  if (mode === "conservative") return 0.16
+  if (mode === "balanced") return 0.2
+  return 0.25
+}
+
+function scenarioHealthyCpl(healthyCac: number, mode: ScenarioMode) {
+  return Math.max(6, Math.round(healthyCac * scenarioCloseRate(mode)))
 }
 
 function scenarioDuration(mode: ScenarioMode) {
@@ -386,6 +398,8 @@ function scenarioFor(
   const duration = scenarioDuration(mode)
   const trafficBudgetDaily = scenarioTrafficBudget(mode, pressure)
   const healthyCac = scenarioHealthyCac(mode, profit, pressure)
+  const healthyCpl = scenarioHealthyCpl(healthyCac, mode)
+  const qualifiedConversations = Math.max(1, Math.ceil(requiredUnits / scenarioCloseRate(mode)))
 
   if (mode === "conservative") {
     return {
@@ -405,6 +419,8 @@ function scenarioFor(
       trafficBudgetDaily,
       trafficDurationDays: duration,
       healthyCac,
+      healthyCpl,
+      qualifiedConversations,
       channel: "WhatsApp + Stories orgânico",
       campaignType: "Atendimento consultivo e prova de pronta entrega",
       cta: "Me chama para travar essa unidade com garantia e parcelamento.",
@@ -440,6 +456,8 @@ function scenarioFor(
       trafficBudgetDaily,
       trafficDurationDays: duration,
       healthyCac,
+      healthyCpl,
+      qualifiedConversations,
       channel: "Meta Ads — Mensagens WhatsApp + remarketing",
       campaignType: "Oferta 72h com urgência e bundle leve",
       cta: "Quero ver essa condição no WhatsApp.",
@@ -474,6 +492,8 @@ function scenarioFor(
     trafficBudgetDaily,
     trafficDurationDays: duration,
     healthyCac,
+    healthyCpl,
+    qualifiedConversations,
     channel: "Meta Ads — Mensagens WhatsApp + lista VIP",
     campaignType: "Liquidez 48h com escassez real",
     cta: "Responda EU QUERO para travar a unidade agora.",
@@ -507,7 +527,7 @@ function formatScenario(scenario: Scenario) {
     `Lucro unitário: ${brl(scenario.unitProfit)}. Margem final: ${pct(scenario.finalMarginPct)}.`,
     `Quantidade necessária: ${scenario.requiredUnits} venda${scenario.requiredUnits === 1 ? "" : "s"}. ${capacityLine}`,
     `Lucro total esperado: ${brl(scenario.totalProfit)}. Teto de lucro com estoque atual: ${brl(scenario.maxPossibleProfit)}.`,
-    `Tráfego: ${scenario.channel}, ${brl(scenario.trafficBudgetDaily)}/dia por ${scenario.trafficDurationDays} dia${scenario.trafficDurationDays === 1 ? "" : "s"}. CAC máximo saudável: ${brl(scenario.healthyCac)} por conversa qualificada.`,
+    `Tráfego: ${scenario.channel}, ${brl(scenario.trafficBudgetDaily)}/dia por ${scenario.trafficDurationDays} dia${scenario.trafficDurationDays === 1 ? "" : "s"}. Meta: ${scenario.qualifiedConversations} conversas qualificadas. CPL máximo saudável: ${brl(scenario.healthyCpl)}. CAC máximo saudável: ${brl(scenario.healthyCac)} por venda.`,
     `Campanha: ${scenario.campaignType}. Criativo: ${scenario.creative}`,
     `Público: ${scenario.audience}. Remarketing: ${scenario.remarketing}`,
     `CTA: ${scenario.cta}`,
@@ -604,6 +624,61 @@ function productsLine(products: InventoryContextItem[]) {
     const profit = Math.max(0, Math.round(price - product.cost - BUNDLE_COST_ESTIMATE))
     return `${index + 1}. ${product.quantity}x ${product.name}: ticket ${brl(price)}, lucro unitário projetado ${brl(profit)}, margem ${pct(product.marginPct)}, ${product.daysInStock} dias em estoque, status operacional disponível.`
   }).join("\n")
+}
+
+function executableBundleLines(products: InventoryContextItem[]) {
+  const sellable = aggregateProducts(products)
+  if (!sellable.length) return "Nenhum bundle liberado sem estoque operacional ativo."
+
+  const variants = [
+    {
+      label: "kit proteção premium",
+      addOns: "película premium + capa anti-impacto",
+      incrementalCost: BUNDLE_COST_ESTIMATE,
+      priceLift: 140,
+      perception: "proteção imediata sem reduzir preço do aparelho",
+      customerType: "cliente que quer sair com o aparelho pronto para uso",
+      speed: "alta",
+    },
+    {
+      label: "kit fechamento WhatsApp",
+      addOns: "película premium + condição de entrega rápida",
+      incrementalCost: Math.round(BUNDLE_COST_ESTIMATE * 0.7),
+      priceLift: 90,
+      perception: "menor fricção para fechar no mesmo atendimento",
+      customerType: "lead quente comparando preço e prazo",
+      speed: "muito alta",
+    },
+    {
+      label: "kit premium de valor",
+      addOns: "capa magnética + película premium + prioridade de configuração",
+      incrementalCost: Math.round(BUNDLE_COST_ESTIMATE * 1.35),
+      priceLift: 210,
+      perception: "oferta mais completa sem corroer margem do aparelho",
+      customerType: "cliente premium buscando segurança e conveniência",
+      speed: "média",
+    },
+  ]
+
+  return variants.map((variant, index) => {
+    const product = sellable[index % sellable.length]
+    const finalPrice = Math.max(product.ticket, Math.round(product.ticket + variant.priceLift))
+    const cost = Math.round(product.cost + variant.incrementalCost)
+    const profit = Math.max(0, finalPrice - cost)
+    const margin = finalPrice > 0 ? ((profit / finalPrice) * 100) : 0
+    const targetSales = Math.min(product.quantity, 3)
+    const projectedProfit = profit * targetSales
+
+    return [
+      `BUNDLE ${index + 1} — ${product.name} + ${variant.label}`,
+      `Produtos: 1x ${product.name} + ${variant.addOns}.`,
+      `Preço final: ${brl(finalPrice)}. Custo projetado: ${brl(cost)}.`,
+      `Lucro unitário: ${brl(profit)}. Margem: ${pct(margin)}.`,
+      `Meta: ${targetSales} venda${targetSales === 1 ? "" : "s"}. Lucro projetado: ${brl(projectedProfit)}.`,
+      `Percepção de valor: ${variant.perception}.`,
+      `Tipo de cliente: ${variant.customerType}. Velocidade esperada: ${variant.speed}.`,
+    ].join("\n")
+  }).join("\n\n")
 }
 
 function availableInventoryLine(products: InventoryContextItem[]) {
@@ -715,14 +790,20 @@ export function buildScenarioExecutionPlan(params: BuildScenarioParams) {
     "4. Papel de Cada SKU",
     roleLines(activeRoles),
     "",
-    "5. Estratégia de Tráfego",
-    `${recommended.channel}. Orçamento: ${brl(recommended.trafficBudgetDaily)}/dia por ${recommended.trafficDurationDays} dia${recommended.trafficDurationDays === 1 ? "" : "s"}. CAC máximo saudável: ${brl(recommended.healthyCac)} por conversa qualificada. Objetivo: mensagens no WhatsApp. Público: ${recommended.audience}. Criativo: ${recommended.creative}`,
+    "5. Execução de Tráfego",
+    `${recommended.channel}. Orçamento: ${brl(recommended.trafficBudgetDaily)}/dia por ${recommended.trafficDurationDays} dia${recommended.trafficDurationDays === 1 ? "" : "s"}. Meta: ${recommended.qualifiedConversations} conversas qualificadas. CPL máximo saudável: ${brl(recommended.healthyCpl)}. CAC máximo saudável: ${brl(recommended.healthyCac)} por venda. Objetivo: mensagens no WhatsApp. Público: ${recommended.audience}. Criativo: ${recommended.creative}`,
     "",
     "6. Estratégia WhatsApp",
-    "Fechamento em até 48h com atendimento no mesmo dia. Use o produto de giro para abrir conversa, o premium como ancoragem de valor e o produto de liquidez para fechamento rápido. Não acione lead perdido, incompatível ou encerrado.",
+    [
+      "1. Prioridade premium: abordar leads compatíveis com o produto premium para ancorar valor e lucro absoluto.",
+      "2. Apresentar bundle: mostrar o kit completo com preço final, garantia, parcelamento e benefício claro.",
+      "3. Gatilhos de fechamento: urgência real, pronta entrega, prova de estoque e garantia Nobretech.",
+      "4. Follow-up: retornar em até 3 horas se houver abertura e parar se o lead estiver perdido, encerrado ou incompatível.",
+      "Script rápido: Item premium -> Bundle completo -> Benefício -> Fechamento.",
+    ].join("\n"),
     "",
-    "7. Estratégia de Bundle",
-    "Bundle nos produtos de giro: película premium + capa anti-impacto ou acessório de alta margem. Preserve o preço do premium; use o iPhone/produto de giro para volume e o item premium para elevar ticket percebido.",
+    "7. Bundles Executáveis",
+    executableBundleLines(balancedMix),
     "",
     "8. Meta Esperada",
     `Meta: ${recommended.requiredUnits} venda${recommended.requiredUnits === 1 ? "" : "s"} com lucro unitário médio de ${brl(recommended.unitProfit)}, buscando ${brl(totalExpectedProfit)} de lucro. Com o estoque operacional atual, o lucro máximo projetado é ${brl(bestPossibleProfit)}. ${recommended.capacityGap > 0 ? "A meta não fecha só com o estoque atual." : "A meta fecha dentro do estoque atual."}`,

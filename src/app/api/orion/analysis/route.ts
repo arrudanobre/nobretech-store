@@ -3,10 +3,16 @@ import { canAccess, requireApiAuthContext } from "@/lib/auth-context"
 import { estimateOpenAICostUsd } from "@/lib/orion/cost"
 import { getOrionModel, isOpenAIConfigured, runOrionOpenAI } from "@/lib/orion/ai"
 import { buildOrionBusinessContext, summarizeOperationalContext } from "@/lib/orion/business-query-engine"
+import { buildOrionExecutionPayload } from "@/lib/orion/execution-payload"
 import { humanizeOrionText, translateOrionAnalysisForExecutive } from "@/lib/orion/executive-translation"
 import { deduplicateAnalysis } from "@/lib/orion/insight-deduplication"
 import { calculateOperationalHealth } from "@/lib/orion/operational-health-engine"
 import { applyOperationalMemory, getRecentInsights } from "@/lib/orion/operational-memory"
+import {
+  buildStrategicCopilotAnswer,
+  fallbackStrategicCopilotAnswer,
+  isStrategicCopilotQuestion,
+} from "@/lib/orion/strategic-copilot"
 import {
   buildLocalOrionAnalysis,
   collectOrionSnapshot,
@@ -56,7 +62,9 @@ async function buildPayload(
   analysis: OrionAnalysis,
   snapshot: OrionSnapshot,
   cached = false,
-  operationalContext?: OrionOperationalContext | null
+  operationalContext?: OrionOperationalContext | null,
+  strategicQuestion?: string | null,
+  strategicAnswerOverride?: string | null
 ): Promise<OrionApiPayload> {
   const health = calculateOperationalHealth(snapshot)
   const fallback = buildLocalOrionAnalysis(snapshot, null, null, health)
@@ -86,6 +94,22 @@ async function buildPayload(
   const withMemory = applyOperationalMemory(safeAnalysis, recentInsights)
   const deduplicated = deduplicateAnalysis(withMemory, snapshot, health)
   const executiveAnalysis = translateOrionAnalysisForExecutive(deduplicated)
+  const execution = buildOrionExecutionPayload(snapshot, executiveAnalysis, operationalContext)
+  let strategicCopilotAnswer = strategicAnswerOverride || undefined
+  if (!strategicCopilotAnswer && strategicQuestion && isStrategicCopilotQuestion(strategicQuestion)) {
+    strategicCopilotAnswer = await buildStrategicCopilotAnswer({
+      question: strategicQuestion,
+      snapshot,
+      execution,
+    }).catch(() => fallbackStrategicCopilotAnswer())
+  }
+  const responseAnalysis = strategicCopilotAnswer
+    ? {
+        ...executiveAnalysis,
+        summary: strategicCopilotAnswer,
+        executive_summary: strategicCopilotAnswer,
+      }
+    : executiveAnalysis
 
   const [history, usage, logTableReady] = await Promise.all([
     getOrionHistory(companyId),
@@ -95,7 +119,9 @@ async function buildPayload(
 
   return {
     snapshot,
-    analysis: executiveAnalysis,
+    analysis: responseAnalysis,
+    execution,
+    strategicCopilotAnswer,
     operationalContext: sanitizeOperationalContextForClient(operationalContext),
     history,
     usage,
@@ -157,13 +183,39 @@ export async function POST(request: NextRequest) {
     const cached = await getCachedOrionAnalysis(companyId, mode, promptHash)
     if (cached) {
       return NextResponse.json({
-        data: await buildPayload(companyId, companyName, cached.response_json, snapshot, true, operationalContext),
+        data: await buildPayload(companyId, companyName, cached.response_json, snapshot, true, operationalContext, question),
         error: null,
       })
     }
   }
 
   const usage = await getOrionUsage(companyId)
+
+  if (mode === "chat" && question && isStrategicCopilotQuestion(question)) {
+    const strategicAnswerOverride = usage.monthlyLimit !== null && usage.callsThisMonth >= usage.monthlyLimit
+      ? fallbackStrategicCopilotAnswer()
+      : null
+    const localAnalysis = buildLocalOrionAnalysis(snapshot, question, operationalContext)
+    const payload = await buildPayload(companyId, companyName, localAnalysis, snapshot, false, operationalContext, question, strategicAnswerOverride)
+    const usedFallback = payload.strategicCopilotAnswer === fallbackStrategicCopilotAnswer()
+    await saveOrionAnalysisLog({
+      companyId,
+      userId: appUserId,
+      analysisType: mode,
+      question,
+      promptHash,
+      model: usedFallback ? "strategic-copilot-fallback" : getOrionModel(),
+      status: usedFallback ? "error" : "success",
+      responseJson: payload.analysis,
+      snapshot: dataSnapshot,
+      errorMessage: usedFallback ? "A análise estratégica não pôde ser gerada pela IA." : undefined,
+    })
+    return NextResponse.json({
+      data: payload,
+      error: null,
+    })
+  }
+
   if (usage.monthlyLimit !== null && usage.callsThisMonth >= usage.monthlyLimit) {
     const localAnalysis = buildLocalOrionAnalysis(snapshot, question, operationalContext)
     await saveOrionAnalysisLog({
@@ -179,7 +231,7 @@ export async function POST(request: NextRequest) {
       errorMessage: "Limite mensal da ORION AI atingido; resposta gerada sem chamada externa.",
     })
     return NextResponse.json({
-      data: await buildPayload(companyId, companyName, localAnalysis, snapshot, false, operationalContext),
+      data: await buildPayload(companyId, companyName, localAnalysis, snapshot, false, operationalContext, question),
       error: null,
     })
   }
@@ -199,7 +251,7 @@ export async function POST(request: NextRequest) {
       errorMessage: "OPENAI_API_KEY não configurada no backend.",
     })
     return NextResponse.json({
-      data: await buildPayload(companyId, companyName, localAnalysis, snapshot, false, operationalContext),
+      data: await buildPayload(companyId, companyName, localAnalysis, snapshot, false, operationalContext, question),
       error: null,
     })
   }
@@ -224,7 +276,7 @@ export async function POST(request: NextRequest) {
     })
 
     return NextResponse.json({
-      data: await buildPayload(companyId, companyName, result.analysis, snapshot, false, operationalContext),
+      data: await buildPayload(companyId, companyName, result.analysis, snapshot, false, operationalContext, question),
       error: null,
     })
   } catch (error) {
@@ -244,7 +296,7 @@ export async function POST(request: NextRequest) {
     })
 
     return NextResponse.json({
-      data: await buildPayload(companyId, companyName, localAnalysis, snapshot, false, operationalContext),
+      data: await buildPayload(companyId, companyName, localAnalysis, snapshot, false, operationalContext, question),
       error: { message: "A chamada externa falhou; a ORION retornou uma análise local baseada nos dados internos." },
     })
   }

@@ -1,0 +1,410 @@
+import "server-only"
+
+import type { OrionExecutionPayload, OrionSnapshot } from "./types"
+
+const ORION_STRATEGIC_MODEL = process.env.ORION_STRATEGIC_OPENAI_MODEL
+  || process.env.ORION_OPENAI_MODEL
+  || process.env.OPENAI_MODEL
+  || "gpt-5-mini"
+
+const STRATEGIC_COPILOT_FALLBACK = "Não consegui pensar estrategicamente com segurança agora. Eu usaria o Execution Board como base e evitaria campanha, desconto ou compra nova sem uma leitura validada dos dados."
+
+const strategicIntentTerms = [
+  "o que voce faria",
+  "o que você faria",
+  "o que faco",
+  "o que faço",
+  "qual estrategia",
+  "qual estratégia",
+  "estrategia",
+  "estratégia",
+  "vale a pena",
+  "devo",
+  "como gerar lucro",
+  "como bater meta",
+  "proteger margem",
+  "comprar estoque agora",
+  "repor estoque agora",
+  "me pagar",
+  "tirar lucro",
+  "se fosse o dono",
+  "se fosse sua operacao",
+  "se fosse sua operação",
+  "me ajude a pensar",
+  "qual caminho",
+  "melhor caminho",
+]
+
+const conditionalStrategicTerms = [
+  "venda",
+  "vender",
+  "lucro",
+  "campanha",
+  "promocao",
+  "promoção",
+  "margem",
+  "giro",
+  "estoque",
+]
+
+const strategicQualifiers = [
+  "como",
+  "devo",
+  "vale",
+  "melhor",
+  "qual",
+  "estrategia",
+  "estratégia",
+  "faria",
+  "faco",
+  "faço",
+  "dono",
+  "pensar",
+  "decidir",
+  "caminho",
+  "proteger",
+  "queimar",
+  "desconto",
+  "bater",
+  "gerar",
+  "tirar",
+  "me pagar",
+  "comprar",
+  "repor",
+]
+
+const systemPrompt = `
+Você é a Strategic Copilot Layer da ORION, atuando como diretor comercial e financeiro da Nobretech Store.
+
+Você NÃO é um dashboard.
+Você NÃO é um resumo de cards.
+Você NÃO deve repetir o Execution Board.
+Você não é um relatório. Você é um parceiro operacional experiente pensando junto com o dono da empresa.
+
+Sua missão é pensar estrategicamente com o dono da loja, como alguém que já vendeu, negociou, perdeu lead por demora, segurou margem quando bate ansiedade e sabe quando tráfego vira desperdício.
+Você deve parecer um operador experiente pensando em tempo real, não uma IA montando uma resposta perfeita.
+Não escreva como relatório. Não pareça um template. Não use títulos entre colchetes.
+
+Você receberá dados calculados pelo sistema:
+- caixa
+- lucro livre
+- capital protegido
+- contas previstas
+- recebíveis
+- estoque ativo
+- produtos
+- preço
+- lucro
+- margem
+- bundles
+- campanha
+- cenários
+- timeline
+- riscos
+
+Regras absolutas:
+1. Use somente os dados fornecidos.
+2. Não invente produto, preço, margem, lucro, estoque, saldo, CAC, CPL, orçamento ou quantidade.
+3. Não recalcule números financeiros.
+4. Não contradiga os fatos calculados, mas pode discordar da escolha operacional sugerida quando fizer sentido.
+5. Não diga que existe conta negativa se os dados não mostrarem isso.
+6. Não trate saldo bruto como lucro livre.
+7. Não recomende produto vendido, perdido, cancelado ou fora do estoque operacional.
+8. Não ofereça iPhone para lead interessado apenas em iPad, salvo se os dados mostrarem compatibilidade.
+9. Não resuma os cards.
+10. Gere raciocínio novo em cima dos dados.
+11. Não repita saldo, margem, lucro, CPL, CAC, verba, preço ou valores de pacote se eles não forem essenciais para defender a decisão.
+12. Se citar número, cite no máximo 2 números na resposta inteira.
+13. Não use os nomes dos cenários internos. Traduza para linguagem natural: caminho equilibrado, abordagem conservadora, acelerar caixa, proteger margem.
+
+Comportamento esperado:
+- Escolha um caminho.
+- Explique o motivo.
+- Traga contraponto.
+- Diga o que evitar.
+- Mostre risco.
+- Seja direto, mas profundo.
+- Fale como operador experiente, não como consultor genérico.
+- Não use emojis.
+- Não use termos técnicos internos como payload, engine, score, enum ou snapshot.
+- Reduza tom corporativo. Use frases naturais como: "eu sinceramente não queimaria margem agora", "se fosse minha operação", "o risco aqui não é caixa, é ansiedade", quando isso fizer sentido.
+- Prefira frases naturais e opinião operacional. A resposta pode ter organização, mas precisa soar como conversa estratégica.
+- Traga tese operacional: qual é o problema real, qual caminho importa agora, o que evitar e onde está o risco humano da execução.
+- Pode dizer que tráfego não vale hoje, que é melhor proteger margem, que depender de produto premium é arriscado, ou que o plano está matematicamente correto mas operacionalmente ruim.
+- Fale sobre comportamento do negócio: ansiedade por desconto, atendimento lento, lead frio, dependência de venda premium, excesso de tráfego sem capacidade de fechar, estoque parado e risco de virar refém de promoção.
+- A resposta deve ser cerca de 30% mais curta que um relatório executivo normal. Sem listas longas, sem copiar tabela, sem justificar tudo com números.
+- Evite expressões como "cenário balanced", "SLA", "CPL teto", "CAC máximo", "liquidez operacional" quando puder falar de forma natural.
+- O board já mostra os números. Você usa os números para pensar, não para recitar.
+- Levante hipóteses com cuidado: "talvez o gargalo seja resposta", "tenho a impressão de que o desconto está entrando cedo", "isso pode virar guerra de preço".
+- Sugira testes simples de operação: uma abordagem de WhatsApp, uma variação de oferta, uma janela curta de campanha, uma prova de interesse antes de aumentar investimento.
+- Separe o que importa do que é ruído. Diga claramente qual decisão realmente move o negócio agora.
+
+Formato de resposta:
+- Responda em português.
+- A resposta pode se organizar em blocos curtos, mas deve soar natural, como uma conversa estratégica. Use títulos apenas quando ajudarem a leitura.
+- Não faça listas longas. Prefira 1 parágrafo curto por bloco.
+- Se usar títulos, prefira títulos simples como "Minha leitura", "Eu faria", "Eu evitaria", "O risco", "Decisão agora", sem colchetes.
+- Não precisa usar todos os títulos se a resposta ficar mais humana sem eles, mas responda claramente: o que importa agora, qual caminho tem mais chance, o que evitar, qual risco e qual decisão o dono precisa tomar.
+`.trim()
+
+function normalizeText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim()
+}
+
+function extractOutputText(payload: unknown): string {
+  if (!payload || typeof payload !== "object") return ""
+  const direct = (payload as { output_text?: unknown }).output_text
+  if (typeof direct === "string") return direct
+
+  const output = (payload as { output?: unknown }).output
+  if (!Array.isArray(output)) return ""
+
+  const parts: string[] = []
+  for (const item of output) {
+    if (!item || typeof item !== "object") continue
+    const content = (item as { content?: unknown }).content
+    if (!Array.isArray(content)) continue
+    for (const contentItem of content) {
+      if (!contentItem || typeof contentItem !== "object") continue
+      const text = (contentItem as { text?: unknown }).text
+      if (typeof text === "string") parts.push(text)
+    }
+  }
+  return parts.join("\n")
+}
+
+function naturalScenarioLabel(mode: OrionExecutionPayload["objective"]["recommendedScenario"]) {
+  if (mode === "conservative") return "abordagem conservadora"
+  if (mode === "aggressive") return "acelerar caixa"
+  return "caminho equilibrado"
+}
+
+function cashPosture(goal: OrionExecutionPayload["objective"]["financialGoal"]) {
+  if (goal.urgencyLevel === "urgent") return "há pressão de caixa; girar com controle importa mais do que buscar a venda perfeita"
+  if (goal.requiredNewProfit > 0) return "atenção no caixa; dá para agir sem tratar isso como desespero"
+  return "sem crise de caixa aparente, mas capital de reposição deve ser protegido"
+}
+
+function marginPosture(goal: OrionExecutionPayload["objective"]["financialGoal"]) {
+  if (goal.urgencyLevel === "urgent") return "aceitar alguma velocidade pode fazer sentido, sem romper piso seguro"
+  return "não há necessidade clara de desconto agressivo agora"
+}
+
+function pressureRead(level: OrionExecutionPayload["objective"]["financialGoal"]["urgencyLevel"]) {
+  if (level === "urgent") return "existe pressão real para girar com mais velocidade"
+  if (level === "attention") return "existe atenção financeira, mas isso não autoriza desconto ansioso"
+  return "não parece haver crise; o perigo maior pode ser agir com ansiedade"
+}
+
+function likelyBottleneck(snapshot: OrionSnapshot) {
+  if (snapshot.executive.leadsWithoutFollowUp > 0) return "velocidade e disciplina de resposta antes de buscar mais tráfego"
+  if (snapshot.executive.stuckStockCount > 0) return "destravar estoque sem cair cedo demais em desconto"
+  if (snapshot.executive.conversionRate30d <= 0) return "validar intenção real de compra antes de aumentar investimento"
+  return "manter margem e escolher bem a primeira oferta do dia"
+}
+
+function productDependenceRead(execution: OrionExecutionPayload) {
+  const premium = execution.products.find((product) => product.role === "premium")
+  const anchor = execution.products.find((product) => product.role === "anchor")
+  if (premium && anchor && premium.id !== anchor.id) {
+    return `há risco de depender do premium ${premium.name}; ${anchor.name} parece uma conversa mais controlável`
+  }
+  if (premium) return `o produto premium ${premium.name} pode ajudar, mas não deve virar aposta emocional única`
+  return "não há produto premium claro para sustentar uma aposta única"
+}
+
+function trafficRead(execution: OrionExecutionPayload, snapshot: OrionSnapshot) {
+  if (!execution.trafficPlan) return "não há plano de tráfego pronto; comece pela base e por conversa direta"
+  if (snapshot.executive.leadsWithoutFollowUp > 0) return "eu testaria WhatsApp e recuperação de conversa antes de colocar mais dinheiro em anúncio"
+  return "tráfego só vale se aparecer conversa real; sem intenção de compra, vira custo e ansiedade"
+}
+
+function executionRiskPosture(snapshot: OrionSnapshot, execution: OrionExecutionPayload) {
+  if (snapshot.executive.leadsWithoutFollowUp > 0) return "o risco é abrir frente nova sem atender bem conversas que já existem"
+  if (execution.trafficPlan && execution.whatsappPlan) return "o risco é gerar conversa e não ter velocidade comercial para converter"
+  if (snapshot.executive.stuckStockCount > 0) return "o risco é deixar estoque parado virar argumento para desconto cedo demais"
+  return "o risco é executar devagar uma estratégia que depende de timing"
+}
+
+function conciseStrategicContext(snapshot: OrionSnapshot, execution: OrionExecutionPayload) {
+  const financialGoal = execution.objective.financialGoal
+  const priority = execution.priorityAction
+  const naturalSystemDirection = naturalScenarioLabel(execution.objective.recommendedScenario)
+  return {
+    companyName: snapshot.companyName,
+    userVisibleNumbersNote: "Os números abaixo existem para aterramento. Não recite números que já estão visíveis no board, salvo se forem decisivos.",
+    postureSummary: {
+      cashPosture: cashPosture(financialGoal),
+      marginPosture: marginPosture(financialGoal),
+      trafficPosture: trafficRead(execution, snapshot),
+      productDependencePosture: productDependenceRead(execution),
+      executionRiskPosture: executionRiskPosture(snapshot, execution),
+      discountRiskPosture: "não transformar insegurança em desconto antes de testar intenção de compra",
+    },
+    feltOperation: {
+      pressureRead: pressureRead(financialGoal.urgencyLevel),
+      likelyBottleneck: likelyBottleneck(snapshot),
+      productDependence: productDependenceRead(execution),
+      trafficInstinct: trafficRead(execution, snapshot),
+      discountRisk: "não transformar pressa em desconto antes de validar intenção de compra",
+      humanRisk: snapshot.executive.leadsWithoutFollowUp > 0
+        ? "lead parado costuma esfriar mais por demora do que por preço"
+        : "o risco humano é escolher uma ação bonita no papel e executar devagar",
+      systemDirectionInPlainLanguage: naturalSystemDirection,
+      permissionToDisagree: "Pode dizer que o caminho sugerido parece correto na matemática, mas ruim na operação, se essa for a melhor leitura.",
+    },
+    financialGuardrails: {
+      cashPressure: financialGoal.urgencyLevel,
+      nextDue: financialGoal.nextDueLabel,
+      targetProfit: execution.objective.targetProfit,
+      gapToGoal: execution.objective.gap,
+    },
+    commercialReality: {
+      systemDirection: naturalSystemDirection,
+      priorityProduct: priority?.product
+        ? {
+            name: priority.product.name,
+            role: priority.product.role,
+            conversionSpeed: priority.product.conversionSpeed,
+            daysInStock: priority.product.daysInStock,
+            reason: priority.product.reason,
+            systemRisk: priority.risk,
+          }
+        : null,
+      productRoles: execution.products.map((product) => ({
+        name: product.name,
+        role: product.role,
+        conversionSpeed: product.conversionSpeed,
+        daysInStock: product.daysInStock,
+        quantity: product.quantity,
+        reason: product.reason,
+      })),
+      activeInventoryNames: execution.inventory.map((item) => ({
+        name: item.name,
+        quantity: item.quantity,
+        status: item.status,
+        daysInStock: item.daysInStock,
+      })),
+    },
+    demandAndExecutionSignals: {
+      leadsOpen: snapshot.executive.leadsOpen,
+      leadsWithoutFollowUp: snapshot.executive.leadsWithoutFollowUp,
+      conversionRate30d: snapshot.executive.conversionRate30d,
+      stuckStockCount: snapshot.executive.stuckStockCount,
+      averageActiveDays: snapshot.stock.averageActiveDays,
+      topDemandSignals: snapshot.sales.topProducts.slice(0, 3).map((product) => product.label),
+      actionableLeadSignals: snapshot.marketing.forgottenLeads.slice(0, 5).map((lead) => ({
+        name: lead.name,
+        classification: lead.classification,
+        status: lead.status,
+        productInterest: lead.productInterest,
+        originalIntent: lead.originalIntent,
+        daysWithoutAction: lead.daysWithoutAction,
+      })),
+    },
+    offerAndChannelOptions: {
+      bundles: execution.bundles.map((bundle) => ({
+        name: bundle.name,
+        posture: naturalScenarioLabel(bundle.promotionMode),
+        objective: bundle.objective,
+        items: bundle.items,
+        minimumSafePrice: bundle.minimumSafePrice,
+        promotionNote: bundle.promotionNote,
+      })),
+      trafficPlan: execution.trafficPlan,
+      whatsappPlan: execution.whatsappPlan,
+      scenarios: execution.scenarios.map((scenario) => ({
+        title: scenario.title,
+        posture: naturalScenarioLabel(scenario.mode),
+        speed: scenario.speed,
+        risk: scenario.risk,
+        channel: scenario.channel,
+        operationalEffort: scenario.operationalEffort,
+        bundleName: scenario.bundleName,
+      })),
+      next72h: execution.timeline72h.map((item) => ({
+        window: item.window,
+        action: item.action,
+        expectedTarget: item.expectedTarget,
+      })),
+    },
+  }
+}
+
+function sanitizeAnswer(value: string) {
+  return value
+    .replace(/[\u0000-\u001f\u007f]/g, (char) => (char === "\n" ? "\n" : " "))
+    .replace(/^\s*\[(?:Leitura estratégica|Minha leitura)\s*:?\]\s*$/gim, "Minha leitura:")
+    .replace(/^\s*\[(?:Melhor caminho|Eu faria)\s*:?\]\s*$/gim, "Eu faria:")
+    .replace(/^\s*\[(?:O que eu evitaria|Eu evitaria)\s*:?\]\s*$/gim, "Eu evitaria:")
+    .replace(/^\s*\[(?:Risco principal|O risco)\s*:?\]\s*$/gim, "O risco:")
+    .replace(/^\s*\[(?:Próxima decisão|Decisão agora)\s*:?\]\s*$/gim, "Decisão agora:")
+    .replace(/\[(Leitura estratégica|Minha leitura|Melhor caminho|Eu faria|O que eu evitaria|Eu evitaria|Risco principal|O risco|Próxima decisão|Decisão agora)\s*:?\]/gi, "$1:")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+}
+
+function supportsTemperature(model: string) {
+  const normalized = model.toLowerCase().trim()
+  return !normalized.startsWith("gpt-5") && !normalized.startsWith("o")
+}
+
+export function isStrategicCopilotQuestion(question?: string | null) {
+  if (!question) return false
+  const normalized = normalizeText(question)
+  if (strategicIntentTerms.some((term) => normalized.includes(normalizeText(term)))) return true
+  const hasConditionalTerm = conditionalStrategicTerms.some((term) => normalized.includes(normalizeText(term)))
+  const hasStrategicQualifier = strategicQualifiers.some((term) => normalized.includes(normalizeText(term)))
+  return hasConditionalTerm && hasStrategicQualifier
+}
+
+export function fallbackStrategicCopilotAnswer() {
+  return STRATEGIC_COPILOT_FALLBACK
+}
+
+export async function buildStrategicCopilotAnswer(input: {
+  question: string
+  snapshot: OrionSnapshot
+  execution: OrionExecutionPayload
+}): Promise<string> {
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) throw new Error("OPENAI_API_KEY não configurada no backend.")
+
+  const requestBody: Record<string, unknown> = {
+    model: ORION_STRATEGIC_MODEL,
+    instructions: systemPrompt,
+    input: JSON.stringify({
+      userQuestion: input.question,
+      context: conciseStrategicContext(input.snapshot, input.execution),
+    }),
+  }
+  if (supportsTemperature(ORION_STRATEGIC_MODEL)) requestBody.temperature = 0.45
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 35000)
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    signal: controller.signal,
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(requestBody),
+  }).finally(() => clearTimeout(timeout))
+
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) {
+    const message = payload && typeof payload === "object" && "error" in payload
+      ? JSON.stringify((payload as { error: unknown }).error)
+      : `OpenAI respondeu HTTP ${response.status}`
+    throw new Error(message)
+  }
+
+  const answer = sanitizeAnswer(extractOutputText(payload))
+  if (!answer) throw new Error("OpenAI não retornou resposta estratégica.")
+  return answer
+}

@@ -87,12 +87,15 @@ type TransactionRow = {
   due_date: string | null
   status: string | null
   source_type: string | null
+  source_id: string | null
+  sale_id: string | null
   chart_financial_type: string | null
   chart_affects_owner_equity: boolean | null
   chart_statement_section: string | null
 }
 
 type MovementRow = {
+  account_id: string | null
   movement_date: string
   type: string
   category: string | null
@@ -157,8 +160,17 @@ function isOwnerEquityCategory(category: string | null | undefined) {
   const normalized = String(category || "").toLowerCase()
   return normalized.includes("aporte do proprietário")
     || normalized.includes("retirada de lucro")
+    || normalized.includes("reembolso de aporte")
     || normalized.includes("sócio")
     || normalized.includes("socio")
+}
+
+function isStockCapitalCategory(category: string | null | undefined, description?: string | null) {
+  const normalized = `${category || ""} ${description || ""}`.toLowerCase()
+  return normalized.includes("estoque")
+    || normalized.includes("compra de estoque")
+    || normalized.includes("peças")
+    || normalized.includes("pecas")
 }
 
 function startOfWeek(date: Date) {
@@ -837,11 +849,18 @@ export async function collectOrionSnapshot(companyId: string, companyName: strin
           t.due_date,
           t.status,
           t.source_type,
+          t.source_id,
+          CASE
+            WHEN t.source_type = 'sale' THEN t.source_id
+            WHEN t.source_type = 'sale_payment' THEN sp.sale_id
+            ELSE NULL
+          END AS sale_id,
           ca.financial_type AS chart_financial_type,
           ca.affects_owner_equity AS chart_affects_owner_equity,
           ca.statement_section AS chart_statement_section
         FROM transactions t
         LEFT JOIN finance_chart_accounts ca ON ca.id = t.chart_account_id
+        LEFT JOIN sale_payments sp ON sp.id = t.source_id AND t.source_type = 'sale_payment'
         WHERE t.company_id = $1::uuid
           AND COALESCE(t.status, 'pending') <> 'cancelled'
           AND (
@@ -866,14 +885,13 @@ export async function collectOrionSnapshot(companyId: string, companyName: strin
     ),
     pool.query<MovementRow>(
       `
-        SELECT movement_date, type, category, amount, balance_after, source, is_canceled
+        SELECT account_id, movement_date, type, category, amount, balance_after, source, is_canceled
         FROM financial_account_movements
         WHERE company_id = $1::uuid
           AND COALESCE(is_canceled, FALSE) = FALSE
-          AND movement_date >= $2::date
         ORDER BY movement_date ASC, created_at ASC, id ASC
       `,
-      [companyId, start90]
+      [companyId]
     ),
     pool.query(
       `
@@ -925,7 +943,7 @@ export async function collectOrionSnapshot(companyId: string, companyName: strin
     purchaseDate: String(row.purchase_date || ""),
     quantity: number(row.quantity || 1) || 1,
     category: String(row.category || "Outros"),
-    name: safeName([row.category, row.product_model, row.color]),
+    name: safeName([row.product_model || row.category, row.color]),
     color: row.color ? String(row.color) : null,
     daysInStock: daysBetweenDates(String(row.purchase_date || "")),
   }))
@@ -1047,18 +1065,23 @@ export async function collectOrionSnapshot(companyId: string, companyName: strin
     .slice(0, 20)
 
   const transactionRows = transactionsResult.rows.map((row) => ({
+    id: String(row.id),
     type: String(row.type),
     category: String(row.category || "Não informado"),
+    description: row.description ? String(row.description) : null,
     amount: number(row.amount),
     date: String(row.date || row.due_date || ""),
     dueDate: row.due_date ? String(row.due_date) : null,
     status: String(row.status || "pending"),
     sourceType: row.source_type ? String(row.source_type) : null,
+    sourceId: row.source_id ? String(row.source_id) : null,
+    saleId: row.sale_id ? String(row.sale_id) : null,
     financialType: row.chart_financial_type ? String(row.chart_financial_type) : null,
     affectsOwnerEquity: Boolean(row.chart_affects_owner_equity),
     statementSection: row.chart_statement_section ? String(row.chart_statement_section) : null,
   }))
   const movementRows = movementsResult.rows.map((row) => ({
+    accountId: row.account_id ? String(row.account_id) : null,
     movementDate: String(row.movement_date || ""),
     type: String(row.type || ""),
     category: String(row.category || "Não informado"),
@@ -1067,8 +1090,27 @@ export async function collectOrionSnapshot(companyId: string, companyName: strin
     source: String(row.source || ""),
     isCanceled: Boolean(row.is_canceled),
   }))
-  const accountCashBalance = accountsResult.rows.reduce((sum, account) => sum + number(account.current_balance), 0)
-  const reconciledCashBalance = latestMovementResult.rows[0] ? number(latestMovementResult.rows[0].balance_after) : accountCashBalance
+  const latestReconciledBalance = latestMovementResult.rows[0] ? number(latestMovementResult.rows[0].balance_after) : null
+  const accountRows = accountsResult.rows.map((account) => ({
+    id: String(account.id),
+    name: String(account.name),
+    currentBalance: number(account.current_balance),
+  }))
+  const singleAccountFallbackBalance = accountRows.length === 1 && latestReconciledBalance !== null ? latestReconciledBalance : null
+  const unassignedLedger =
+    accountRows.length === 1
+      ? movementRows.filter((movement) => !movement.accountId).reduce((sum, movement) => sum + movement.amount, 0)
+      : 0
+  const derivedAccountBalances = accountRows.map((account) => {
+    const linkedLedger = movementRows
+      .filter((movement) => movement.accountId === account.id)
+      .reduce((sum, movement) => sum + movement.amount, 0)
+    const ledgerBalance = linkedLedger + unassignedLedger
+    const value = singleAccountFallbackBalance ?? (movementRows.length ? ledgerBalance : account.currentBalance)
+    return { label: account.name, value: round(value) }
+  })
+  const accountCashBalance = derivedAccountBalances.reduce((sum, account) => sum + account.value, 0)
+  const reconciledCashBalance = latestReconciledBalance ?? accountCashBalance
   const cashBalanceSource = latestMovementResult.rows[0] ? "reconciled_balance_after" as const : "finance_accounts" as const
   const pendingReceivables = transactionRows
     .filter((tx) => tx.type === "income" && tx.status === "pending")
@@ -1091,6 +1133,11 @@ export async function collectOrionSnapshot(companyId: string, companyName: strin
       && tx.statementSection !== "transfer"
       && tx.statementSection !== "adjustment"
   }
+  const isStockCapitalTransaction = (tx: typeof transactionRows[number]) => {
+    return tx.sourceType === "inventory_purchase"
+      || tx.financialType === "inventory_asset"
+      || isStockCapitalCategory(tx.category, tx.description)
+  }
   const ownerEquityMovement30d = reconciledTransactions30d
     .filter(isOwnerEquityTransaction)
     .reduce((sum, tx) => sum + (tx.type === "income" ? tx.amount : -tx.amount), 0)
@@ -1103,6 +1150,32 @@ export async function collectOrionSnapshot(companyId: string, companyName: strin
   const reconciledExpense30d = reconciledTransactions30d
     .filter((tx) => tx.type === "expense")
     .reduce((sum, tx) => sum + tx.amount, 0)
+  const saleFactById = new Map(saleFacts.map((sale) => [String(sale.id), sale]))
+  const ownerWithdrawalDates = reconciledTransactions30d
+    .filter((tx) => tx.type === "expense" && isOwnerEquityTransaction(tx))
+    .map((tx) => dateKeyFromValue(tx.date))
+    .filter(Boolean)
+    .sort()
+  const profitWindowStart = ownerWithdrawalDates.at(-1) || start30
+  const saleProfitFromTransaction = (tx: typeof transactionRows[number]) => {
+    if (tx.type !== "income" || !tx.saleId) return 0
+    if (tx.sourceType !== "sale" && tx.sourceType !== "sale_payment") return 0
+    const sale = saleFactById.get(tx.saleId)
+    if (!sale || sale.revenue <= 0 || sale.profit <= 0) return 0
+    const paymentShare = Math.min(1, Math.max(0, tx.amount / sale.revenue))
+    return sale.profit * paymentShare
+  }
+  const reconciledSalesRevenue30d = reconciledTransactions30d
+    .filter((tx) => tx.type === "income" && (tx.sourceType === "sale" || tx.sourceType === "sale_payment"))
+    .reduce((sum, tx) => sum + tx.amount, 0)
+  const reconciledSalesProfit30d = reconciledTransactions30d.reduce((sum, tx) => sum + saleProfitFromTransaction(tx), 0)
+  const availableProfitWindowTransactions = reconciledTransactions30d
+    .filter((tx) => dateKeyFromValue(tx.date) > profitWindowStart)
+  const salesProfitSinceLastOwnerWithdrawal = availableProfitWindowTransactions.reduce((sum, tx) => sum + saleProfitFromTransaction(tx), 0)
+  const paidOperatingExpensesSinceLastOwnerWithdrawal = availableProfitWindowTransactions
+    .filter((tx) => tx.type === "expense" && isOperationalTransaction(tx) && !isStockCapitalTransaction(tx))
+    .reduce((sum, tx) => sum + tx.amount, 0)
+  const availableSalesProfit = Math.max(0, salesProfitSinceLastOwnerWithdrawal - paidOperatingExpensesSinceLastOwnerWithdrawal)
 
   // Regra 3 — Liquidity Forecast Engine
   const todayKey = dateKey(today)
@@ -1130,6 +1203,23 @@ export async function collectOrionSnapshot(companyId: string, companyName: strin
   const receivables7d = getFutureSum("income", 7)
   const payables15d = getFutureSum("expense", 15)
   const receivables15d = getFutureSum("income", 15)
+  const payables30d = getFutureSum("expense", 30)
+  const receivables30d = getFutureSum("income", 30)
+
+  const futureCommitments = (type: "income" | "expense") => {
+    const limitKey = dateKey(addDays(today, 30))
+    return pendingDueTxs
+      .filter((tx) => tx.type === type && tx.dueKey >= todayKey && tx.dueKey <= limitKey)
+      .sort((a, b) => a.dueKey.localeCompare(b.dueKey))
+      .slice(0, 8)
+      .map((tx) => ({
+        id: tx.id,
+        label: tx.description || tx.category || (type === "expense" ? "Conta prevista" : "Recebível previsto"),
+        amount: round(tx.amount),
+        dueDate: tx.dueKey,
+        daysUntilDue: Math.max(0, Math.round((new Date(`${tx.dueKey}T00:00:00`).getTime() - new Date(`${todayKey}T00:00:00`).getTime()) / 86400000)),
+      }))
+  }
 
   // Regra 4 — Time-Based Operational Pressure
   let pressureWindowStartDays: number | null = null
@@ -1198,8 +1288,12 @@ export async function collectOrionSnapshot(companyId: string, companyName: strin
         receivables7d: round(receivables7d),
         payables15d: round(payables15d),
         receivables15d: round(receivables15d),
+        payables30d: round(payables30d),
+        receivables30d: round(receivables30d),
         pressureWindowStartDays,
         pressureWindowEndDays,
+        nextPayables: futureCommitments("expense"),
+        nextReceivables: futureCommitments("income"),
       },
     },
     stock: {
@@ -1209,6 +1303,9 @@ export async function collectOrionSnapshot(companyId: string, companyName: strin
       soldItems: stockRows.filter((row) => row.status === "sold").length,
       averageActiveDays: activeStock.length ? round(activeStock.reduce((sum, row) => sum + row.daysInStock, 0) / activeStock.length, 1) : 0,
       stuckItems,
+      availableItems: [...activeStock]
+        .sort((a, b) => b.suggestedPrice - a.suggestedPrice || b.daysInStock - a.daysInStock)
+        .slice(0, 24),
       agingBuckets,
       topSlowCategories: Array.from(activeStock.reduce((map, row) => {
         const current = map.get(row.category) || 0
@@ -1239,9 +1336,13 @@ export async function collectOrionSnapshot(companyId: string, companyName: strin
       ownerEquityMovement30d: round(ownerEquityMovement30d),
       reconciledIncome30d: round(reconciledIncome30d),
       reconciledExpense30d: round(reconciledExpense30d),
+      reconciledSalesRevenue30d: round(reconciledSalesRevenue30d),
+      reconciledSalesProfit30d: round(reconciledSalesProfit30d),
+      availableSalesProfit: round(availableSalesProfit),
+      profitWindowStart,
       cashFlowWeekly,
       expenseCategories: Array.from(expenseMap, ([label, value]) => ({ label, value: round(value) })).sort((a, b) => b.value - a.value).slice(0, 8),
-      accountBalances: accountsResult.rows.map((account) => ({ label: String(account.name), value: round(number(account.current_balance)) })),
+      accountBalances: derivedAccountBalances,
     },
   }
 }
