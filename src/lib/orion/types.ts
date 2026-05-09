@@ -264,6 +264,114 @@ export type OrionOperationalContext = {
   contexts: Record<string, unknown>
 }
 
+export type OrionExecutionMode =
+  | "strategic_analysis"
+  | "operational_decision"
+  | "marketing_execution"
+  | "sales_execution"
+  | "lead_recovery"
+  | "closing_mode"
+
+export type OrionSelectedScenario = "conservative" | "balanced" | "aggressive"
+
+export type OrionOperationalIntent =
+  | "new_strategy"
+  | "execution_continuation"
+  | "offer_refinement"
+  | "pricing_refinement"
+  | "marketing_refinement"
+  | "objection_handling"
+  | "lead_recovery"
+  | "closing_execution"
+  | "traffic_optimization"
+  | "campaign_iteration"
+  | "operational_question"
+  | "strategic_question"
+
+export type OrionMissionContext = {
+  product: {
+    id: string
+    name: string
+    quantity: number
+    price: number
+    profit: number
+    marginPct: number
+    daysInStock: number
+    role: OrionExecutionProduct["role"]
+    minimumSafePrice: number | null
+    conversionSpeed: OrionExecutionProduct["conversionSpeed"]
+  } | null
+  offer: {
+    bundleName: string | null
+    items: string[]
+    currentOfferPrice: number | null
+    expectedProfit: number | null
+    minimumSafePrice: number | null
+    safeProfitFloor: number | null
+    discountLimit: number | null
+    positioning: string | null
+  } | null
+  finance: {
+    cashPosture: string
+    liquidProfitAvailable: number
+    protectedWorkingCapital: number
+    nextPayableAmount: number | null
+    nextPayableDueDate: string | null
+    urgencyLevel: OrionExecutionPayload["objective"]["financialGoal"]["urgencyLevel"]
+  }
+  execution: {
+    selectedScenario: OrionSelectedScenario | null
+    selectedChannel: string | null
+    activeTrafficDirection: string | null
+    pauseRule: string | null
+    scaleRule: string | null
+    responseExpectation: string | null
+    activeStrategy: string | null
+  }
+  constraints: {
+    avoidDiscountBelow: number | null
+    doNotUseProtectedCapital: boolean
+    avoidWrongLeadCategory: boolean
+    doNotRecommendUnavailableProducts: boolean
+  }
+  memorySignals: {
+    lastCampaignResult: string | null
+    knownBottleneck: string | null
+    repeatedRisk: string | null
+  }
+}
+
+export type OrionOperationalConversationState = {
+  activeMission: string | null
+  focusProduct: string | null
+  selectedScenario: OrionSelectedScenario | null
+  targetGoal: string | null
+  deadline: string | null
+  selectedChannel: string | null
+  selectedOffer: string | null
+  lastUserDecision: string | null
+  nextExpectedStep: string | null
+  executionMode: OrionExecutionMode | null
+  currentMission: string | null
+  currentProduct: string | null
+  currentExecutionMode: OrionExecutionMode | null
+  chosenOperationalPath: OrionSelectedScenario | null
+  chosenTrafficDirection: string | null
+  activeOffer: string | null
+  activeCampaignIntent: string | null
+  activeProduct: string | null
+  activeCampaign: string | null
+  activeTrafficDirection: string | null
+  activePricingDiscussion: string | null
+  activeLeadProfile: string | null
+  activeClosingStrategy: string | null
+  activeExecutionMode: OrionExecutionMode | null
+  currentCommercialConcern: string | null
+  currentBottleneck: string | null
+  operationalIntent: OrionOperationalIntent | null
+  activeMissionContext: OrionMissionContext | null
+}
+
 export type OrionAnalysis = {
   summary: string
   executive_summary: string
@@ -436,6 +544,8 @@ export type OrionApiPayload = {
   execution: OrionExecutionPayload
   strategicCopilotAnswer?: string
   operationalContext?: OrionOperationalContext
+  operationalConversationState?: OrionOperationalConversationState
+  activeMissionContext?: OrionMissionContext
   history: OrionHistoryItem[]
   usage: OrionUsageSummary
   config: {

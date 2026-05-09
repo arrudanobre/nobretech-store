@@ -47,6 +47,7 @@ import type {
   OrionExecutionProduct,
   OrionExecutionScenario,
   OrionInsight,
+  OrionOperationalConversationState,
   OrionPriority,
 } from "@/lib/orion/types"
 
@@ -855,6 +856,7 @@ export function OrionClient() {
   const [chatLoading, setChatLoading] = useState(false)
   const [question, setQuestion] = useState("")
   const [error, setError] = useState<string | null>(null)
+  const [operationalConversationState, setOperationalConversationState] = useState<OrionOperationalConversationState | null>(null)
   const chatPrimedRef = useRef(false)
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -880,6 +882,7 @@ export function OrionClient() {
         setError(json.error?.message || "Não foi possível carregar a ORION AI.")
       } else {
         setPayload(json.data)
+        setOperationalConversationState(json.data.operationalConversationState || null)
         primeChat(json.data)
       }
     } catch {
@@ -900,11 +903,12 @@ export function OrionClient() {
       const response = await fetch("/api/orion/analysis", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "chat", message: trimmed }),
+        body: JSON.stringify({ mode: "chat", message: trimmed, operationalConversationState }),
       })
       const json = await response.json() as ApiResponse
       if (json.data) {
         setPayload(json.data)
+        setOperationalConversationState(json.data.operationalConversationState || operationalConversationState)
         const strategicResponse = json.data.strategicCopilotAnswer || null
         setMessages((current) => [...current, {
           role: "orion",
@@ -930,6 +934,7 @@ export function OrionClient() {
           setError(json.error?.message || "Não foi possível carregar a ORION AI.")
         } else {
           setPayload(json.data)
+          setOperationalConversationState(json.data.operationalConversationState || null)
           primeChat(json.data)
         }
       })

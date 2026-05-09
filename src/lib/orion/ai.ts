@@ -1,7 +1,8 @@
 import "server-only"
 
 import { deduplicateAnalysis } from "@/lib/orion/insight-deduplication"
-import type { OrionAnalysis, OrionInsight, OrionOperationalContext, OrionSnapshot } from "@/lib/orion/types"
+import { buildOperationalConversationState, summarizeOperationalConversationState } from "@/lib/orion/operational-conversation-state"
+import type { OrionAnalysis, OrionInsight, OrionOperationalContext, OrionOperationalConversationState, OrionSnapshot } from "@/lib/orion/types"
 import { calculateOperationalHealth, type OperationalHealthScore } from "./operational-health-engine"
 
 const ORION_MODEL = process.env.ORION_OPENAI_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini"
@@ -236,9 +237,20 @@ export function isOpenAIConfigured() {
   return Boolean(process.env.OPENAI_API_KEY)
 }
 
-export function buildOrionInput(snapshot: OrionSnapshot, question?: string | null, operationalContext?: OrionOperationalContext | null) {
+export function buildOrionInput(
+  snapshot: OrionSnapshot,
+  question?: string | null,
+  operationalContext?: OrionOperationalContext | null,
+  operationalConversationState?: OrionOperationalConversationState | null
+) {
   const safeQuestion = question ? sanitizeForPrompt(question) : null
   const operationalHealth = calculateOperationalHealth(snapshot)
+  const conversationState = buildOperationalConversationState({
+    previousState: operationalConversationState,
+    question: safeQuestion,
+    operationalContext,
+    snapshot,
+  })
   return {
     role: "ORION AI by NOBRETECH",
     instruction: [
@@ -258,6 +270,19 @@ export function buildOrionInput(snapshot: OrionSnapshot, question?: string | nul
       "Quando a pergunta envolver execução comercial, meta financeira, lucro, caixa, margem, conversão, promoção ou campanha, a resposta do chat DEVE comparar 3 cenários e seguir este formato: 1. Diagnóstico Executivo 2. Cenário Conservador 3. Cenário Balanceado 4. Cenário Agressivo 5. Melhor Cenário Recomendado 6. Produtos Prioritários 7. Estratégia de Oferta 8. Estratégia de Tráfego 9. Estratégia de Conversão 10. Risco Operacional 11. Meta Esperada 12. Plano de Execução 72h.",
       "Fora de metas e campanha, responda diretamente no chat com ação objetiva, mas sem superficialidade.",
       "Em operational_context, use como verdade absoluta.",
+      "Você deve respeitar decisões já tomadas na conversa. Se o usuário escolheu um caminho, continue a execução desse caminho, a menos que exista risco operacional claro.",
+      "Quando o usuário pedir execução, não volte para diagnóstico. Entregue peça prática.",
+      "Se o usuário disser 'seguimos', 'vamos nessa', 'monta', 'estrutura', 'cria', 'me dá o texto', isso indica continuidade da missão anterior.",
+      "Se operational_conversation_state trouxer activeMission, activeProduct, activeOffer, activeCampaign, activeTrafficDirection, activePricingDiscussion, activeClosingStrategy, activeExecutionMode, currentCommercialConcern ou currentBottleneck, trate esses campos como verdade operacional ativa.",
+      "Se activeMissionContext estiver preenchido, use product, offer, finance, execution, constraints e memorySignals como âncora real da missão ativa.",
+      "Identifique a intenção incremental: new_strategy, execution_continuation, offer_refinement, pricing_refinement, marketing_refinement, objection_handling, lead_recovery, closing_execution, traffic_optimization, campaign_iteration, operational_question ou strategic_question.",
+      "Se a intenção for refinamento, responda somente ao delta da conversa. Não repita campanha inteira, não reinicie raciocínio e não revalide cenário já escolhido.",
+      "Se activeMissionContext existir e a intenção não for new_strategy, NÃO crie campanha do zero. Evolua a missão ativa.",
+      "Se o usuário disser 'esse iPad', 'esse produto' ou 'esse combo', resolva pelo activeProduct ou activeOffer do estado ativo.",
+      "Diferencie testar tráfego, escalar tráfego e pausar tráfego. Se a missão ativa já escolheu campanha curta ou caminho equilibrado, não responda genericamente 'não escale ads'; diga que ainda não é hora de escalar, mas entregue o teste controlado escolhido.",
+      "Frases como 'proteja margem', 'priorize WhatsApp' e 'use bundle' só podem aparecer acompanhadas de execução concreta.",
+      "Se currentExecutionMode for marketing_execution, responda no chat com este formato: Campanha, Oferta, Headline, Criativo, Stories, WhatsApp, Tráfego, Objetivo, Risco, Validação.",
+      "Se não houver estado suficiente para executar com segurança, faça apenas uma pergunta objetiva.",
       "Nunca fale sobre 'snapshots', 'engine', 'memória operacional', 'score' ou 'confiança'. Fale como um executivo real.",
       "PROIBIDO usar marcadores visíveis de repetição ou justificar que uma recomendação já apareceu antes.",
       "PROIBIDO criar cards múltiplos para a mesma TESE OPERACIONAL (ex: se o problema é caixa, crie 1 alerta de caixa e só).",
@@ -302,14 +327,20 @@ export function buildOrionInput(snapshot: OrionSnapshot, question?: string | nul
     operational_health: operationalHealth,
     snapshot,
     operational_context: operationalContext || null,
+    operational_conversation_state: summarizeOperationalConversationState(conversationState),
   }
 }
 
-export async function runOrionOpenAI(snapshot: OrionSnapshot, question?: string | null, operationalContext?: OrionOperationalContext | null): Promise<OrionOpenAIResult> {
+export async function runOrionOpenAI(
+  snapshot: OrionSnapshot,
+  question?: string | null,
+  operationalContext?: OrionOperationalContext | null,
+  operationalConversationState?: OrionOperationalConversationState | null
+): Promise<OrionOpenAIResult> {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) throw new Error("OPENAI_API_KEY não configurada no backend.")
 
-  const input = buildOrionInput(snapshot, question, operationalContext)
+  const input = buildOrionInput(snapshot, question, operationalContext, operationalConversationState)
   const operationalHealth = input.operational_health
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 120000)
