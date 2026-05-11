@@ -1,5 +1,6 @@
 import "server-only"
 
+import { isFinancialTraceabilityRequest } from "./financial-traceability-router"
 import type { OrionIntentRouteSummary, OrionOperationalConversationState, OrionOperationalGoal } from "./types"
 
 function normalizeText(value: string) {
@@ -42,6 +43,19 @@ export function extractOperationalGoal(input: {
     && /\b(conjunta|nova|cria|criar|faz|fazer|monta|montar|estrutura|estruturar|agora)\b/.test(text)
   const needsExecution = campaignExecution || /\b(cria|criar|faz|fazer|monta|montar|gera|gerar)\b/.test(text)
     && /\b(campanha|copy|headline|anuncio|anúncio|stories|whatsapp|texto|roteiro)\b/.test(text)
+
+  if (input.intentRoute?.intent === "financial_traceability" || isFinancialTraceabilityRequest(message)) {
+    return {
+      goalType: "financial_traceability",
+      targetProfit,
+      horizonDays,
+      urgency: "low",
+      optimization: "unknown",
+      directQuestion: true,
+      needsExecution: false,
+      reason: "Usuário pediu rastreabilidade/listagem financeira auditável.",
+    }
+  }
 
   if (targetProfit && /\b(lucrar|lucro|liquido|líquido|ganhar|gerar|bater|meta)\b/.test(text)) {
     return {

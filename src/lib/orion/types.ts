@@ -241,6 +241,7 @@ export type OrionChartInterpretation = {
 }
 
 export type OrionBusinessIntent =
+  | "financial_traceability"
   | "financial_goal_execution"
   | "inventory_product_analysis"
   | "pricing_analysis"
@@ -264,6 +265,7 @@ export type OrionBusinessToolName =
   | "pricing_tool"
 
 export type OrionOperationalGoalType =
+  | "financial_traceability"
   | "profit_target"
   | "inventory_liquidity"
   | "inventory_rotation"
@@ -287,6 +289,7 @@ export type OrionOperationalGoal = {
 
 export type OrionReasoningMode =
   | "financial_decision"
+  | "financial_traceability"
   | "withdrawal_safety"
   | "reinvestment_decision"
   | "working_capital_analysis"
@@ -342,6 +345,7 @@ export type OrionOperationalPlan = {
 }
 
 export type OrionConversationIntent =
+  | "financial_traceability"
   | "global_business_question"
   | "mission_continuation"
   | "mission_refinement"

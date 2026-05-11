@@ -1,4 +1,4 @@
-const BLOCK_ORDER = ["Leitura:", "Decisão:", "Motivo:", "Risco:"]
+const BLOCK_ORDER = ["Leitura:", "Cálculo:", "Decisão:", "Observação:"]
 
 const FORBIDDEN_PHRASES = [
   "se quiser eu ajudo",

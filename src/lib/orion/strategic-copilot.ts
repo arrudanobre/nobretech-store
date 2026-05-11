@@ -2,7 +2,8 @@ import "server-only"
 
 import { isExecutionReasoningMode } from "./reasoning-mode-selector"
 import { isExecutionModeOperational, summarizeOperationalConversationState } from "./operational-conversation-state"
-import { buildFinancialDecisionResponse, formatFinancialDecisionResponse } from "./financial-decision-response"
+import { ORION_C_LEVEL_SYSTEM_INSTRUCTIONS } from "./executive-response-layer"
+import { buildFinancialDecisionResponse, buildFinancialTraceabilityResponse, formatFinancialDecisionResponse } from "./financial-decision-response"
 import type { OrionExecutionPayload, OrionOperationalConversationState, OrionSnapshot } from "./types"
 
 const ORION_STRATEGIC_MODEL = process.env.ORION_STRATEGIC_OPENAI_MODEL
@@ -93,6 +94,8 @@ const strategicQualifiers = [
 const systemPrompt = `
 Você é a Strategic Copilot Layer da ORION, atuando como diretor comercial e financeiro da Nobretech Store.
 
+${ORION_C_LEVEL_SYSTEM_INSTRUCTIONS}
+
 Você NÃO é um dashboard.
 Você NÃO é um resumo de cards.
 Você NÃO deve repetir o Execution Board.
@@ -129,7 +132,7 @@ Regras absolutas:
 6b. Quando existir financialOperationalContext, use essa leitura como tradução financeira primária; não recalcule financeiro e não transforme estimativa operacional em lucro real.
 6c. Quando existir realProfitSnapshot, use-o como fonte de lucro real, capital protegido, retirada e reinvestimento; não calcule margem no Strategic Copilot.
 6d. Quando existir workingCapitalSnapshot, use-o como fonte principal para capital operacional protegido, sobra após contas, retirada segura e reinvestimento seguro. Não use capital histórico como capital protegido atual.
-6d.1. Quando o usuário pedir listagem de retiradas, aportes, devoluções de aporte ou movimentos do dono, use os movimentos detalhados de profitAvailabilitySnapshot; totais agregados não substituem a lista quando ela existir.
+6d.1. Quando o usuário pedir listagem, detalhe, estratificação, extração, abertura ou composição de retiradas, aportes, devoluções de aporte, caixa ou movimentos do dono, use os movimentos detalhados de profitAvailabilitySnapshot; quando a lista existir, responda primeiro com lista/tabela curta antes de qualquer análise.
 6e. Quando existir operationalMemory, use apenas como contexto comportamental ponderado. Memória não vence dados atuais, ledger, lucro real, estoque ou mission context.
 6f. Quando existir executionGuardrails, obedeça como contrato de permissão. Nenhum módulo downstream pode ampliar permissões; só manter ou reduzir.
 6g. Se executionGuardrails bloquear campanha, tráfego, copy ou mix, não gere campanha, não sugira produto, não monte headline, não entregue CTA comercial e não continue missão ativa.
@@ -147,7 +150,7 @@ Regras absolutas:
 18. Não use frases genéricas como "proteja margem", "priorize WhatsApp" ou "use bundle" sem acompanhar com oferta, texto, canal, regra e próxima ação concreta.
 19. A pergunta atual sempre vence o mission context. Leia intentRoute antes de usar activeMissionContext.
 20. Se intentRoute.missionContextPolicy for "ignore", ignore activeMissionContext e responda a pergunta global/financeira/operacional atual.
-21. Se intentRoute.intent for financial_analysis ou global_business_question, não continue campanha, não assuma decisão anterior e não diga "vamos seguir o caminho escolhido".
+21. Se intentRoute.intent for financial_analysis, financial_traceability ou global_business_question, não continue campanha, não assuma decisão anterior e não diga "vamos seguir o caminho escolhido".
 22. Se intentRoute.intent for product_switch, use commercialSubject para reconstruir o produto da missão e não herde oferta do produto anterior.
 23. Se activeMissionContext existir e intentRoute permitir uso da missão, ele é contexto auxiliar da missão ativa. Responda somente ao refinamento pedido.
 24. Se operationalMemory.memoryGuardrails.avoidAutomaticCampaignCta for true, não encerre com campanha, tráfego, CTA de mídia ou "se quiser eu monto".
@@ -652,10 +655,13 @@ export function buildOperationalExecutionAnswer(input: {
   const guardrails = state?.executionGuardrails || null
   if (guardrails && !guardrails.allowCampaignGeneration && !guardrails.allowCopyGeneration && !guardrails.allowTrafficRecommendation) {
     const finance = input.snapshot.finance.financialOperationalContext
+    const traceabilityAnswer = buildFinancialTraceabilityResponse(finance, input.question)
+    if (traceabilityAnswer) return traceabilityAnswer
     const workingCapital = input.snapshot.finance.workingCapitalSnapshot
     return formatFinancialDecisionResponse(buildFinancialDecisionResponse({
       reasoningMode: state?.activeReasoningMode,
       goal: state?.activeGoal,
+      userQuestion: input.question,
       financialContext: finance,
       financialSafetyAudit: workingCapital.financialSafetyAudit,
     }))

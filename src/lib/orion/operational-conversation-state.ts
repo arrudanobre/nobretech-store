@@ -519,7 +519,7 @@ function operationalIntentFromRoute(
   if (route.intent === "mission_continuation") return "execution_continuation"
   if (route.intent === "product_switch" || route.intent === "new_campaign_request") return "new_strategy"
   if (route.intent === "strategic_question") return "strategic_question"
-  if (route.intent === "financial_analysis" || route.intent === "inventory_analysis" || route.intent === "operational_question") return "operational_question"
+  if (route.intent === "financial_analysis" || route.intent === "financial_traceability" || route.intent === "inventory_analysis" || route.intent === "operational_question") return "operational_question"
   return "operational_question"
 }
 

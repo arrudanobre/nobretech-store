@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { canAccess, requireApiAuthContext } from "@/lib/auth-context"
+import { checkRateLimit } from "@/lib/rate-limit"
 import { getBoardProductName, getChatProductName, logOrionIntentDebug } from "@/lib/orion/chat-context"
 import { estimateOpenAICostUsd } from "@/lib/orion/cost"
 import { getOrionModel, isOpenAIConfigured, runOrionOpenAI } from "@/lib/orion/ai"
@@ -107,6 +108,7 @@ function sanitizeOperationalContextForClient(operationalContext?: OrionOperation
 function shouldUseStrategicCopilotByRoute(operationalContext?: OrionOperationalContext | null) {
   const intent = operationalContext?.intentRoute?.intent
   return intent === "financial_analysis"
+    || intent === "financial_traceability"
     || intent === "global_business_question"
     || intent === "inventory_analysis"
     || intent === "strategic_question"
@@ -124,7 +126,7 @@ function shouldBuildGoalDrivenPlan(input: {
   if (!input.allowProductMixGeneration) return false
   const intent = input.intentRoute?.intent
   if (input.goal.goalType !== "unknown") return true
-  if (intent === "financial_analysis" || intent === "global_business_question" || intent === "unrelated_question") return false
+  if (intent === "financial_analysis" || intent === "financial_traceability" || intent === "global_business_question" || intent === "unrelated_question") return false
   const hasCommercialSubject = Boolean(input.commercialSubject && input.commercialSubject.subjectType !== "unknown" && input.commercialSubject.confidence >= 0.45)
   const hasActiveMission = Boolean(input.previousState?.activeMissionContext || input.previousState?.activeProduct || input.previousState?.currentProduct)
   return Boolean(
@@ -236,7 +238,16 @@ async function buildPayload(
         conversationState: operationalConversationState,
       })
     : null
-  let strategicCopilotAnswer = planAnswer || operationalExecutionAnswer || strategicAnswerOverride || undefined
+  const deterministicFinancialAnswer = strategicQuestion
+    && operationalContext?.answer
+    && (
+      operationalContext.intentRoute?.intent === "financial_traceability"
+      || operationalContext.intentRoute?.intent === "financial_analysis"
+      || operationalContext.intent === "financial_traceability"
+    )
+    ? operationalContext.answer
+    : null
+  let strategicCopilotAnswer = planAnswer || operationalExecutionAnswer || deterministicFinancialAnswer || strategicAnswerOverride || undefined
   if (!strategicCopilotAnswer && strategicQuestion && shouldUseStrategicCopilotByRoute(operationalContext)) {
     strategicCopilotAnswer = await buildStrategicCopilotAnswer({
       question: strategicQuestion,
@@ -283,9 +294,17 @@ export async function GET(request: NextRequest) {
   const authResult = await requireApiAuthContext()
   if (!authResult.ok) return authResult.response
 
-  const { companyId, companyName, role } = authResult.context
+  const { companyId, companyName, role, appUserId } = authResult.context
   if (!canAccess(role, "finance.view")) {
     return forbidden("A ORION AI cruza dados financeiros e está disponível apenas para perfis com acesso ao financeiro.")
+  }
+
+  const rateLimitResult = checkRateLimit(`orion:${appUserId}`, 20, 60_000)
+  if (!rateLimitResult.ok) {
+    return NextResponse.json(
+      { data: null, error: { message: "Muitas requisições à ORION. Aguarde um momento antes de continuar." } },
+      { status: 429, headers: { "Retry-After": String(Math.ceil(rateLimitResult.retryAfterMs / 1000)) } }
+    )
   }
 
   const selectedFinancialPeriod = financialPeriodFromSearch(request)
@@ -305,6 +324,17 @@ export async function POST(request: NextRequest) {
   const { companyId, companyName, role, appUserId } = authResult.context
   if (!canAccess(role, "finance.view")) {
     return forbidden("A ORION AI cruza dados financeiros e está disponível apenas para perfis com acesso ao financeiro.")
+  }
+
+  const rateLimitResult = checkRateLimit(`orion:${appUserId}`, 30, 60_000)
+  if (!rateLimitResult.ok) {
+    return NextResponse.json(
+      { data: null, error: { message: "Muitas requisições à ORION. Aguarde um momento antes de continuar." } },
+      {
+        status: 429,
+        headers: { "Retry-After": String(Math.ceil(rateLimitResult.retryAfterMs / 1000)) },
+      }
+    )
   }
 
   const body = await request.json().catch(() => ({})) as Record<string, unknown>

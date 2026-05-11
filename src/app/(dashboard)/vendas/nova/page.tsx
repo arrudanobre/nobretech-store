@@ -9,15 +9,12 @@ import { Textarea } from "@/components/ui/textarea"
 import { ProductAssetImage } from "@/components/products/product-asset-image"
 import { calculatePaymentPrice, formatBRL, maskCPF, formatPhone, validateCPF, getProductName, getAdditionalItemDisplayName, calculateDeviceValue, formatTradeInSuggestedRange, getTradeInSummaryStatus, getComputedInventoryStatus, normalizePaymentFeePct, todayISO, addDaysISO, formatPaymentMethod, formatDate } from "@/lib/helpers"
 import { fetchProductImageMap, type ProductImageRecord } from "@/lib/product-images"
-import { atualizarStatusEstoque } from "@/services/vendaService"
 import { PAYMENT_METHODS, CATEGORIES, PRODUCT_CATALOG, GRADES, SIDEPAY_FEE_PCTS } from "@/lib/constants"
 import { estimateRiskReserve } from "@/lib/sale-economics"
 import { calculateSplitPaymentEconomics, isCreditPayment as isCreditSalePayment, isFinancialPayment, normalizeSalePaymentMethod, parseCurrencyLike, roundCurrency, SPLIT_PAYMENT_METHODS, validateSalePayments, type SalePayment, type SalePaymentDraft } from "@/lib/sale-payments"
 import { useToast } from "@/components/ui/toaster"
 import { supabase } from "@/lib/supabase"
 import { generateReceiptPDF, generateWarrantyPDF, type SaleDocumentData } from "@/lib/sale-documents"
-import { upsertSalePaymentReceivable, upsertTradeInChangePayable } from "@/lib/finance/sale-receivable-client"
-import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 import {
   AlertTriangle,
   Box,
@@ -1087,28 +1084,6 @@ function NewSaleContent() {
     })))
   }, [clampQty])
 
-  const updateInventoryStock = useCallback(async (productId: string, soldQty: number, finalStatus: "sold" | "reserved") => {
-    const { data, error } = await (supabase.from("inventory") as any)
-      .select("quantity,status")
-      .eq("id", productId)
-      .single()
-
-    if (error) throw error
-
-    const currentQty = Math.max(1, Number(data?.quantity || 1))
-    const nextQty = Math.max(0, currentQty - Math.max(1, soldQty))
-
-    if (nextQty > 0) {
-      const { error: updateError } = await (supabase.from("inventory") as any)
-        .update({ quantity: nextQty, status: "in_stock" })
-        .eq("id", productId)
-      if (updateError) throw updateError
-      return
-    }
-
-    await atualizarStatusEstoque(productId, finalStatus)
-  }, [])
-
   const commitSalePriceInput = useCallback(() => {
     const parsed = parseFloat(salePriceInput)
     if (!parsed || parsed <= 0) {
@@ -1278,68 +1253,6 @@ function NewSaleContent() {
     return []
   }, [])
 
-  const createTradeInInventoryItem = useCallback(async (params: {
-    companyId: string
-    saleId: string
-    tradeInValue: number
-    status: string
-  }) => {
-    if (!tradeInModel) return null
-
-    const { data, error } = await (supabase.from("inventory") as any).insert({
-      company_id: params.companyId,
-      catalog_id: null,
-      imei: tradeIn.imei || null,
-      serial_number: null,
-      grade: tradeIn.grade || null,
-      condition_notes: saleNotes || null,
-      purchase_price: params.tradeInValue,
-      purchase_date: new Date().toISOString().split("T")[0],
-      type: "own",
-      supplier_name: null,
-      origin: "trade_in",
-      source_sale_id: params.saleId,
-      suggested_price: null,
-      photos: null,
-      notes: tradeInModel.name,
-      quantity: 1,
-      status: params.status,
-    }).select("id,status").single()
-
-    if (error) {
-      console.error("Erro ao criar item de estoque trade-in:", error)
-      return null
-    }
-
-    return data
-  }, [tradeIn, tradeInModel, saleNotes])
-
-  const updateSaleTradeInLink = useCallback(async (saleId: string, tradeInId: string) => {
-    const { error } = await (supabase.from("sales") as any)
-      .update({ trade_in_id: tradeInId, has_trade_in: true })
-      .eq("id", saleId)
-
-    if (error) {
-      console.error("Erro ao vincular trade-in à venda:", error)
-      throw new Error(error.message || "Erro ao vincular aparelho recebido à venda")
-    }
-  }, [])
-
-  const updateTradeInWithInventoryLink = useCallback(async (
-    tradeInId: string,
-    inventoryId?: string | null,
-    status: "received" | "added_to_stock" = "added_to_stock"
-  ) => {
-    if (!inventoryId) return
-    const { error } = await (supabase.from("trade_ins") as any)
-      .update({ linked_inventory_id: inventoryId, status })
-      .eq("id", tradeInId)
-
-    if (error) {
-      console.error("Erro ao vincular trade-in ao estoque:", error)
-    }
-  }, [])
-
   const handleConfirm = async () => {
     setIsSubmitting(true)
     try {
@@ -1441,201 +1354,83 @@ function NewSaleContent() {
           ? tradeInOverageDecision === "credit" ? "trade_in_credit" : "trade_in_return"
           : null)
 
-      // 2. Register the sale (sale_price = total including quantity)
-      const { data: sale, error: saleError } = await (supabase
-        .from("sales") as any)
-        .insert({
-          company_id: companyId,
-          inventory_id: selectedProduct!.id,
-          customer_id: customerId,
-          sale_price: finalTotal,
-          net_amount: saleEconomics.storeCashReceives,
-          card_fee_pct: saleEconomics.feePct || 0,
-          payment_method: resolvedPaymentMethod,
-          warranty_months: parseInt(warrantyMonths),
-          warranty_start: today,
-          warranty_end: warrantyEnd,
-          source_type: selectedProduct?.type || "own",
-          supplier_name: selectedProduct?.type === "supplier" ? (selectedProduct.supplier_name || null) : null,
-          supplier_cost: selectedProduct?.type === "supplier" ? (parseFloat(supplierCostInput) || 0) : null,
-          sale_status: isReservation ? "reserved" : "completed",
-          payment_due_date: finalPaymentRows.find((payment) => payment.status === "pending")?.due_date || null,
-          sale_date: today,
-          sale_origin: saleOrigin || "unknown",
-          marketing_campaign_id: saleOrigin === "trafego_pago" && marketingCampaignId ? marketingCampaignId : null,
-          marketing_lead_id: marketingLeadId || null,
-          lead_notes: leadNotes || null,
-          packaging_type: packagingType || null,
-          packaging_notes: packagingType === "other" ? packagingNotes.trim() || null : null,
-          notes: saleOperationalNotes,
-          // O banco exige trade_in_id quando has_trade_in=true. Como o trade-in
-          // só existe depois que a venda é criada, ligamos essa flag no vínculo.
-          has_trade_in: false,
-        })
-        .select()
-        .single()
+      // 2. Upload trade-in photos and register all sale data atomically
+      const uploadedTradeInPhotos = hasTradeIn && tradeInModels[tradeIn.modelIdx]
+        ? await uploadTradeInPhotos(companyId, "")
+        : []
 
-      if (saleError) {
-        console.error("Erro ao registrar venda:", saleError)
-        throw new Error(saleError.message)
-      }
-
-      if (marketingLeadId) {
-        await (supabase.from("marketing_leads") as any)
-          .update({
-            status: "sold",
-            sale_id: sale.id,
-            campaign_id: marketingCampaignId || null,
-          })
-          .eq("id", marketingLeadId)
-      }
-
-      if (selectedProduct?.type !== "supplier") {
-        await updateInventoryStock(selectedProduct!.id, quantity, isReservation ? "reserved" : "sold")
-      }
-
-      // 2b. Save additional items (upsell / brinde). Prices/costs are expanded by quantity.
-      for (const additionalItem of additionalSaleItems) {
-        const qty = additionalItem.qty || 1
-        const itemSalePrice = additionalItem.type === "upsell"
-          ? parseFloat(additionalItem.salePrice) * qty
-          : 0
-
-        const { error: additionalItemError } = await (supabase.from("sales_additional_items") as any).insert({
-          company_id: companyId,
-          sale_id: sale.id,
-          product_id: additionalItem.itemId,
-          type: additionalItem.type,
-          name: additionalItem.name,
-          cost_price: additionalItem.cost * qty,
-          sale_price: itemSalePrice,
-        })
-
-        if (additionalItemError) {
-          console.error("Erro ao registrar item adicional:", additionalItemError)
-          throw new Error(additionalItemError.message || "Erro ao registrar item adicional na venda")
-        }
-
-        try {
-          const { data: inventoryItem, error: checkError } = await (supabase
-            .from("inventory") as any)
-            .select("status")
-            .eq("id", additionalItem.itemId)
-            .single()
-
-          if (checkError) {
-            console.error("Erro ao verificar estoque do item adicional:", checkError)
-          } else if (!["active", "in_stock"].includes(inventoryItem?.status)) {
-            console.warn(`Item adicional ${additionalItem.itemId} não está mais em estoque. Status: ${inventoryItem?.status}`)
-          }
-
-          await updateInventoryStock(additionalItem.itemId, qty, isReservation ? "reserved" : "sold")
-        } catch (invError) {
-          console.error("Erro ao atualizar estoque do item adicional:", invError)
-        }
-      }
-
-      // 3. Handle trade-in if active
-      if (hasTradeIn && tradeInModels[tradeIn.modelIdx]) {
-        const tradeInValue = parseFloat(tradeIn.value) || 0
-        const uploadedTradeInPhotos = await uploadTradeInPhotos(companyId, sale.id)
-
-        const { data: tradeInRow, error: tradeInError } = await ((supabase
-          .from("trade_ins") as any)
-          .insert({
-            company_id: companyId,
-            imei: tradeIn.imei || null,
-            grade: tradeIn.grade || null,
-            trade_in_value: tradeInValue,
-            status: "received",
-            photos: uploadedTradeInPhotos.length > 0 ? uploadedTradeInPhotos : null,
-            notes: tradeInModels[tradeIn.modelIdx].name,
-            condition_notes: saleNotes || null,
-          })
-          .select("id")
-          .single())
-
-        if (tradeInError) {
-          console.error("Erro ao registrar trade-in:", tradeInError)
-          throw new Error(tradeInError.message || "Erro ao registrar aparelho recebido na troca")
-        } else if (tradeInRow?.id) {
-          await updateSaleTradeInLink(sale.id, tradeInRow.id)
-
-          const inferredStatus = isReservation ? "trade_in_received" : getTradeInInventoryStatus()
-          const inventoryTradeIn = await createTradeInInventoryItem({
-            companyId,
-            saleId: sale.id,
-            tradeInValue,
-            status: inferredStatus,
-          })
-
-          await updateTradeInWithInventoryLink(
-            tradeInRow.id,
-            inventoryTradeIn?.id,
-            isReservation ? "received" : "added_to_stock"
-          )
-        }
-      }
-
-      const salePaymentInsertRows = finalPaymentRows.map((payment) => ({
-        company_id: companyId,
-        sale_id: sale.id,
-        payment_method: payment.payment_method,
-        amount: payment.amount,
-        status: payment.status,
-        due_date: payment.due_date || today,
-        received_date: payment.status === "received" ? today : null,
-        financial_account_id: isFinancialPayment(payment.payment_method) ? payment.financial_account_id || null : null,
-        notes: payment.notes || null,
-      }))
-
-      const { data: insertedPayments, error: paymentError } = await (supabase.from("sale_payments") as any)
-        .insert(salePaymentInsertRows)
-        .select("id, payment_method, amount, status, due_date, financial_account_id")
-      if (paymentError) throw new Error(paymentError.message || "Erro ao registrar pagamentos da venda")
-
-      const validateResult = await (supabase as any).rpc("validate_sale_payment_total", { p_sale_id: sale.id })
-      if (validateResult.error) throw new Error(validateResult.error.message || "Soma dos pagamentos inválida")
-
-      for (const payment of insertedPayments || []) {
-        if (!isFinancialPayment(payment.payment_method)) continue
-        const transactionStatus = payment.status === "received" ? "reconciled" : "pending"
-        const transactionId = await upsertSalePaymentReceivable({
-          supabase,
-          companyId,
-          saleId: sale.id,
-          paymentId: payment.id,
-          accountId: payment.financial_account_id || null,
-          amount: Number(payment.amount || 0),
-          saleDate: transactionStatus === "reconciled" ? today : payment.due_date || today,
-          dueDate: payment.due_date || today,
-          paymentMethod: payment.payment_method,
-          description: `${isReservation ? "Reserva" : "Venda"} · ${selectedProduct!.name} · ${formatPaymentMethod(payment.payment_method)}`,
-          status: transactionStatus,
-        })
-
-        if (transactionId) {
-          await (supabase.from("sale_payments") as any)
-            .update({ transaction_id: transactionId })
-            .eq("id", payment.id)
-        }
-
-        if (transactionStatus === "reconciled" && transactionId) {
-          await requestSyncTransactionMovement(transactionId, { createdBy: user.id })
-        }
-      }
-
-      if (storeAmountDue > 0 && tradeInOverageDecision === "change") {
-        await upsertTradeInChangePayable({
-          supabase,
-          companyId,
-          saleId: sale.id,
-          amount: storeAmountDue,
+      const saleResponse = await fetch("/api/sales", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inventoryId: selectedProduct!.id,
+          customerId,
+          customerName: customer.name || null,
+          finalTotal,
+          netAmount: saleEconomics.storeCashReceives,
+          cardFeePct: saleEconomics.feePct || 0,
+          paymentMethod: resolvedPaymentMethod,
+          warrantyMonths: parseInt(warrantyMonths),
+          warrantyStart: today,
+          warrantyEnd,
+          sourceType: selectedProduct?.type || "own",
+          supplierName: selectedProduct?.type === "supplier" ? (selectedProduct.supplier_name || null) : null,
+          supplierCost: selectedProduct?.type === "supplier" ? (parseFloat(supplierCostInput) || 0) : null,
+          saleStatus: isReservation ? "reserved" : "completed",
+          paymentDueDate: finalPaymentRows.find((p) => p.status === "pending")?.due_date || null,
           saleDate: today,
-          dueDate: today,
-          description: `Troco de trade-in · ${selectedProduct!.name} · ${customer.name || "Cliente"}`,
-        })
+          saleOrigin: saleOrigin || "unknown",
+          marketingCampaignId: saleOrigin === "trafego_pago" && marketingCampaignId ? marketingCampaignId : null,
+          marketingLeadId: marketingLeadId || null,
+          leadNotes: leadNotes || null,
+          packagingType: packagingType || null,
+          packagingNotes: packagingType === "other" ? packagingNotes.trim() || null : null,
+          notes: saleOperationalNotes,
+          quantity,
+          isReservation,
+          productName: selectedProduct!.name,
+          additionalItems: additionalSaleItems.map((item) => ({
+            itemId: item.itemId,
+            type: item.type,
+            name: item.name,
+            cost: item.cost * (item.qty || 1),
+            salePrice: item.type === "upsell" ? parseFloat(item.salePrice) * (item.qty || 1) : 0,
+            qty: item.qty || 1,
+          })),
+          payments: finalPaymentRows.map((payment) => ({
+            paymentMethod: payment.payment_method,
+            amount: payment.amount,
+            status: payment.status,
+            dueDate: payment.due_date || today,
+            financialAccountId: isFinancialPayment(payment.payment_method) ? payment.financial_account_id || null : null,
+            notes: payment.notes || null,
+          })),
+          ...(hasTradeIn && tradeInModels[tradeIn.modelIdx] ? {
+            tradeIn: {
+              imei: tradeIn.imei || null,
+              grade: tradeIn.grade || null,
+              value: parseFloat(tradeIn.value) || 0,
+              photos: uploadedTradeInPhotos.length > 0 ? uploadedTradeInPhotos : null,
+              modelName: tradeInModels[tradeIn.modelIdx].name,
+              conditionNotes: saleNotes || null,
+              inventoryStatus: isReservation ? "trade_in_received" : getTradeInInventoryStatus(),
+              ...(storeAmountDue > 0 && tradeInOverageDecision
+                ? { overageHandling: tradeInOverageDecision as "credit" | "change", overageAmount: storeAmountDue }
+                : {}),
+            },
+          } : {}),
+        }),
+      })
+
+      if (!saleResponse.ok) {
+        const errBody = await saleResponse.json().catch(() => ({ error: { message: "Erro desconhecido" } }))
+        throw new Error(errBody?.error?.message || `Erro ao registrar venda (${saleResponse.status})`)
       }
+
+      const saleResult = await saleResponse.json()
+      if (!saleResult?.data?.saleId) throw new Error("Resposta inválida ao registrar venda.")
+
+      const sale = { id: saleResult.data.saleId as string }
 
       if (!isReservation) try {
         const additionalItemsSummary = additionalSaleItems.length

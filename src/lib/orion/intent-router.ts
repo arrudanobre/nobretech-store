@@ -1,6 +1,7 @@
 import "server-only"
 
 import { classifyIntentWithAI } from "./ai-intent-classifier"
+import { isFinancialDecisionRequest, isFinancialTraceabilityRequest } from "./financial-traceability-router"
 import type { OrionConversationIntent, OrionIntentRouteSummary, OrionMissionContextPolicy, OrionOperationalConversationState } from "./types"
 import type { CommercialSubjectResolution } from "./commercial-subject-resolver"
 
@@ -76,6 +77,14 @@ export function classifyOrionIntent(input: {
   const subject = input.commercialSubject
 
   if (!text) return route("unrelated_question", "ignore", "Mensagem vazia ou sem intenção operacional.", 0.4)
+
+  if (isFinancialTraceabilityRequest(input.message)) {
+    return route("financial_traceability", "ignore", "Pedido de detalhamento financeiro deve usar snapshots auditáveis e ignorar missão comercial ativa.", 0.94)
+  }
+
+  if (isFinancialDecisionRequest(input.message)) {
+    return route("financial_analysis", "ignore", "Pergunta de decisão financeira deve usar snapshots financeiros e ignorar missão comercial ativa.", 0.93)
+  }
 
   if (/\b(saude financeira|saude da empresa|financeiro da empresa|como esta a empresa|como esta meu negocio|situacao financeira|visao geral|resumo geral|empresa como um todo|operacao como um todo)\b/.test(text)) {
     return route("financial_analysis", "ignore", "Pergunta financeira ou global vence qualquer missão comercial ativa.", 0.96)

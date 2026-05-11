@@ -12,6 +12,7 @@ export type { OrionExecutionGuardrails } from "./types"
 
 const FINANCIAL_MODES = new Set<OrionReasoningMode>([
   "financial_decision",
+  "financial_traceability",
   "withdrawal_safety",
   "reinvestment_decision",
   "working_capital_analysis",
@@ -87,7 +88,7 @@ export function buildExecutionGuardrails(input: {
     return blockAll("Modo financeiro ativo; campanha, tráfego, copy e mix de produtos ficam bloqueados.")
   }
 
-  if (input.intentRoute?.missionContextPolicy === "ignore" && intent === "financial_analysis") {
+  if (input.intentRoute?.missionContextPolicy === "ignore" && (intent === "financial_analysis" || intent === "financial_traceability")) {
     return blockAll("Pergunta financeira ignora missão ativa; execução comercial bloqueada.")
   }
 

@@ -10,23 +10,57 @@ declare global {
   var nobretechPool: Pool | undefined
 }
 
+// NEXT_PHASE=phase-production-build during `next build` — no actual DB connections are made.
+// The SSL guard must only fire at runtime, not during static analysis/build.
+const isBuildPhase = process.env.NEXT_PHASE === "phase-production-build"
+
+const buildSslConfig = () => {
+  if (!connectionString?.includes("railway")) return undefined
+  const ca = process.env.DATABASE_SSL_CA
+  if (ca) return { ca, rejectUnauthorized: true }
+  // In production runtime, unverified SSL is not permitted — fail fast at startup.
+  if (process.env.NODE_ENV === "production" && !isBuildPhase) {
+    throw new Error(
+      "[db] DATABASE_SSL_CA must be configured in production. " +
+      "Download the certificate from Railway > your project > Settings > Database > Public Certificate."
+    )
+  }
+  console.warn("[db] DATABASE_SSL_CA não configurada — SSL sem verificação de certificado. Configure em produção.")
+  return { rejectUnauthorized: false }
+}
+
+const isNewPool = !globalThis.nobretechPool
+
 export const pool =
   globalThis.nobretechPool ||
   new Pool({
     connectionString,
-    ssl: connectionString?.includes("railway") ? { rejectUnauthorized: false } : undefined,
+    ssl: buildSslConfig(),
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000,
   })
 
 if (process.env.NODE_ENV !== "production") {
   globalThis.nobretechPool = pool
 }
 
-export const DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
-export const DEFAULT_USER_EMAIL = "arrudanobre@gmail.com"
+if (isNewPool) {
+  pool.on("connect", (client) => {
+    // 8 s cap on all statements — protects against runaway queries on shared pool.
+    client.query("SET statement_timeout = '8000'").catch(() => {})
+  })
+}
+
+export const DEFAULT_USER_ID = process.env.SEED_USER_ID || "00000000-0000-0000-0000-000000000001"
+export const DEFAULT_USER_EMAIL = process.env.SEED_USER_EMAIL || ""
 
 export async function ensureDefaultCompanyAndUser() {
   if (process.env.NODE_ENV === "production") {
     throw new Error("ensureDefaultCompanyAndUser cannot be used in production")
+  }
+  if (!DEFAULT_USER_EMAIL) {
+    throw new Error("SEED_USER_EMAIL não configurada no .env.local. Adicione antes de rodar o seed.")
   }
 
   await pool.query(`

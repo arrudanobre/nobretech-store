@@ -23,6 +23,7 @@ let extractOperationalGoal: typeof import("./goal-extractor").extractOperational
 let buildOperationalPlan: typeof import("./operational-planning-engine").buildOperationalPlan
 let buildOperationalConversationState: typeof import("./operational-conversation-state").buildOperationalConversationState
 let selectReasoningMode: typeof import("./reasoning-mode-selector").selectReasoningMode
+let classifyOrionIntent: typeof import("./intent-router").classifyOrionIntent
 let buildOperationalExecutionAnswer: typeof import("./strategic-copilot").buildOperationalExecutionAnswer
 let shouldUseOperationalExecutionAnswer: typeof import("./strategic-copilot").shouldUseOperationalExecutionAnswer
 
@@ -54,6 +55,16 @@ const inventoryRoute: OrionIntentRouteSummary = {
   rebuildMissionContext: false,
   reason: "Pergunta de estoque.",
   confidence: 0.86,
+}
+
+const traceabilityRoute: OrionIntentRouteSummary = {
+  intent: "financial_traceability",
+  missionContextPolicy: "ignore",
+  useMissionContext: false,
+  ignoreMissionContext: true,
+  rebuildMissionContext: false,
+  reason: "Pedido de rastreabilidade financeira.",
+  confidence: 0.94,
 }
 
 function snapshot(): OrionSnapshot {
@@ -212,9 +223,34 @@ async function main() {
   ;({ buildOperationalPlan } = await import("./operational-planning-engine"))
   ;({ buildOperationalConversationState } = await import("./operational-conversation-state"))
   ;({ selectReasoningMode } = await import("./reasoning-mode-selector"))
+  ;({ classifyOrionIntent } = await import("./intent-router"))
   ;({ buildOperationalExecutionAnswer, shouldUseOperationalExecutionAnswer } = await import("./strategic-copilot"));
 
 {
+  const questions = [
+    "Estratifique minhas retiradas de lucro",
+    "Extraia minhas devoluções de aporte",
+    "Detalhe de onde veio meu caixa",
+    "Abra esse valor de lucro realizado",
+  ]
+  for (const question of questions) {
+    const route = classifyOrionIntent({ message: question, previousState: activeMissionState() })
+    assert.equal(route.intent, "financial_traceability")
+    assert.equal(route.ignoreMissionContext, true)
+    const goal = extractOperationalGoal({ message: question, previousState: activeMissionState(), intentRoute: route })
+    const mode = selectReasoningMode({ goal, intentRoute: route })
+    assert.equal(mode, "financial_traceability")
+    const guardrails = buildExecutionGuardrails({ reasoningMode: mode, goal, intentRoute: traceabilityRoute, previousState: activeMissionState() })
+    assert.equal(guardrails.allowCampaignGeneration, false)
+    assert.equal(guardrails.allowProductMixGeneration, false)
+    assert.equal(guardrails.allowTrafficRecommendation, false)
+  }
+}
+
+{
+  const routed = classifyOrionIntent({ message: "Posso sacar 2500 agora sem me comprometer?", previousState: activeMissionState() })
+  assert.equal(routed.intent, "financial_analysis")
+  assert.equal(routed.ignoreMissionContext, true)
   const goal = extractOperationalGoal({
     message: "Posso sacar 2500 agora sem me comprometer?",
     previousState: activeMissionState(),
@@ -261,7 +297,7 @@ async function main() {
     conversationState: state,
   })
   assert.doesNotMatch(forcedAnswer, /Campanha|Headline|Copy|Tráfego|iPhone/i)
-  assert.match(forcedAnswer, /Retirada segura|teto conservador|Liquidez disponível/i)
+  assert.match(forcedAnswer, /limite prudente|lucro do período|retirada/i)
 }
 
 {

@@ -10,6 +10,7 @@ const ORION_INTENT_MODEL = process.env.ORION_INTENT_OPENAI_MODEL
 
 const allowedIntents = new Set<OrionConversationIntent>([
   "global_business_question",
+  "financial_traceability",
   "pricing_refinement",
   "offer_refinement",
   "marketing_execution",
@@ -34,6 +35,7 @@ const intentSchema = {
       enum: [
         "pricing_refinement",
         "global_business_question",
+        "financial_traceability",
         "offer_refinement",
         "marketing_execution",
         "financial_analysis",
@@ -185,6 +187,7 @@ export async function classifyIntentWithAI(input: {
         "Não invente produto, preço, margem, estoque ou disponibilidade.",
         "Use commercialSubject apenas como evidência do banco; se ele estiver vazio ou ambíguo, não invente.",
         "Perguntas globais sobre empresa, caixa ou saúde financeira devem ser financial_analysis com policy ignore.",
+        "Pedidos para listar, mostrar, detalhar, estratificar, extrair, abrir, quebrar ou explicar composição de movimentos financeiros devem ser financial_traceability com policy ignore.",
         "Perguntas sobre saque, retirada do dono, retirada segura, pagar contas, reinvestir ou capital de giro são financial_analysis com policy ignore, mesmo que exista missão comercial ativa.",
         "Refinamento de preço, menor valor, desconto, margem ou apertar valor deve ser pricing_refinement; use mission context se não houver produto novo citado.",
         "Pedido de campanha, anúncio, copy, criativo, Stories, WhatsApp ou tráfego deve ser marketing_execution.",

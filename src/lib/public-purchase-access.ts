@@ -12,7 +12,6 @@ const LOCK_MINUTES = 15
 
 export type PublicPurchaseIntro = {
   available: boolean
-  customerFirstName: string | null
   lockedUntil: string | null
   message?: string
 }
@@ -690,7 +689,6 @@ export async function getPublicPurchaseIntro(token: string): Promise<PublicPurch
   if (!isAvailable(row)) {
     return {
       available: false,
-      customerFirstName: null,
       lockedUntil: null,
       message: "Esta compra não está disponível para consulta.",
     }
@@ -698,7 +696,6 @@ export async function getPublicPurchaseIntro(token: string): Promise<PublicPurch
 
   return {
     available: true,
-    customerFirstName: firstName(row?.customer_name) || "cliente",
     lockedUntil: row && isLocked(row) ? new Date(row.public_access_locked_until as string).toISOString() : null,
   }
 }

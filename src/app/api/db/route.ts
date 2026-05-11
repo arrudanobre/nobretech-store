@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { pool } from "@/lib/db"
 import { requireApiAuthContext } from "@/lib/auth-context"
+import { checkRateLimit } from "@/lib/rate-limit"
 import { syncAccountBalanceFromLedger } from "@/lib/financial/ledger-balance-engine"
 import { canAccess, canDeleteSensitiveRecords, canEditFinance, canManageUsers } from "@/lib/permissions"
 import {
@@ -13,6 +14,13 @@ import {
 
 type Filter = { op: "eq" | "neq" | "gte" | "lte" | "in" | "match" | "or"; column?: string; value: unknown }
 type Order = { column: string; ascending?: boolean }
+
+const MAX_DB_BODY_BYTES = 128 * 1024 // 128 KB
+const MAX_FILTERS = 20
+const MAX_FILTER_STRING_LENGTH = 200
+const MAX_OR_CONDITIONS = 5
+const MAX_LIMIT = 200
+const DEFAULT_LIMIT = 100
 
 const SIMPLE_IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 const TABLES_WITH_COMPANY = new Set([
@@ -773,6 +781,37 @@ async function hydrateProblems(rows: Record<string, unknown>[], companyId: strin
   }
 }
 
+function validateFilters(filters: Filter[]): string | null {
+  if (filters.length > MAX_FILTERS) {
+    return `Número de filtros excede o limite de ${MAX_FILTERS}.`
+  }
+  for (const filter of filters) {
+    if (filter.op === "or" && typeof filter.value === "string") {
+      const clauses = splitTopLevel(filter.value)
+      if (clauses.length > MAX_OR_CONDITIONS) {
+        return `Filtro OR excede o limite de ${MAX_OR_CONDITIONS} condições.`
+      }
+      if (filter.value.length > MAX_FILTER_STRING_LENGTH * MAX_OR_CONDITIONS) {
+        return "Filtro OR muito longo."
+      }
+    }
+    if (filter.op !== "or" && typeof filter.value === "string" && filter.value.length > MAX_FILTER_STRING_LENGTH) {
+      return `Valor de filtro excede ${MAX_FILTER_STRING_LENGTH} caracteres.`
+    }
+    if (filter.op === "in" && Array.isArray(filter.value)) {
+      if (filter.value.length > MAX_FILTERS) {
+        return `Array de filtro IN excede o limite de ${MAX_FILTERS} valores.`
+      }
+      for (const v of filter.value) {
+        if (typeof v === "string" && v.length > MAX_FILTER_STRING_LENGTH) {
+          return `Valor em filtro IN excede ${MAX_FILTER_STRING_LENGTH} caracteres.`
+        }
+      }
+    }
+  }
+  return null
+}
+
 async function hydrateChecklists(rows: Record<string, unknown>[], companyId: string) {
   const inventory = await getByIds("inventory", rows.map((row) => row.inventory_id), companyId)
   await hydrateInventory(Array.from(inventory.values()), companyId)
@@ -786,12 +825,37 @@ export async function POST(request: Request) {
     const authResult = await requireApiAuthContext()
     if (!authResult.ok) return authResult.response
 
-    const body = await request.json()
+    const { companyId, role, appUserId } = authResult.context
+
+    const rateLimitResult = checkRateLimit(`db:${appUserId}`, 120, 60_000)
+    if (!rateLimitResult.ok) {
+      return NextResponse.json(
+        { data: null, error: { message: "Muitas requisições. Tente novamente em alguns segundos." } },
+        {
+          status: 429,
+          headers: { "Retry-After": String(Math.ceil(rateLimitResult.retryAfterMs / 1000)) },
+        }
+      )
+    }
+
+    const rawBody = await request.text()
+    if (rawBody.length > MAX_DB_BODY_BYTES) {
+      return NextResponse.json({ data: null, error: { message: "Payload muito grande." } }, { status: 413 })
+    }
+    let body: Record<string, unknown>
+    try {
+      body = JSON.parse(rawBody) as Record<string, unknown>
+    } catch {
+      return NextResponse.json({ data: null, error: { message: "JSON inválido." } }, { status: 400 })
+    }
+
     const table = String(body.table || "")
     const action = String(body.action || "select")
     if (!SIMPLE_IDENTIFIER.test(table)) throw new Error("Invalid table")
 
-    const { companyId, role, appUserId } = authResult.context
+    const rawFilters = (body.filters || []) as Filter[]
+    const filterError = validateFilters(rawFilters)
+    if (filterError) return NextResponse.json({ data: null, error: { message: filterError } }, { status: 400 })
 
     if (action === "rpc") {
       const rpcName = String(body.rpc || "")
@@ -814,7 +878,7 @@ export async function POST(request: Request) {
 
     const params: unknown[] = []
     const where: string[] = []
-    for (const filter of (body.filters || []) as Filter[]) addFilter(where, params, filter)
+    for (const filter of rawFilters) addFilter(where, params, filter)
     const userFilterCount = where.length
     const tableHasCompany = TABLES_WITH_COMPANY.has(table)
 
@@ -823,7 +887,7 @@ export async function POST(request: Request) {
       if (permissionError) return forbidden(permissionError)
       addCompanyScope(table, companyId, where, params)
 
-      const columns = parseColumns(body.select)
+      const columns = parseColumns(body.select as string | undefined)
       let sql = `SELECT ${columns} FROM ${ident(table)}`
       if (where.length) sql += ` WHERE ${where.join(" AND ")}`
 
@@ -832,8 +896,19 @@ export async function POST(request: Request) {
         sql += ` ORDER BY ${ident(order.column)} ${order.ascending === false ? "DESC" : "ASC"}`
       }
 
-      const limit = Number.isFinite(body.limit) ? Number(body.limit) : null
-      if (limit !== null) sql += ` LIMIT ${limit}`
+      let limit: number
+      if (body.limit === undefined || body.limit === null) {
+        limit = DEFAULT_LIMIT
+      } else if (!Number.isFinite(body.limit) || !Number.isInteger(body.limit)) {
+        return NextResponse.json({ data: null, error: { message: "O parâmetro limit deve ser um número inteiro." } }, { status: 400 })
+      } else if (Number(body.limit) <= 0) {
+        return NextResponse.json({ data: null, error: { message: "O parâmetro limit deve ser maior que zero." } }, { status: 400 })
+      } else if (Number(body.limit) > MAX_LIMIT) {
+        return NextResponse.json({ data: null, error: { message: "Limite máximo permitido é 200." } }, { status: 400 })
+      } else {
+        limit = Number(body.limit)
+      }
+      sql += ` LIMIT ${limit}`
       if (Number.isFinite(body.offset)) sql += ` OFFSET ${Number(body.offset)}`
 
       const result = await pool.query(sql, params)
@@ -871,7 +946,7 @@ export async function POST(request: Request) {
 
       let sql = `INSERT INTO ${ident(table)} (${columns.map(ident).join(", ")}) VALUES ${tuples.join(", ")}`
       if (action === "upsert") {
-        const conflict = body.onConflict && SIMPLE_IDENTIFIER.test(body.onConflict) ? body.onConflict : "id"
+        const conflict = typeof body.onConflict === "string" && SIMPLE_IDENTIFIER.test(body.onConflict) ? body.onConflict : "id"
         const updates = columns
           .filter((column) => column !== conflict)
           .filter((column) => !(tableHasCompany && column === "company_id"))
@@ -1000,6 +1075,6 @@ export async function POST(request: Request) {
 
 function finalizeRows(rows: Record<string, unknown>[], body: Record<string, unknown>) {
   const normalized = normalizeRows(rows)
-  if (body.single || body.maybeSingle) return normalized[0] || null
+  if (body.single || body.maybeSingle) return normalized[0] ?? null
   return normalized
 }

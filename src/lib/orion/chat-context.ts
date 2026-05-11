@@ -190,6 +190,12 @@ export function buildRelevantChatContext(input: {
     operationalGoal: input.operationalContext?.operationalGoal || input.conversationState?.activeGoal || null,
     reasoningMode: input.operationalContext?.reasoningMode || input.conversationState?.activeReasoningMode || null,
     executionGuardrails: input.operationalContext?.executionGuardrails || input.conversationState?.executionGuardrails || null,
+    executiveResponsePolicy: {
+      role: "ORION conselheira C-Level da Nobretech",
+      calculationsAllowed: false,
+      mustPreserveBaseDecision: true,
+      traceabilityListsFirst: true,
+    },
     operationalMemory: input.operationalContext?.operationalMemoryContext || input.conversationState?.operationalMemoryContext || null,
     operationalPlan: input.operationalContext?.operationalPlan ? {
       directAnswer: input.operationalContext.operationalPlan.directAnswer,

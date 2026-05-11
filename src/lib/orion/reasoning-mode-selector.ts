@@ -22,6 +22,7 @@ export function selectReasoningMode(input: {
 
   if (goal?.goalType === "content_generation") return "content_generation"
   if (goal?.goalType === "marketing_execution") return "campaign_generation"
+  if (goal?.goalType === "financial_traceability" || intent === "financial_traceability") return "financial_traceability"
   if (intent === "financial_analysis" || intent === "global_business_question") {
     if (goal?.targetProfit) return "withdrawal_safety"
     if (goal?.optimization === "liquidity") return "working_capital_analysis"

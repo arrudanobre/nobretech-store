@@ -28,7 +28,6 @@ import { generateReceiptPDF, generateWarrantyPDF, type SaleDocumentData } from "
 
 type Intro = {
   available: boolean
-  customerFirstName: string | null
   lockedUntil: string | null
   message?: string
 }
@@ -441,7 +440,7 @@ function PinGate({
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-xs font-bold uppercase tracking-[0.22em] text-royal-100">Compra Verificada</p>
-              <h1 className="mt-2 text-2xl font-bold leading-tight">Bem-vindo, {intro?.customerFirstName || "cliente"}</h1>
+              <h1 className="mt-2 text-2xl font-bold leading-tight">Olá! Digite o PIN para acessar seu pedido.</h1>
               <p className="mt-2 text-sm leading-6 text-white/75">
                 Digite o código de 6 dígitos informado na etiqueta do seu produto.
               </p>

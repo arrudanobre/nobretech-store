@@ -367,7 +367,7 @@ function tagsFrom(input: {
   const financial = input.snapshot?.finance.financialOperationalContext
   const realProfit = input.snapshot?.finance.realProfitSnapshot
   if (financial?.cashHealth === "critical" || financial?.liquidityPressure === "high") tags.push("cash_pressure", "financial_discipline")
-  if (input.intent === "financial_analysis" || isFinancialReasoningMode(input.reasoningMode)) tags.push("real_profit_first", "financial_discipline")
+  if (input.intent === "financial_analysis" || input.intent === "financial_traceability" || isFinancialReasoningMode(input.reasoningMode)) tags.push("real_profit_first", "financial_discipline")
   if (input.goal?.optimization === "margin" || input.reasoningMode === "pricing_strategy") tags.push("margin_protection")
   if (input.goal?.optimization === "liquidity" || input.reasoningMode === "inventory_liquidity" || input.reasoningMode === "inventory_rotation") tags.push("premium_liquidity_risk")
   if (input.reasoningMode === "marketing_execution" || input.reasoningMode === "campaign_generation") tags.push("controlled_traffic", "whatsapp_first")
@@ -519,7 +519,7 @@ function memoryRelatesToSubject(memory: OrionOperationalMemory, signals: Operati
 
 function memoryRelatesToIntent(memory: OrionOperationalMemory, signals: OperationalMemorySignals) {
   if (memory.tags?.some((tag) => signals.tags.includes(tag))) return true
-  if (signals.intent === "financial_analysis") return memory.scope === "financial" || hasAnyTag(memory, ["financial_discipline", "cash_pressure", "real_profit_first"])
+  if (signals.intent === "financial_analysis" || signals.intent === "financial_traceability") return memory.scope === "financial" || hasAnyTag(memory, ["financial_discipline", "cash_pressure", "real_profit_first"])
   if (signals.intent === "pricing_refinement") return hasAnyTag(memory, ["margin_protection", "controlled_discount"])
   if (signals.intent === "marketing_execution" || signals.intent === "new_campaign_request") return hasAnyTag(memory, ["controlled_traffic", "whatsapp_first", "bundle_margin"])
   if (signals.intent === "inventory_analysis") return hasAnyTag(memory, ["inventory_pressure", "premium_liquidity_risk"])
@@ -687,7 +687,7 @@ function buildMemoryGuardrails(input: {
   profile: BusinessPersonalityProfile
   relevantOperationalMemories: OrionMemoryInfluence[]
 }): OrionMemoryGuardrails {
-  const isFinancial = input.signals.intent === "financial_analysis" || isFinancialReasoningMode(input.signals.reasoningMode)
+  const isFinancial = input.signals.intent === "financial_analysis" || input.signals.intent === "financial_traceability" || isFinancialReasoningMode(input.signals.reasoningMode)
   const executionReady = input.signals.reasoningMode === "marketing_execution" || input.signals.reasoningMode === "campaign_generation" || input.signals.reasoningMode === "content_generation"
   const highTrafficRisk = input.profile.executionCapacity === "low" && hasInfluence(input.relevantOperationalMemories, "controlled_traffic")
   return {

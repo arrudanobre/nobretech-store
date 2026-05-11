@@ -3,7 +3,8 @@ import "server-only"
 import { pool } from "@/lib/db"
 import { classifyTransaction } from "@/lib/financial/money-classification-engine"
 import type { OrionFinancialOperationalContext } from "@/lib/orion/financial-context-consumer"
-import { buildFinancialDecisionResponse, buildOwnerMovementListResponse, formatFinancialDecisionResponse } from "@/lib/orion/financial-decision-response"
+import { buildFinancialDecisionResponse, buildFinancialTraceabilityResponse, formatFinancialDecisionResponse } from "@/lib/orion/financial-decision-response"
+import { isFinancialReinvestmentDecisionRequest, isFinancialTraceabilityRequest, isFinancialWithdrawalDecisionRequest } from "@/lib/orion/financial-traceability-router"
 import { calculateOperationalHealth } from "./operational-health-engine"
 import { buildCommercialStrategy } from "./commercial-strategy-engine"
 import { buildScenarioExecutionPlan } from "./scenario-execution-engine"
@@ -286,6 +287,9 @@ function routeIntent(
   const normalized = compactText(question)
 
   if (intentRoute) {
+    if (intentRoute.intent === "financial_traceability") {
+      return { intent: "financial_traceability", toolsUsed: ["financial_tool", "cashflow_tool", "dre_tool", "sales_tool"] }
+    }
     if (intentRoute.intent === "financial_analysis" || intentRoute.intent === "global_business_question") {
       return { intent: "cash_health_analysis", toolsUsed: ["financial_tool", "cashflow_tool", "dre_tool", "sales_tool"] }
     }
@@ -302,6 +306,18 @@ function routeIntent(
       return { intent: "general_question", toolsUsed: ["inventory_tool", "financial_tool", "sales_tool", "crm_tool"] }
     }
     return { intent: "promotion_recommendation", toolsUsed: ["inventory_tool", "sales_tool", "campaign_tool", "pricing_tool", "crm_tool", "financial_tool", "cashflow_tool"] }
+  }
+
+  if (isFinancialTraceabilityRequest(question)) {
+    return { intent: "financial_traceability", toolsUsed: ["financial_tool", "cashflow_tool", "dre_tool", "sales_tool"] }
+  }
+
+  if (isFinancialWithdrawalDecisionRequest(question)) {
+    return { intent: "cash_health_analysis", toolsUsed: ["financial_tool", "cashflow_tool", "dre_tool", "sales_tool"] }
+  }
+
+  if (isFinancialReinvestmentDecisionRequest(question)) {
+    return { intent: "purchase_capacity_analysis", toolsUsed: ["financial_tool", "cashflow_tool", "inventory_tool", "sales_tool"] }
   }
 
   if (questionLooksFinancialGoal(question) || questionLooksFinancialValidation(question)) {
@@ -1100,14 +1116,19 @@ function buildAnswer(intent: OrionBusinessIntent, contexts: Record<string, unkno
   } | null
   const financialContext = finance?.operationalContext || snapshot.finance.financialOperationalContext
   const workingCapital = finance?.workingCapital || snapshot.finance.workingCapitalSnapshot
-  const ownerMovementListAnswer = buildOwnerMovementListResponse(financialContext, question)
-  if (ownerMovementListAnswer) return ownerMovementListAnswer
+  const traceabilityAnswer = buildFinancialTraceabilityResponse(financialContext, question)
+  if (traceabilityAnswer) return traceabilityAnswer
   const product = inventory?.products?.[0]
   const hasSpecificProduct = questionLooksProductSpecific(question)
   const health = calculateOperationalHealth(snapshot)
 
   if (intent === "financial_goal_execution") {
     return financialGoalAnswer(contexts, snapshot, question, health)
+  }
+
+  if (intent === "financial_traceability") {
+    return traceabilityAnswer
+      || "Não encontrei movimentos financeiros detalhados no período selecionado. Os totais agregados continuam disponíveis no snapshot financeiro."
   }
 
   if (questionReferencesUnidentifiedProduct(question) || (intent === "pricing_analysis" && !hasSpecificProduct)) {
@@ -1159,6 +1180,7 @@ function buildAnswer(intent: OrionBusinessIntent, contexts: Record<string, unkno
   if (intent === "purchase_capacity_analysis") {
     return formatFinancialDecisionResponse(buildFinancialDecisionResponse({
       reasoningMode: "reinvestment_decision",
+      userQuestion: question,
       financialContext,
       financialSafetyAudit: workingCapital.financialSafetyAudit,
     }))
@@ -1167,10 +1189,11 @@ function buildAnswer(intent: OrionBusinessIntent, contexts: Record<string, unkno
   if (intent === "cash_health_analysis") {
     const forecast = snapshot.executive.liquidityForecast
     const realProfit = finance?.realProfit || snapshot.finance.realProfitSnapshot
-    if (questionLooksAvailableOperationalProfit(question)) {
+    if (questionLooksAvailableOperationalProfit(question) || isFinancialWithdrawalDecisionRequest(question)) {
       void realProfit
       return formatFinancialDecisionResponse(buildFinancialDecisionResponse({
         reasoningMode: "withdrawal_safety",
+        userQuestion: question,
         financialContext,
         financialSafetyAudit: workingCapital.financialSafetyAudit,
       }))
@@ -1275,6 +1298,7 @@ function buildAnswer(intent: OrionBusinessIntent, contexts: Record<string, unkno
 function buildSummary(intent: OrionBusinessIntent, matchedRecords: number) {
   if (matchedRecords === 0) return "A ORION consultou as áreas necessárias, mas não encontrou registros específicos suficientes."
   const byIntent: Record<OrionBusinessIntent, string> = {
+    financial_traceability: "Rastreabilidade financeira consultada a partir dos movimentos auditáveis do período.",
     financial_goal_execution: "Plano de execução comercial montado a partir de meta financeira, estoque ativo, margem e liquidez.",
     inventory_product_analysis: "Produto consultado no estoque real da empresa.",
     pricing_analysis: "Preço analisado com base em custo, preço sugerido e margem interna.",

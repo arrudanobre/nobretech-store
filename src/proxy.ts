@@ -17,12 +17,17 @@ const isProtectedPageRoute = createRouteMatcher([
   "/crm(.*)",
 ])
 
-const isProtectedApiRoute = createRouteMatcher(["/api/db(.*)"])
+// All /api/* routes require authentication by default.
+// Add routes here only when they must be publicly accessible without Clerk.
+const isPublicApiRoute = createRouteMatcher([
+  "/api/public(.*)",
+])
 
 export default clerkMiddleware(async (auth, req) => {
   const { isAuthenticated, redirectToSignIn } = await auth()
 
-  if (isProtectedApiRoute(req) && !isAuthenticated) {
+  const isApiRoute = req.nextUrl.pathname.startsWith("/api/")
+  if (isApiRoute && !isPublicApiRoute(req) && !isAuthenticated) {
     return Response.json(
       { data: null, error: { message: "Unauthorized" } },
       { status: 401 }

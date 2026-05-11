@@ -3,6 +3,7 @@ import "server-only"
 import { deduplicateAnalysis } from "@/lib/orion/insight-deduplication"
 import { buildRelevantChatContext } from "@/lib/orion/chat-context"
 import { buildOperationalConversationState, summarizeOperationalConversationState } from "@/lib/orion/operational-conversation-state"
+import { ORION_C_LEVEL_SYSTEM_INSTRUCTIONS } from "@/lib/orion/executive-response-layer"
 import type { OrionAnalysis, OrionInsight, OrionOperationalContext, OrionOperationalConversationState, OrionSnapshot } from "@/lib/orion/types"
 import { calculateOperationalHealth, type OperationalHealthScore } from "./operational-health-engine"
 
@@ -280,10 +281,11 @@ export function buildOrionInput(
       "Sempre use verbos de ação pragmáticos e imperativos: 'Reduza', 'Foque', 'Priorize', 'Otimize', 'Evite'.",
       "Responda com profundidade comercial quando houver pedido de venda, campanha, meta, preço, giro ou liquidez. Seja direto, mas entregue execução real.",
       "Use somente os dados internos enviados no JSON.",
+      ORION_C_LEVEL_SYSTEM_INSTRUCTIONS,
       "Para caixa real, use snapshot.finance.reconciledCashBalance e snapshot.finance.cashBalanceSource.",
       "Para período financeiro selecionado, use snapshot.finance.selectedFinancialPeriod. Nunca responda lucro, retirada ou reinvestimento ignorando esse período.",
       "Para lucro realizado, retiradas, aportes, compras de estoque, caixa movimentado e lucro após retiradas no período, use snapshot.finance.profitAvailabilitySnapshot.",
-      "Se o usuário pedir para listar/mostrar/detalhar retiradas, aportes, devoluções de aporte ou movimentos do dono, use os arrays de movimentos em profitAvailabilitySnapshot; não diga que não há detalhamento quando os arrays existirem.",
+      "Se o usuário pedir para listar, mostrar, detalhar, estratificar, extrair, abrir, quebrar ou explicar composição de retiradas, aportes, devoluções de aporte, caixa ou movimentos do dono, use os arrays de movimentos em profitAvailabilitySnapshot; quando houver lista detalhada, responda primeiro com lista/tabela curta antes de qualquer análise.",
       "Para composição do caixa atual e multi-contas, use snapshot.finance.currentCashCompositionSnapshot. Contas indicam localização do dinheiro; composição financeira é consolidada.",
       "Para interpretação financeira, use snapshot.finance.financialOperationalContext quando existir; ele traduz caixa, liquidez, pendências e estimativa operacional sem recalcular financeiro.",
       "Nunca chame availableOperationalProfitEstimate de lucro real, lucro líquido definitivo ou lucro realizado. Trate como estimativa operacional e respeite confidence/reason.",
@@ -308,7 +310,7 @@ export function buildOrionInput(
       "Se o usuário disser 'seguimos', 'vamos nessa', 'monta', 'estrutura', 'cria', 'me dá o texto', isso indica continuidade da missão anterior.",
       "HIERARQUIA COGNITIVA: a pergunta atual sempre vence a missão ativa. Primeiro respeite intentRoute.intent e intentRoute.missionContextPolicy; só depois use activeMissionContext.",
       "Se intentRoute.missionContextPolicy for 'ignore', ignore activeMissionContext, activeProduct, activeOffer e campanhas anteriores. Responda a pergunta atual com dados globais ou operacionais.",
-      "Se intentRoute.intent for financial_analysis ou global_business_question, NÃO responda como continuação comercial e NÃO repita campanha, oferta ou decisão anterior.",
+      "Se intentRoute.intent for financial_analysis, financial_traceability ou global_business_question, NÃO responda como continuação comercial e NÃO repita campanha, oferta ou decisão anterior.",
       "Se intentRoute.intent for product_switch, reconstrua a missão com commercialSubject e não herde oferta, campanha ou bundle do produto anterior.",
       "Se intentRoute.intent for pricing_refinement, offer_refinement, marketing_execution, mission_refinement ou mission_continuation, use activeMissionContext apenas como contexto auxiliar para responder o delta pedido.",
       "commercialSubject vem do banco de dados e vence qualquer regex, prioridade antiga, activeOffer ou mission context anterior.",
