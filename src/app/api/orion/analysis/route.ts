@@ -1,23 +1,30 @@
 import { NextRequest, NextResponse } from "next/server"
 import { canAccess, requireApiAuthContext } from "@/lib/auth-context"
+import { getBoardProductName, getChatProductName, logOrionIntentDebug } from "@/lib/orion/chat-context"
 import { estimateOpenAICostUsd } from "@/lib/orion/cost"
 import { getOrionModel, isOpenAIConfigured, runOrionOpenAI } from "@/lib/orion/ai"
 import { buildOrionBusinessContext, summarizeOperationalContext } from "@/lib/orion/business-query-engine"
+import { resolveCommercialSubject, summarizeCommercialSubjectResolution } from "@/lib/orion/commercial-subject-resolver"
 import { buildOrionExecutionPayload } from "@/lib/orion/execution-payload"
 import { humanizeOrionText, translateOrionAnalysisForExecutive } from "@/lib/orion/executive-translation"
+import { extractOperationalGoal } from "@/lib/orion/goal-extractor"
 import { deduplicateAnalysis } from "@/lib/orion/insight-deduplication"
+import { routeOrionIntent } from "@/lib/orion/intent-router"
 import { calculateOperationalHealth } from "@/lib/orion/operational-health-engine"
-import { applyOperationalMemory, getRecentInsights } from "@/lib/orion/operational-memory"
+import { applyMemoryToOrionContext, applyOperationalMemory, getRecentInsights } from "@/lib/orion/operational-memory"
+import { buildOperationalPlan } from "@/lib/orion/operational-planning-engine"
+import { buildExecutionGuardrails } from "@/lib/orion/execution-guardrails"
+import { resolveProfitAvailabilityPeriod, type ResolveProfitAvailabilityPeriodInput } from "@/lib/financial/profit-availability-engine"
 import {
   buildOperationalConversationState,
   coerceOperationalConversationState,
   summarizeOperationalConversationState,
 } from "@/lib/orion/operational-conversation-state"
+import { isExecutionReasoningMode, selectReasoningMode } from "@/lib/orion/reasoning-mode-selector"
 import {
   buildOperationalExecutionAnswer,
   buildStrategicCopilotAnswer,
   fallbackStrategicCopilotAnswer,
-  isStrategicCopilotQuestion,
   shouldUseOperationalExecutionAnswer,
 } from "@/lib/orion/strategic-copilot"
 import {
@@ -47,6 +54,30 @@ function sanitizeQuestion(value: unknown) {
   return question ? question.slice(0, 600) : null
 }
 
+function financialPeriodFromSearch(request: NextRequest): ResolveProfitAvailabilityPeriodInput {
+  const searchParams = request.nextUrl.searchParams
+  return {
+    preset: searchParams.get("periodPreset"),
+    startDate: searchParams.get("startDate"),
+    endDate: searchParams.get("endDate"),
+  }
+}
+
+function financialPeriodFromBody(body: Record<string, unknown>): ResolveProfitAvailabilityPeriodInput {
+  const raw = body.selectedFinancialPeriod && typeof body.selectedFinancialPeriod === "object"
+    ? body.selectedFinancialPeriod as Record<string, unknown>
+    : body
+  return {
+    preset: typeof raw.periodPreset === "string" ? raw.periodPreset : typeof raw.preset === "string" ? raw.preset : null,
+    startDate: typeof raw.startDate === "string" ? raw.startDate : null,
+    endDate: typeof raw.endDate === "string" ? raw.endDate : null,
+  }
+}
+
+function invalidPeriod(message: string) {
+  return NextResponse.json({ data: null, error: { message } }, { status: 400 })
+}
+
 function sanitizeOperationalContextForClient(operationalContext?: OrionOperationalContext | null): OrionOperationalContext | undefined {
   if (!operationalContext) return undefined
   return {
@@ -59,8 +90,52 @@ function sanitizeOperationalContextForClient(operationalContext?: OrionOperation
     answer: humanizeOrionText(operationalContext.answer),
     evidence: operationalContext.evidence.slice(0, 3).map(humanizeOrionText),
     gaps: operationalContext.gaps.map(humanizeOrionText),
+    intentRoute: operationalContext.intentRoute,
+    commercialSubject: operationalContext.commercialSubject,
+    operationalGoal: operationalContext.operationalGoal,
+    reasoningMode: operationalContext.reasoningMode,
+    executionGuardrails: operationalContext.executionGuardrails,
+    operationalMemoryContext: operationalContext.operationalMemoryContext,
+    operationalPlan: operationalContext.operationalPlan ? {
+      ...operationalContext.operationalPlan,
+      response: humanizeOrionText(operationalContext.operationalPlan.response),
+    } : undefined,
     contexts: {},
   }
+}
+
+function shouldUseStrategicCopilotByRoute(operationalContext?: OrionOperationalContext | null) {
+  const intent = operationalContext?.intentRoute?.intent
+  return intent === "financial_analysis"
+    || intent === "global_business_question"
+    || intent === "inventory_analysis"
+    || intent === "strategic_question"
+    || intent === "operational_question"
+}
+
+function shouldBuildGoalDrivenPlan(input: {
+  goal: ReturnType<typeof extractOperationalGoal> | null
+  intentRoute: Awaited<ReturnType<typeof routeOrionIntent>> | null
+  commercialSubject: ReturnType<typeof summarizeCommercialSubjectResolution> | null
+  previousState: OrionOperationalConversationState | null
+  allowProductMixGeneration: boolean
+}) {
+  if (!input.goal) return false
+  if (!input.allowProductMixGeneration) return false
+  const intent = input.intentRoute?.intent
+  if (input.goal.goalType !== "unknown") return true
+  if (intent === "financial_analysis" || intent === "global_business_question" || intent === "unrelated_question") return false
+  const hasCommercialSubject = Boolean(input.commercialSubject && input.commercialSubject.subjectType !== "unknown" && input.commercialSubject.confidence >= 0.45)
+  const hasActiveMission = Boolean(input.previousState?.activeMissionContext || input.previousState?.activeProduct || input.previousState?.currentProduct)
+  return Boolean(
+    hasCommercialSubject || hasActiveMission
+  ) && (
+    intent === "pricing_refinement"
+    || intent === "offer_refinement"
+    || intent === "inventory_analysis"
+    || intent === "strategic_question"
+    || intent === "operational_question"
+  )
 }
 
 async function buildPayload(
@@ -103,14 +178,57 @@ async function buildPayload(
   const deduplicated = deduplicateAnalysis(withMemory, snapshot, health)
   const executiveAnalysis = translateOrionAnalysisForExecutive(deduplicated)
   const execution = buildOrionExecutionPayload(snapshot, executiveAnalysis, operationalContext)
-  const operationalConversationState = buildOperationalConversationState({
+  let operationalConversationState = buildOperationalConversationState({
     previousState: previousConversationState,
     question: strategicQuestion,
     operationalContext,
     execution,
     snapshot,
+    intentRoute: operationalContext?.intentRoute,
+    commercialSubject: operationalContext?.commercialSubject,
+    operationalGoal: operationalContext?.operationalGoal,
+    reasoningMode: operationalContext?.reasoningMode,
+    executionGuardrails: operationalContext?.executionGuardrails,
+    operationalPlan: operationalContext?.operationalPlan,
   })
-  const operationalExecutionAnswer = strategicQuestion && shouldUseOperationalExecutionAnswer(operationalConversationState)
+  const operationalMemoryContext = applyMemoryToOrionContext({
+    companyId,
+    snapshot,
+    operationalContext,
+    conversationState: operationalConversationState,
+    execution,
+    now: snapshot.generatedAt,
+  })
+  if (operationalContext) {
+    operationalContext.operationalMemoryContext = operationalMemoryContext
+  }
+  operationalConversationState = {
+    ...operationalConversationState,
+    operationalMemoryContext,
+  }
+  const boardProduct = getBoardProductName(execution)
+  const chatProduct = getChatProductName({
+    commercialSubject: operationalConversationState.commercialSubject,
+    missionContext: operationalConversationState.activeMissionContext,
+    conversationState: operationalConversationState,
+  })
+  if (strategicQuestion) {
+    logOrionIntentDebug({
+      userMessage: strategicQuestion,
+      commercialSubject: operationalConversationState.commercialSubject,
+      intentRoute: operationalConversationState.intentRoute,
+      missionContextPolicy: operationalConversationState.intentRoute?.missionContextPolicy,
+      chatProduct,
+      boardProduct,
+    })
+  }
+  const planAnswer = strategicQuestion
+    && operationalContext?.operationalPlan
+    && operationalConversationState.activeReasoningMode
+    && !isExecutionReasoningMode(operationalConversationState.activeReasoningMode)
+    ? operationalContext.operationalPlan.response
+    : null
+  const operationalExecutionAnswer = !planAnswer && strategicQuestion && shouldUseOperationalExecutionAnswer(operationalConversationState)
     ? buildOperationalExecutionAnswer({
         question: strategicQuestion,
         snapshot,
@@ -118,8 +236,8 @@ async function buildPayload(
         conversationState: operationalConversationState,
       })
     : null
-  let strategicCopilotAnswer = operationalExecutionAnswer || strategicAnswerOverride || undefined
-  if (!strategicCopilotAnswer && strategicQuestion && isStrategicCopilotQuestion(strategicQuestion)) {
+  let strategicCopilotAnswer = planAnswer || operationalExecutionAnswer || strategicAnswerOverride || undefined
+  if (!strategicCopilotAnswer && strategicQuestion && shouldUseStrategicCopilotByRoute(operationalContext)) {
     strategicCopilotAnswer = await buildStrategicCopilotAnswer({
       question: strategicQuestion,
       snapshot,
@@ -161,7 +279,7 @@ async function buildPayload(
   }
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const authResult = await requireApiAuthContext()
   if (!authResult.ok) return authResult.response
 
@@ -170,7 +288,10 @@ export async function GET() {
     return forbidden("A ORION AI cruza dados financeiros e está disponível apenas para perfis com acesso ao financeiro.")
   }
 
-  const snapshot = await collectOrionSnapshot(companyId, companyName)
+  const selectedFinancialPeriod = financialPeriodFromSearch(request)
+  const resolvedPeriod = resolveProfitAvailabilityPeriod(selectedFinancialPeriod)
+  if (resolvedPeriod.error) return invalidPeriod(resolvedPeriod.error)
+  const snapshot = await collectOrionSnapshot(companyId, companyName, selectedFinancialPeriod)
   const latest = await getLatestOrionAnalysis(companyId)
   const analysis = latest || buildLocalOrionAnalysis(snapshot)
 
@@ -187,27 +308,115 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json().catch(() => ({})) as Record<string, unknown>
+  const selectedFinancialPeriod = financialPeriodFromBody(body)
+  const resolvedPeriod = resolveProfitAvailabilityPeriod(selectedFinancialPeriod)
+  if (resolvedPeriod.error) return invalidPeriod(resolvedPeriod.error)
   const mode = body.mode === "chat" ? "chat" : "executive"
   const force = Boolean(body.force)
   const question = mode === "chat" ? sanitizeQuestion(body.message) : null
   const previousConversationState = mode === "chat"
     ? coerceOperationalConversationState(body.operationalConversationState || body.conversationState)
     : null
-  const snapshot = await collectOrionSnapshot(companyId, companyName)
-  const operationalContext = mode === "chat" && question
-    ? await buildOrionBusinessContext(companyId, question, snapshot)
+  const snapshot = await collectOrionSnapshot(companyId, companyName, selectedFinancialPeriod)
+  const commercialSubject = mode === "chat" && question
+    ? await resolveCommercialSubject(companyId, question)
     : null
-  const promptConversationState = buildOperationalConversationState({
+  const intentRoute = mode === "chat" && question
+    ? await routeOrionIntent({ message: question, previousState: previousConversationState, commercialSubject })
+    : null
+  const commercialSubjectSummary = summarizeCommercialSubjectResolution(commercialSubject)
+  const operationalContext = mode === "chat" && question
+    ? await buildOrionBusinessContext(companyId, question, snapshot, intentRoute, commercialSubject)
+    : null
+  const operationalGoal = mode === "chat" && question
+    ? extractOperationalGoal({ message: question, previousState: previousConversationState, intentRoute })
+    : null
+  const reasoningMode = mode === "chat" && question && operationalGoal
+    ? selectReasoningMode({ goal: operationalGoal, intentRoute })
+    : null
+  const executionGuardrails = mode === "chat" && question && reasoningMode
+    ? buildExecutionGuardrails({ reasoningMode, goal: operationalGoal, intentRoute, previousState: previousConversationState })
+    : null
+  const preliminaryConversationState = buildOperationalConversationState({
     previousState: previousConversationState,
     question,
     operationalContext,
     snapshot,
+    intentRoute,
+    commercialSubject: commercialSubjectSummary,
+    operationalGoal,
+    reasoningMode,
+    executionGuardrails,
   })
+  const preliminaryMemoryContext = mode === "chat" && question
+    ? applyMemoryToOrionContext({
+        companyId,
+        snapshot,
+        operationalContext,
+        conversationState: preliminaryConversationState,
+        commercialSubject: commercialSubjectSummary,
+        now: snapshot.generatedAt,
+      })
+    : null
+  if (operationalContext) {
+    operationalContext.operationalMemoryContext = preliminaryMemoryContext
+  }
+  const shouldBuildPlan = mode === "chat" && question && reasoningMode && shouldBuildGoalDrivenPlan({
+    goal: operationalGoal,
+    intentRoute,
+    commercialSubject: commercialSubjectSummary,
+    previousState: previousConversationState,
+    allowProductMixGeneration: Boolean(executionGuardrails?.allowProductMixGeneration),
+  })
+  const operationalPlan = shouldBuildPlan && operationalGoal && reasoningMode
+    ? buildOperationalPlan({
+        snapshot,
+        operationalContext,
+        commercialSubject: commercialSubjectSummary,
+        missionContext: preliminaryConversationState.activeMissionContext || previousConversationState?.activeMissionContext || null,
+        goal: operationalGoal,
+        reasoningMode,
+        executionGuardrails,
+        operationalMemoryContext: preliminaryMemoryContext,
+      })
+    : null
+  if (operationalContext) {
+    operationalContext.operationalGoal = operationalGoal || undefined
+    operationalContext.reasoningMode = reasoningMode || undefined
+    operationalContext.executionGuardrails = executionGuardrails || undefined
+    operationalContext.operationalPlan = operationalPlan || undefined
+  }
+  const promptConversationState = {
+    ...buildOperationalConversationState({
+    previousState: previousConversationState,
+    question,
+    operationalContext,
+    snapshot,
+    intentRoute,
+    commercialSubject: commercialSubjectSummary,
+    operationalGoal,
+    reasoningMode,
+    executionGuardrails,
+    operationalPlan,
+    }),
+    operationalMemoryContext: operationalContext?.operationalMemoryContext || null,
+  }
   const dataSnapshot = operationalContext
     ? {
         snapshot,
         operational_context: summarizeOperationalContext(operationalContext),
         operational_conversation_state: summarizeOperationalConversationState(promptConversationState),
+        intent_route: intentRoute,
+        commercial_subject: commercialSubjectSummary,
+        operational_goal: operationalGoal,
+        reasoning_mode: reasoningMode,
+        execution_guardrails: executionGuardrails,
+        operational_plan: operationalPlan ? {
+          directAnswer: operationalPlan.directAnswer,
+          feasibility: operationalPlan.feasibility,
+          productMix: operationalPlan.productMix.slice(0, 5),
+          executionAllowed: operationalPlan.executionAllowed,
+        } : null,
       }
     : snapshot
   const promptHash = hashOrionPrompt({
@@ -216,10 +425,14 @@ export async function POST(request: NextRequest) {
     generatedData: snapshot,
     operationalContext: operationalContext ? summarizeOperationalContext(operationalContext) : null,
     operationalConversationState: summarizeOperationalConversationState(promptConversationState),
+    intentRoute,
+    commercialSubject: commercialSubjectSummary,
+    operationalGoal,
+    reasoningMode,
     model: getOrionModel(),
   })
 
-  if (!force) {
+  if (!force && mode !== "chat") {
     const cached = await getCachedOrionAnalysis(companyId, mode, promptHash)
     if (cached) {
       return NextResponse.json({
@@ -231,8 +444,9 @@ export async function POST(request: NextRequest) {
 
   const usage = await getOrionUsage(companyId)
 
+  const shouldUsePlanAnswer = Boolean(operationalPlan && reasoningMode && !isExecutionReasoningMode(reasoningMode))
   const shouldUseOperationalAnswer = shouldUseOperationalExecutionAnswer(promptConversationState)
-  if (mode === "chat" && question && (shouldUseOperationalAnswer || isStrategicCopilotQuestion(question))) {
+  if (mode === "chat" && question && (shouldUsePlanAnswer || shouldUseOperationalAnswer || shouldUseStrategicCopilotByRoute(operationalContext))) {
     const strategicAnswerOverride = !shouldUseOperationalAnswer && usage.monthlyLimit !== null && usage.callsThisMonth >= usage.monthlyLimit
       ? fallbackStrategicCopilotAnswer()
       : null
@@ -245,7 +459,7 @@ export async function POST(request: NextRequest) {
       analysisType: mode,
       question,
       promptHash,
-      model: shouldUseOperationalAnswer ? "operational-state-machine" : usedFallback ? "strategic-copilot-fallback" : getOrionModel(),
+      model: shouldUsePlanAnswer ? "operational-planning-engine" : shouldUseOperationalAnswer ? "operational-state-machine" : usedFallback ? "strategic-copilot-fallback" : getOrionModel(),
       status: usedFallback ? "error" : "success",
       responseJson: payload.analysis,
       snapshot: dataSnapshot,

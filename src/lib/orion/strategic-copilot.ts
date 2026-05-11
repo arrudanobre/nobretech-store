@@ -1,6 +1,8 @@
 import "server-only"
 
-import { detectOperationalExecutionMode, isExecutionModeOperational, summarizeOperationalConversationState } from "./operational-conversation-state"
+import { isExecutionReasoningMode } from "./reasoning-mode-selector"
+import { isExecutionModeOperational, summarizeOperationalConversationState } from "./operational-conversation-state"
+import { buildFinancialDecisionResponse, formatFinancialDecisionResponse } from "./financial-decision-response"
 import type { OrionExecutionPayload, OrionOperationalConversationState, OrionSnapshot } from "./types"
 
 const ORION_STRATEGIC_MODEL = process.env.ORION_STRATEGIC_OPENAI_MODEL
@@ -102,7 +104,7 @@ Não escreva como relatório. Não pareça um template. Não use títulos entre 
 
 Você receberá dados calculados pelo sistema:
 - caixa
-- lucro livre
+- estimativa operacional de lucro
 - capital protegido
 - contas previstas
 - recebíveis
@@ -124,6 +126,13 @@ Regras absolutas:
 4. Não contradiga os fatos calculados, mas pode discordar da escolha operacional sugerida quando fizer sentido.
 5. Não diga que existe conta negativa se os dados não mostrarem isso.
 6. Não trate saldo bruto como lucro livre.
+6b. Quando existir financialOperationalContext, use essa leitura como tradução financeira primária; não recalcule financeiro e não transforme estimativa operacional em lucro real.
+6c. Quando existir realProfitSnapshot, use-o como fonte de lucro real, capital protegido, retirada e reinvestimento; não calcule margem no Strategic Copilot.
+6d. Quando existir workingCapitalSnapshot, use-o como fonte principal para capital operacional protegido, sobra após contas, retirada segura e reinvestimento seguro. Não use capital histórico como capital protegido atual.
+6d.1. Quando o usuário pedir listagem de retiradas, aportes, devoluções de aporte ou movimentos do dono, use os movimentos detalhados de profitAvailabilitySnapshot; totais agregados não substituem a lista quando ela existir.
+6e. Quando existir operationalMemory, use apenas como contexto comportamental ponderado. Memória não vence dados atuais, ledger, lucro real, estoque ou mission context.
+6f. Quando existir executionGuardrails, obedeça como contrato de permissão. Nenhum módulo downstream pode ampliar permissões; só manter ou reduzir.
+6g. Se executionGuardrails bloquear campanha, tráfego, copy ou mix, não gere campanha, não sugira produto, não monte headline, não entregue CTA comercial e não continue missão ativa.
 7. Não recomende produto vendido, perdido, cancelado ou fora do estoque operacional.
 8. Não ofereça iPhone para lead interessado apenas em iPad, salvo se os dados mostrarem compatibilidade.
 9. Não resuma os cards.
@@ -132,12 +141,17 @@ Regras absolutas:
 12. Se citar número, cite no máximo 2 números na resposta inteira.
 13. Não use os nomes dos cenários internos. Traduza para linguagem natural: caminho equilibrado, abordagem conservadora, acelerar caixa, proteger margem.
 14. Respeite decisões já tomadas em operationalConversationState. Se o dono escolheu um caminho, continue a execução desse caminho, salvo risco operacional claro.
-15. Se o usuário pedir execução com "seguimos", "vamos nessa", "monta", "estrutura", "cria" ou "me dá o texto", não volte para diagnóstico. Entregue peça prática.
+15. Se o usuário pedir execução e executionGuardrails permitir execução comercial, não volte para diagnóstico. Entregue peça prática.
 16. Se o usuário disser "esse produto", "esse iPad" ou "esse combo", resolva pelo foco ativo da missão.
-17. Diferencie testar tráfego, escalar tráfego e pausar tráfego. Se a missão ativa escolheu uma campanha curta ou caminho equilibrado, diga que ainda não é hora de escalar, mas entregue o teste controlado escolhido.
+17. Diferencie testar tráfego, escalar tráfego e pausar tráfego somente quando executionGuardrails permitir tráfego ou campanha.
 18. Não use frases genéricas como "proteja margem", "priorize WhatsApp" ou "use bundle" sem acompanhar com oferta, texto, canal, regra e próxima ação concreta.
-19. Se activeMissionContext existir, ele é a âncora real da missão ativa. Use o produto, oferta, piso, finanças, regras de execução e constraints dele.
-20. Se activeMissionContext existir e a intenção não for new_strategy, não crie campanha do zero. Responda somente ao refinamento pedido.
+19. A pergunta atual sempre vence o mission context. Leia intentRoute antes de usar activeMissionContext.
+20. Se intentRoute.missionContextPolicy for "ignore", ignore activeMissionContext e responda a pergunta global/financeira/operacional atual.
+21. Se intentRoute.intent for financial_analysis ou global_business_question, não continue campanha, não assuma decisão anterior e não diga "vamos seguir o caminho escolhido".
+22. Se intentRoute.intent for product_switch, use commercialSubject para reconstruir o produto da missão e não herde oferta do produto anterior.
+23. Se activeMissionContext existir e intentRoute permitir uso da missão, ele é contexto auxiliar da missão ativa. Responda somente ao refinamento pedido.
+24. Se operationalMemory.memoryGuardrails.avoidAutomaticCampaignCta for true, não encerre com campanha, tráfego, CTA de mídia ou "se quiser eu monto".
+25. Não exponha termos internos vindos de memória, como memoryInfluenceWeight, engine, snapshot, payload, enum ou safe withdrawal.
 
 Comportamento esperado:
 - Escolha um caminho.
@@ -149,7 +163,7 @@ Comportamento esperado:
 - Fale como operador experiente, não como consultor genérico.
 - Não use emojis.
 - Não use termos técnicos internos como payload, engine, score, enum ou snapshot.
-- Reduza tom corporativo. Use frases naturais como: "eu sinceramente não queimaria margem agora", "se fosse minha operação", "o risco aqui não é caixa, é ansiedade", quando isso fizer sentido.
+- Reduza tom corporativo e motivacional. Prefira leitura executiva direta, sem coach, sem promessa e sem CTA automático.
 - Prefira frases naturais e opinião operacional. A resposta pode ter organização, mas precisa soar como conversa estratégica.
 - Traga tese operacional: qual é o problema real, qual caminho importa agora, o que evitar e onde está o risco humano da execução.
 - Pode dizer que tráfego não vale hoje, que é melhor proteger margem, que depender de produto premium é arriscado, ou que o plano está matematicamente correto mas operacionalmente ruim.
@@ -160,7 +174,7 @@ Comportamento esperado:
 - Levante hipóteses com cuidado: "talvez o gargalo seja resposta", "tenho a impressão de que o desconto está entrando cedo", "isso pode virar guerra de preço".
 - Sugira testes simples de operação: uma abordagem de WhatsApp, uma variação de oferta, uma janela curta de campanha, uma prova de interesse antes de aumentar investimento.
 - Separe o que importa do que é ruído. Diga claramente qual decisão realmente move o negócio agora.
-- Quando operationalConversationState.currentExecutionMode for marketing_execution, entregue a campanha completa com: Campanha, Oferta, Headline, Criativo, Stories, WhatsApp, Tráfego, Objetivo, Risco e Validação.
+- Quando operationalConversationState.currentExecutionMode for marketing_execution e executionGuardrails permitir, entregue a campanha completa com: Campanha, Oferta, Headline, Criativo, Stories, WhatsApp, Tráfego, Objetivo, Risco e Validação.
 - Para marketing_execution, não escreva só reflexão estratégica. A resposta precisa sair pronta para copiar, publicar e testar.
 - Se faltar apenas uma informação crítica, faça uma única pergunta objetiva. Se o contexto já indicar produto, canal ou oferta, não pergunte.
 
@@ -262,13 +276,47 @@ function conciseStrategicContext(
 ) {
   const financialGoal = execution.objective.financialGoal
   const priority = execution.priorityAction
+  const operationalMemory = conversationState?.operationalMemoryContext || null
+  const hasUserSubject = Boolean(
+    conversationState?.commercialSubject
+    && conversationState.commercialSubject.subjectType !== "unknown"
+    && conversationState.commercialSubject.confidence >= 0.45
+  )
+  const executionAllowedByReasoning = conversationState?.activeReasoningMode
+    ? isExecutionReasoningMode(conversationState.activeReasoningMode)
+    : conversationState?.currentExecutionMode === "marketing_execution" || conversationState?.executionMode === "marketing_execution"
+  const executionGuardrails = conversationState?.executionGuardrails || null
+  const executionAllowedByGuardrails = Boolean(
+    executionGuardrails?.allowCampaignGeneration
+    || executionGuardrails?.allowCopyGeneration
+    || executionGuardrails?.allowTrafficRecommendation
+  )
+  const routeIgnoresMission = conversationState?.intentRoute?.missionContextPolicy === "ignore"
   const naturalSystemDirection = naturalScenarioLabel(execution.objective.recommendedScenario)
   return {
     companyName: snapshot.companyName,
     userVisibleNumbersNote: "Os números abaixo existem para aterramento. Não recite números que já estão visíveis no board, salvo se forem decisivos.",
     operationalConversationState: summarizeOperationalConversationState(conversationState),
+    intentRoute: conversationState?.intentRoute || null,
+    commercialSubject: conversationState?.commercialSubject || null,
     activeMissionContext: conversationState?.activeMissionContext || null,
-    executionContract: conversationState?.currentExecutionMode === "marketing_execution" || conversationState?.executionMode === "marketing_execution"
+    operationalGoal: conversationState?.activeGoal || null,
+    reasoningMode: conversationState?.activeReasoningMode || null,
+    operationalPlanSummary: conversationState?.activeOperationalPlanSummary || null,
+    operationalMemory: operationalMemory ? {
+      businessPersonalityProfile: operationalMemory.businessPersonalityProfile,
+      memoryGuardrails: operationalMemory.memoryGuardrails,
+      relevantOperationalMemories: operationalMemory.relevantOperationalMemories.map((item) => ({
+        type: item.memory.type,
+        scope: item.memory.scope,
+        summary: item.memory.summary,
+        memoryInfluenceWeight: item.memoryInfluenceWeight,
+        influenceLevel: item.influenceLevel,
+        conflictWithCurrentData: item.conflictWithCurrentData,
+      })),
+    } : null,
+    executionGuardrails,
+    executionContract: executionAllowedByReasoning && executionAllowedByGuardrails
       ? {
           requiredFormat: ["Campanha", "Oferta", "Headline", "Criativo", "Stories", "WhatsApp", "Tráfego", "Objetivo", "Risco", "Validação"],
           rule: "Continuar a missão ativa e entregar execução de marketing pronta, sem reiniciar o raciocínio.",
@@ -299,10 +347,16 @@ function conciseStrategicContext(
       nextDue: financialGoal.nextDueLabel,
       targetProfit: execution.objective.targetProfit,
       gapToGoal: execution.objective.gap,
+      operationalFinancialContext: snapshot.finance.financialOperationalContext,
+      realProfitSnapshot: snapshot.finance.realProfitSnapshot,
+      workingCapitalSnapshot: snapshot.finance.workingCapitalSnapshot,
+      selectedFinancialPeriod: snapshot.finance.selectedFinancialPeriod,
+      profitAvailabilitySnapshot: snapshot.finance.profitAvailabilitySnapshot,
+      currentCashCompositionSnapshot: snapshot.finance.currentCashCompositionSnapshot,
     },
     commercialReality: {
       systemDirection: naturalSystemDirection,
-      priorityProduct: priority?.product
+      priorityProduct: !hasUserSubject && !routeIgnoresMission && priority?.product
         ? {
             name: priority.product.name,
             role: priority.product.role,
@@ -312,7 +366,7 @@ function conciseStrategicContext(
             systemRisk: priority.risk,
           }
         : null,
-      productRoles: execution.products.map((product) => ({
+      productRoles: routeIgnoresMission ? [] : execution.products.map((product) => ({
         name: product.name,
         role: product.role,
         conversionSpeed: product.conversionSpeed,
@@ -320,7 +374,7 @@ function conciseStrategicContext(
         quantity: product.quantity,
         reason: product.reason,
       })),
-      activeInventoryNames: execution.inventory.map((item) => ({
+      activeInventoryNames: routeIgnoresMission ? [] : execution.inventory.map((item) => ({
         name: item.name,
         quantity: item.quantity,
         status: item.status,
@@ -344,7 +398,7 @@ function conciseStrategicContext(
       })),
     },
     offerAndChannelOptions: {
-      bundles: execution.bundles.map((bundle) => ({
+      bundles: routeIgnoresMission ? [] : execution.bundles.map((bundle) => ({
         name: bundle.name,
         posture: naturalScenarioLabel(bundle.promotionMode),
         objective: bundle.objective,
@@ -352,9 +406,9 @@ function conciseStrategicContext(
         minimumSafePrice: bundle.minimumSafePrice,
         promotionNote: bundle.promotionNote,
       })),
-      trafficPlan: execution.trafficPlan,
-      whatsappPlan: execution.whatsappPlan,
-      scenarios: execution.scenarios.map((scenario) => ({
+      trafficPlan: routeIgnoresMission ? null : execution.trafficPlan,
+      whatsappPlan: routeIgnoresMission ? null : execution.whatsappPlan,
+      scenarios: routeIgnoresMission ? [] : execution.scenarios.map((scenario) => ({
         title: scenario.title,
         posture: naturalScenarioLabel(scenario.mode),
         speed: scenario.speed,
@@ -363,7 +417,7 @@ function conciseStrategicContext(
         operationalEffort: scenario.operationalEffort,
         bundleName: scenario.bundleName,
       })),
-      next72h: execution.timeline72h.map((item) => ({
+      next72h: routeIgnoresMission ? [] : execution.timeline72h.map((item) => ({
         window: item.window,
         action: item.action,
         expectedTarget: item.expectedTarget,
@@ -393,7 +447,6 @@ function supportsTemperature(model: string) {
 export function isStrategicCopilotQuestion(question?: string | null) {
   if (!question) return false
   const normalized = normalizeText(question)
-  if (detectOperationalExecutionMode(question)) return true
   if (strategicIntentTerms.some((term) => normalized.includes(normalizeText(term)))) return true
   const hasConditionalTerm = conditionalStrategicTerms.some((term) => normalized.includes(normalizeText(term)))
   const hasStrategicQualifier = strategicQualifiers.some((term) => normalized.includes(normalizeText(term)))
@@ -422,7 +475,11 @@ function trafficLine(execution: OrionExecutionPayload) {
 }
 
 function campaignName(state: OrionOperationalConversationState | null | undefined, execution: OrionExecutionPayload) {
-  const product = state?.activeMissionContext?.product?.name || state?.activeProduct || state?.currentProduct || state?.focusProduct || execution.priorityAction?.product?.name || execution.products[0]?.name || "produto prioritário"
+  const subjectProduct = state?.commercialSubject?.subjectType === "category"
+    ? state.commercialSubject.category
+    : state?.commercialSubject?.primarySubject?.productName || state?.commercialSubject?.productFamily || state?.commercialSubject?.model
+  const hasUserSubject = Boolean(subjectProduct && state?.commercialSubject && state.commercialSubject.subjectType !== "unknown" && state.commercialSubject.confidence >= 0.45)
+  const product = state?.activeMissionContext?.product?.name || state?.activeProduct || state?.currentProduct || state?.focusProduct || subjectProduct || (!hasUserSubject ? execution.priorityAction?.product?.name || execution.products[0]?.name : null) || "produto informado"
   const path = state?.chosenOperationalPath || state?.selectedScenario
   if (path === "balanced") return `Execução equilibrada - ${product}`
   if (path === "conservative") return `Margem preservada - ${product}`
@@ -438,6 +495,12 @@ function selectedBundle(state: OrionOperationalConversationState | null | undefi
   }
   const path = state?.chosenOperationalPath || state?.selectedScenario
   const product = state?.activeMissionContext?.product?.name || state?.activeProduct || state?.currentProduct || state?.focusProduct
+  const hasUserSubject = Boolean(
+    state?.commercialSubject
+    && state.commercialSubject.subjectType !== "unknown"
+    && state.commercialSubject.confidence >= 0.45
+  )
+  if (hasUserSubject && !product) return null
   const normalizedProduct = product ? product.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase() : ""
   const bundle = execution.bundles.find((item) => {
     if (item.promotionMode !== path) return false
@@ -586,11 +649,37 @@ export function buildOperationalExecutionAnswer(input: {
   conversationState?: OrionOperationalConversationState | null
 }) {
   const state = input.conversationState || null
+  const guardrails = state?.executionGuardrails || null
+  if (guardrails && !guardrails.allowCampaignGeneration && !guardrails.allowCopyGeneration && !guardrails.allowTrafficRecommendation) {
+    const finance = input.snapshot.finance.financialOperationalContext
+    const workingCapital = input.snapshot.finance.workingCapitalSnapshot
+    return formatFinancialDecisionResponse(buildFinancialDecisionResponse({
+      reasoningMode: state?.activeReasoningMode,
+      goal: state?.activeGoal,
+      financialContext: finance,
+      financialSafetyAudit: workingCapital.financialSafetyAudit,
+    }))
+  }
   const mission = state?.activeMissionContext
-  const product = mission?.product?.name || state?.activeProduct || state?.currentProduct || state?.focusProduct || input.execution.priorityAction?.product?.name || input.execution.products[0]?.name || "produto prioritário"
+  if (state?.commercialSubject?.needsClarification || (state?.commercialSubject?.subjectType === "multi_inventory_match" && state.commercialSubject.relatedProducts.length > 1 && !state.commercialSubject.primarySubject)) {
+    const clarificationMatches = [
+      ...(state.commercialSubject.primarySubject ? [state.commercialSubject.primarySubject] : []),
+      ...state.commercialSubject.relatedProducts,
+    ]
+    const names = (clarificationMatches.length ? clarificationMatches : state.commercialSubject.matches)
+      .slice(0, 4)
+      .map((match) => match.variation || match.productName)
+      .filter(Boolean)
+    return `Encontrei mais de uma unidade: ${names.join(" e ")}. Quer campanha conjunta ou separada?`
+  }
+  const subjectProduct = state?.commercialSubject?.subjectType === "category"
+    ? state.commercialSubject.category
+    : state?.commercialSubject?.primarySubject?.productName || state?.commercialSubject?.productFamily || state?.commercialSubject?.model
+  const hasUserSubject = Boolean(subjectProduct && state?.commercialSubject && state.commercialSubject.subjectType !== "unknown" && state.commercialSubject.confidence >= 0.45)
+  const product = mission?.product?.name || state?.activeProduct || state?.currentProduct || state?.focusProduct || subjectProduct || (!hasUserSubject ? input.execution.priorityAction?.product?.name || input.execution.products[0]?.name : null) || "produto informado"
   const bundle = selectedBundle(state, input.execution)
   const offerItems = mission?.offer?.items?.length ? mission.offer.items.join(" + ") : bundle?.items?.length ? bundle.items.join(" + ") : product
-  const offerPrice = brl(mission?.offer?.currentOfferPrice || bundle?.price || input.execution.priorityAction?.price)
+  const offerPrice = brl(mission?.offer?.currentOfferPrice || bundle?.price || (!hasUserSubject ? input.execution.priorityAction?.price : null))
   const offer = offerPrice ? `${offerItems} por ${offerPrice}` : offerItems
   const priorityProductName = input.execution.priorityAction?.product?.name
   const canUsePriorityCopy = priorityProductName ? priorityProductName === product : true
@@ -719,6 +808,9 @@ export async function buildStrategicCopilotAnswer(input: {
 }
 
 export function shouldUseOperationalExecutionAnswer(state?: OrionOperationalConversationState | null) {
+  if (state?.intentRoute?.missionContextPolicy === "ignore") return false
+  if (state?.activeReasoningMode && !isExecutionReasoningMode(state.activeReasoningMode)) return false
+  if (state?.executionGuardrails && !state.executionGuardrails.allowCampaignGeneration && !state.executionGuardrails.allowCopyGeneration && !state.executionGuardrails.allowTrafficRecommendation) return false
   const intent = state?.operationalIntent
   const incrementalIntent = intent && intent !== "new_strategy" && intent !== "strategic_question"
   return Boolean(incrementalIntent) || isExecutionModeOperational(state?.currentExecutionMode || state?.executionMode)

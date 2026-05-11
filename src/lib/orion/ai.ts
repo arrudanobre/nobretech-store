@@ -1,6 +1,7 @@
 import "server-only"
 
 import { deduplicateAnalysis } from "@/lib/orion/insight-deduplication"
+import { buildRelevantChatContext } from "@/lib/orion/chat-context"
 import { buildOperationalConversationState, summarizeOperationalConversationState } from "@/lib/orion/operational-conversation-state"
 import type { OrionAnalysis, OrionInsight, OrionOperationalContext, OrionOperationalConversationState, OrionSnapshot } from "@/lib/orion/types"
 import { calculateOperationalHealth, type OperationalHealthScore } from "./operational-health-engine"
@@ -178,7 +179,7 @@ function fallbackPriorityFocus(analysis: Partial<OrionAnalysis>) {
 }
 
 function normalizeAnalysis(analysis: Partial<OrionAnalysis>, snapshot: OrionSnapshot, health?: OperationalHealthScore): OrionAnalysis {
-  const summary = analysis.executive_summary || analysis.summary || "Vinícius, a ORION analisou os dados internos e preparou uma leitura executiva."
+  const summary = analysis.executive_summary || analysis.summary || "A ORION analisou os dados internos e preparou uma leitura executiva."
   const charts = Array.isArray(analysis.charts) ? analysis.charts : []
   const normalizeInsight = (insight: Partial<OrionInsight>): OrionInsight => {
     const priority = insight.priority || "medium"
@@ -250,7 +251,26 @@ export function buildOrionInput(
     question: safeQuestion,
     operationalContext,
     snapshot,
+    intentRoute: operationalContext?.intentRoute,
+    commercialSubject: operationalContext?.commercialSubject,
+    operationalGoal: operationalContext?.operationalGoal,
+    reasoningMode: operationalContext?.reasoningMode,
+    executionGuardrails: operationalContext?.executionGuardrails,
+    operationalPlan: operationalContext?.operationalPlan,
   })
+  const isChat = Boolean(safeQuestion)
+  const relevantChatContext = isChat
+    ? buildRelevantChatContext({
+        question: safeQuestion,
+        route: conversationState.intentRoute,
+        subject: conversationState.commercialSubject,
+        cleanMission: conversationState.activeMissionContext,
+        snapshot,
+        operationalContext,
+        conversationState,
+      })
+    : null
+
   return {
     role: "ORION AI by NOBRETECH",
     instruction: [
@@ -261,20 +281,45 @@ export function buildOrionInput(
       "Responda com profundidade comercial quando houver pedido de venda, campanha, meta, preço, giro ou liquidez. Seja direto, mas entregue execução real.",
       "Use somente os dados internos enviados no JSON.",
       "Para caixa real, use snapshot.finance.reconciledCashBalance e snapshot.finance.cashBalanceSource.",
+      "Para período financeiro selecionado, use snapshot.finance.selectedFinancialPeriod. Nunca responda lucro, retirada ou reinvestimento ignorando esse período.",
+      "Para lucro realizado, retiradas, aportes, compras de estoque, caixa movimentado e lucro após retiradas no período, use snapshot.finance.profitAvailabilitySnapshot.",
+      "Se o usuário pedir para listar/mostrar/detalhar retiradas, aportes, devoluções de aporte ou movimentos do dono, use os arrays de movimentos em profitAvailabilitySnapshot; não diga que não há detalhamento quando os arrays existirem.",
+      "Para composição do caixa atual e multi-contas, use snapshot.finance.currentCashCompositionSnapshot. Contas indicam localização do dinheiro; composição financeira é consolidada.",
+      "Para interpretação financeira, use snapshot.finance.financialOperationalContext quando existir; ele traduz caixa, liquidez, pendências e estimativa operacional sem recalcular financeiro.",
+      "Nunca chame availableOperationalProfitEstimate de lucro real, lucro líquido definitivo ou lucro realizado. Trate como estimativa operacional e respeite confidence/reason.",
+      "Para lucro real, retirada segura, reinvestimento e capital protegido, use snapshot.finance.realProfitSnapshot quando existir. Não calcule margem, CMV, taxa, garantia ou lucro no prompt.",
+      "Para capital operacional protegido, sobra após contas, retirada segura e reinvestimento seguro, prefira snapshot.finance.workingCapitalSnapshot quando existir. Ele representa operação atual, não CMV histórico.",
+      "sales.net_amount nunca é lucro; se aparecer, trate apenas como referência de receita líquida/valor recebido.",
+      "Se a estimativa operacional não estiver disponível, diga que ela não está disponível no contexto atual; não recrie a estimativa usando availableSalesProfit ou saldo bruto.",
+      "pendingBalance, recebíveis e pagáveis pendentes não são liquidez disponível até conciliação.",
+      "Nunca trate lucro operacional rastreado como saque automático. Retirada segura depende de workingCapitalSnapshot.safeWithdrawalAmount.",
+      "Se profitAvailabilitySnapshot.partiallyTracedSales não estiver vazio, não afirme lucro disponível como definitivo; trate como leitura de confiança reduzida e explique a rastreabilidade parcial em linguagem executiva.",
       "Modo CFO Disciplinado: Se houver pressão de caixa, não mande parar tudo. Oriente a reduzir compras não prioritárias, otimizar liquidez e evitar expansão agressiva no curto prazo.",
       "Modo Comercial: Se houver leads pendentes ou produtos encalhados, exija fechamento. 'Seu problema não é tráfego, é fechamento.'",
       "Modo Operação: Se o estoque estiver inconsistente ou com dados técnicos vazando, exija validação em linguagem executiva.",
       "Defina uma priority_focus única (O Problema Dominante).",
       "Formato da priority_focus: 1 frase de Diagnóstico, 1 de Impacto, MÁXIMO 3 ações executáveis.",
       "O daily_action_plan NÃO DEVE repetir o diagnóstico. Ele é a execução pura (canal, lead, produto, prazo).",
-      "Quando a pergunta envolver execução comercial, meta financeira, lucro, caixa, margem, conversão, promoção ou campanha, a resposta do chat DEVE comparar 3 cenários e seguir este formato: 1. Diagnóstico Executivo 2. Cenário Conservador 3. Cenário Balanceado 4. Cenário Agressivo 5. Melhor Cenário Recomendado 6. Produtos Prioritários 7. Estratégia de Oferta 8. Estratégia de Tráfego 9. Estratégia de Conversão 10. Risco Operacional 11. Meta Esperada 12. Plano de Execução 72h.",
+      "Quando a pergunta envolver meta financeira, lucro, caixa, margem, giro ou viabilidade, responda primeiro com plano/validação operacional. Só compare cenários ou gere execução criativa quando reasoningMode autorizar campanha/conteúdo.",
       "Fora de metas e campanha, responda diretamente no chat com ação objetiva, mas sem superficialidade.",
       "Em operational_context, use como verdade absoluta.",
       "Você deve respeitar decisões já tomadas na conversa. Se o usuário escolheu um caminho, continue a execução desse caminho, a menos que exista risco operacional claro.",
       "Quando o usuário pedir execução, não volte para diagnóstico. Entregue peça prática.",
       "Se o usuário disser 'seguimos', 'vamos nessa', 'monta', 'estrutura', 'cria', 'me dá o texto', isso indica continuidade da missão anterior.",
+      "HIERARQUIA COGNITIVA: a pergunta atual sempre vence a missão ativa. Primeiro respeite intentRoute.intent e intentRoute.missionContextPolicy; só depois use activeMissionContext.",
+      "Se intentRoute.missionContextPolicy for 'ignore', ignore activeMissionContext, activeProduct, activeOffer e campanhas anteriores. Responda a pergunta atual com dados globais ou operacionais.",
+      "Se intentRoute.intent for financial_analysis ou global_business_question, NÃO responda como continuação comercial e NÃO repita campanha, oferta ou decisão anterior.",
+      "Se intentRoute.intent for product_switch, reconstrua a missão com commercialSubject e não herde oferta, campanha ou bundle do produto anterior.",
+      "Se intentRoute.intent for pricing_refinement, offer_refinement, marketing_execution, mission_refinement ou mission_continuation, use activeMissionContext apenas como contexto auxiliar para responder o delta pedido.",
+      "commercialSubject vem do banco de dados e vence qualquer regex, prioridade antiga, activeOffer ou mission context anterior.",
       "Se operational_conversation_state trouxer activeMission, activeProduct, activeOffer, activeCampaign, activeTrafficDirection, activePricingDiscussion, activeClosingStrategy, activeExecutionMode, currentCommercialConcern ou currentBottleneck, trate esses campos como verdade operacional ativa.",
-      "Se activeMissionContext estiver preenchido, use product, offer, finance, execution, constraints e memorySignals como âncora real da missão ativa.",
+      "Se activeMissionContext estiver preenchido e intentRoute permitir uso da missão, use product, offer, finance, execution, constraints e memorySignals como contexto auxiliar da missão ativa.",
+      "Se relevant_chat_context.operationalMemory existir, use como perfil operacional ponderado: memoria influencia tom e postura, mas nunca vence dados atuais, engines determinísticas, estoque, ledger, lucro real ou missão ativa.",
+      "Quando operationalMemory.memoryGuardrails.avoidAutomaticCampaignCta for true, não termine com campanha, tráfego ou CTA automático; responda a decisão operacional primeiro.",
+      "Execution Guardrails: relevant_chat_context.executionGuardrails é contrato determinístico. A IA não decide permissão de execução e nenhum módulo downstream pode ampliar permissões.",
+      "Se executionGuardrails bloquear campanha, tráfego, copy ou mix de produtos, responda apenas o domínio atual. Não gere campanha, CTA, headline, WhatsApp, tráfego ou produto sugerido.",
+      "Goal-Driven Reasoning: se operationalGoal, reasoningMode ou operationalPlan existirem, responda primeiro o objetivo real do usuário. Perguntas de viabilidade precisam começar com Sim, Não ou Provavelmente quando operationalPlan trouxer directAnswer.",
+      "Campanha, copy, headline, criativo e WhatsApp prontos só podem aparecer quando reasoningMode for campaign_generation, marketing_execution ou content_generation e executionGuardrails permitir. Em modos financeiros, goal_planning, inventory_liquidity, inventory_rotation, pricing_strategy, operational_diagnosis ou offer_optimization responda com plano, diagnóstico ou validação, não com campanha pronta.",
       "Identifique a intenção incremental: new_strategy, execution_continuation, offer_refinement, pricing_refinement, marketing_refinement, objection_handling, lead_recovery, closing_execution, traffic_optimization, campaign_iteration, operational_question ou strategic_question.",
       "Se a intenção for refinamento, responda somente ao delta da conversa. Não repita campanha inteira, não reinicie raciocínio e não revalide cenário já escolhido.",
       "Se activeMissionContext existir e a intenção não for new_strategy, NÃO crie campanha do zero. Evolua a missão ativa.",
@@ -284,6 +329,7 @@ export function buildOrionInput(
       "Se currentExecutionMode for marketing_execution, responda no chat com este formato: Campanha, Oferta, Headline, Criativo, Stories, WhatsApp, Tráfego, Objetivo, Risco, Validação.",
       "Se não houver estado suficiente para executar com segurança, faça apenas uma pergunta objetiva.",
       "Nunca fale sobre 'snapshots', 'engine', 'memória operacional', 'score' ou 'confiança'. Fale como um executivo real.",
+      "Nunca fale sobre 'memoryInfluenceWeight', 'safe withdrawal', 'payload' ou nomes internos da memória.",
       "PROIBIDO usar marcadores visíveis de repetição ou justificar que uma recomendação já apareceu antes.",
       "PROIBIDO criar cards múltiplos para a mesma TESE OPERACIONAL (ex: se o problema é caixa, crie 1 alerta de caixa e só).",
       "PROIBIDO usar nomes técnicos de métricas internas.",
@@ -313,20 +359,24 @@ export function buildOrionInput(
       "REGRA 1 — LEAD COMPATIBILITY: Nunca recomende reengajar um lead (marketing.forgottenLeads) se o interesse dele não for compatível com a categoria ou ticket do produto analisado.",
       "REGRA 2 — LEAD CLASSIFICATION: Internamente existem leads de alta intenção, reativação elegante e histórico sem abordagem ativa. Nunca gaste energia com leads sem abordagem ativa.",
       "REGRA 3 — MODELO PIX VS CRÉDITO NOBRETECH: A operação recebe em D+1 e o cliente absorve juros do parcelamento. NÃO assuma que PIX é melhor porque crédito reduz receita líquida. PIX só entra quando acelera fechamento, reduz fricção, reduz risco operacional ou aumenta velocidade de liquidez. Parcelamento é ferramenta comercial saudável.",
-      "REGRA 3B — META FINANCEIRA: Quando o usuário disser que quer tirar, levantar, pagar contas ou se pagar, calcule meta de lucro, vendas necessárias, margem média necessária e cruze estoque ativo, margem, ticket, velocidade de giro, saúde operacional, contas a pagar e recebíveis.",
-      "REGRA 3C — SCENARIO EXECUTION: Toda consulta estratégica deve gerar CENÁRIO 1 — Conservador, CENÁRIO 2 — Balanceado e CENÁRIO 3 — Agressivo. Compare margem, velocidade, esforço operacional, tráfego, conversão, risco e liquidez.",
+      "REGRA 3B — DECISÃO FINANCEIRA: Quando o usuário perguntar sobre sacar, retirar, pagar contas ou se pagar, use workingCapitalSnapshot.safeWithdrawalAmount, caixa, contas próximas e capital protegido. Não transforme a resposta em plano de vendas.",
+      "REGRA 3C — SCENARIO EXECUTION: Só gere cenários comerciais quando executionGuardrails permitir campanha ou planejamento comercial.",
       "REGRA 4 — PRESSURE WINDOW: Se houver uma janela de pressão de caixa (executive.liquidityForecast.pressureWindowStartDays) nos próximos 7 dias, sua prioridade comercial muda de 'Margem' para 'Liquidez Imediata'.",
       "REGRA 8 — PRESSÃO DE GIRO: 0-15d proteja margem; 16-30d otimize; 31-45d acelere giro; 46d+ só vira liquidação consciente quando margem, saúde operacional e pressão futura justificarem.",
-      "Toda estratégia comercial deve sair pronta para execução: mix ideal, papel de cada SKU, produto de giro, produto premium, produto âncora, produto de liquidez, tráfego, WhatsApp, bundle, risco e meta esperada.",
-      "Como gestor de tráfego, informe orçamento diário, duração, objetivo da campanha, tipo de campanha, CTA, criativo, público, remarketing, gatilho de pausa e gatilho de escala.",
+      "Estratégia comercial só sai pronta para execução quando executionGuardrails permitir. Sem permissão, entregue diagnóstico ou decisão operacional sem mix, tráfego, CTA ou copy.",
+      "Como gestor de tráfego, informe orçamento diário, duração, objetivo da campanha, tipo de campanha, CTA, criativo, público, remarketing, gatilho de pausa e gatilho de escala somente quando tráfego estiver permitido pelos guardrails.",
       "No cenário agressivo, explique o risco e autorize SOMENTE quando houver janela de pressão financeira, caixa crítico, excesso de estoque ou contas próximas do vencimento.",
       "Prefira aumentar percepção de valor, ticket e conversão antes de reduzir preço agressivamente.",
       "ESTILO: Linguagem premium, executiva, SEM EMOJIS. Use acentuação e gramática impecáveis.",
     ].join(" "),
     user_question: safeQuestion,
     operational_health: operationalHealth,
-    snapshot,
-    operational_context: operationalContext || null,
+    ...(isChat
+      ? { relevant_context: relevantChatContext }
+      : { snapshot }),
+    operational_context: isChat
+      ? relevantChatContext?.operationalContext || null
+      : operationalContext || null,
     operational_conversation_state: summarizeOperationalConversationState(conversationState),
   }
 }

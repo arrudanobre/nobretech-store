@@ -1,4 +1,5 @@
 import type { PoolClient } from "pg"
+import { syncAccountBalanceFromLedger } from "@/lib/financial/ledger-balance-engine"
 
 /**
  * Extrato / transactions sync — regras ao editar uma conta já conciliada:
@@ -77,7 +78,7 @@ function movementAmount(tx: TxRow): number {
 }
 
 /** Recalcula balance_after para todos os movimentos (partição por company_id, mesma ordem do extrato). */
-export async function recalculateAllMovementBalances(client: PoolClient) {
+export async function recalculateAllMovementBalances(client: PoolClient, companyId?: string | null) {
   await client.query(`
     WITH ordered_movements AS (
       SELECT
@@ -94,6 +95,10 @@ export async function recalculateAllMovementBalances(client: PoolClient) {
     FROM ordered_movements
     WHERE movement.id = ordered_movements.id
   `)
+
+  if (companyId) {
+    await syncAccountBalanceFromLedger(client, companyId)
+  }
 }
 
 async function reverseAccountPayableReceivable(
@@ -174,7 +179,7 @@ async function syncInventoryPurchaseMovement(client: PoolClient, tx: TxRow) {
         [existingId]
       )
     }
-    await recalculateAllMovementBalances(client)
+    await recalculateAllMovementBalances(client, tx.company_id)
     return { ok: true as const, action: "inventory_purchase_unlinked" as const }
   }
 
@@ -221,7 +226,7 @@ async function syncInventoryPurchaseMovement(client: PoolClient, tx: TxRow) {
     )
   }
 
-  await recalculateAllMovementBalances(client)
+  await recalculateAllMovementBalances(client, tx.company_id)
   return { ok: true as const, action: existingId ? "inventory_purchase_updated" as const : "inventory_purchase_inserted" as const }
 }
 
@@ -261,7 +266,7 @@ export async function syncTransactionMovement(
 
   if (!shouldRecord || !source) {
     await reverseAccountPayableReceivable(client, companyId, transactionId, cancelReason, createdBy)
-    await recalculateAllMovementBalances(client)
+    await recalculateAllMovementBalances(client, companyId)
     return { ok: true as const, action: "unlinked_or_reversed" as const }
   }
 
@@ -322,18 +327,18 @@ export async function syncTransactionMovement(
           legacyId,
         ]
       )
-      await recalculateAllMovementBalances(client)
+      await recalculateAllMovementBalances(client, companyId)
       return { ok: true as const, action: "repointed_legacy_sale_movement" as const }
     }
   }
 
   if (row && String(row.source) === "purchase") {
-    await recalculateAllMovementBalances(client)
+    await recalculateAllMovementBalances(client, companyId)
     return { ok: true as const, action: "skipped_purchase_row" as const }
   }
 
   if (row && !MIGRATABLE_SOURCES.has(String(row.source))) {
-    await recalculateAllMovementBalances(client)
+    await recalculateAllMovementBalances(client, companyId)
     return { ok: true as const, action: "skipped_foreign_source" as const, source: String(row.source) }
   }
 
@@ -362,7 +367,7 @@ export async function syncTransactionMovement(
         row.id,
       ]
     )
-    await recalculateAllMovementBalances(client)
+    await recalculateAllMovementBalances(client, companyId)
     return { ok: true as const, action: "updated" as const }
   }
 
@@ -388,7 +393,7 @@ export async function syncTransactionMovement(
       createdBy,
     ]
   )
-  await recalculateAllMovementBalances(client)
+  await recalculateAllMovementBalances(client, companyId)
   return { ok: true as const, action: "inserted" as const }
 }
 
@@ -409,5 +414,5 @@ export async function reverseMovementForDeletedTransaction(
   )
   const resolvedCompanyId = resolved.rows[0]?.company_id || companyId
   await reverseAccountPayableReceivable(client, resolvedCompanyId, transactionId, reason, createdBy)
-  await recalculateAllMovementBalances(client)
+  await recalculateAllMovementBalances(client, resolvedCompanyId)
 }

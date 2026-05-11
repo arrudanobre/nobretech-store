@@ -8,6 +8,7 @@ import type {
   OrionSnapshot,
 } from "./types"
 import { isActionableLead } from "./lead-classification"
+import { resolveOperationalTarget } from "./operational-target"
 
 type StockItem = OrionSnapshot["stock"]["availableItems"][number]
 type PromotionMode = OrionExecutionBundle["promotionMode"]
@@ -274,16 +275,20 @@ function targetProfitFrom(analysis: OrionAnalysis, operationalContext?: OrionOpe
 
 function buildFinancialGoal(snapshot: OrionSnapshot) {
   const forecast = snapshot.executive.liquidityForecast
-  const grossCash = Math.round(snapshot.executive.cashBalance)
-  const settledSalesProfit = Math.max(0, Math.round(snapshot.finance.availableSalesProfit || 0))
-  const liquidProfitAvailable = Math.max(0, Math.min(grossCash, settledSalesProfit))
-  const protectedWorkingCapital = Math.max(0, grossCash - liquidProfitAvailable)
+  const workingCapital = snapshot.finance.workingCapitalSnapshot
+  const financialScenario = snapshot.finance.financialScenarioSnapshot
+  const profitAvailability = snapshot.finance.profitAvailabilitySnapshot
+  const cashComposition = snapshot.finance.currentCashCompositionSnapshot
+  const grossCash = Math.round(workingCapital.availableCash || snapshot.executive.cashBalance)
+  const financialContext = snapshot.finance.financialOperationalContext
+  const operationalProfitAvailable = Math.max(0, Math.round(profitAvailability.realizedProfitInPeriod || financialScenario.realizedProfit))
+  const liquidProfitAvailable = operationalProfitAvailable
+  const protectedWorkingCapital = Math.max(0, Math.round(workingCapital.protectedOperationalCapital))
   const estimatedReceivableProfit = Math.max(0, Math.round(forecast.receivables30d * Math.max(0, snapshot.executive.marginPct30d) / 100))
   const reserveTarget = forecast.payables30d > 0 ? Math.max(300, Math.round(forecast.payables30d * 0.25)) : 0
   const projectedCashAfterCommitments = Math.round(grossCash + forecast.receivables30d - forecast.payables30d)
-  const profitAvailableForBills = liquidProfitAvailable + estimatedReceivableProfit
-  const requiredNewProfit = Math.max(0, Math.round(forecast.payables30d + reserveTarget - profitAvailableForBills))
-  const profitBufferAfterPayables = Math.round(profitAvailableForBills - forecast.payables30d)
+  const requiredNewProfit = Math.max(0, Math.round(-(profitAvailability.profitAfterWithdrawals - forecast.payables30d)))
+  const profitBufferAfterPayables = Math.round(profitAvailability.profitAfterWithdrawals - forecast.payables30d)
   const workingCapitalAfterPayables = Math.round(grossCash - forecast.payables30d)
   const nextDue = forecast.nextPayables[0] || null
   const nextDueDays = nextDue ? nextDue.daysUntilDue : null
@@ -294,15 +299,15 @@ function buildFinancialGoal(snapshot: OrionSnapshot) {
       ? "attention" as const
       : "stable" as const
   const headline = requiredNewProfit > 0
-    ? `O saldo bruto é ${brlFormatter.format(grossCash)}, mas o lucro livre estimado é ${brlFormatter.format(liquidProfitAvailable)}. Gere ${brlFormatter.format(requiredNewProfit)} de lucro novo para pagar ${brlFormatter.format(forecast.payables30d)} em contas e manter reserva.`
+    ? `No período ${profitAvailability.period.label}, o lucro realizado após retiradas ainda precisa de ${brlFormatter.format(requiredNewProfit)} para cobrir contas próximas.`
     : forecast.payables30d > 0
-      ? `As contas previstas de ${brlFormatter.format(forecast.payables30d)} cabem no bruto, mas a ORION protege ${brlFormatter.format(protectedWorkingCapital)} como capital de giro. Use lucro livre, não dinheiro de recompra.`
-      : `Saldo bruto de ${brlFormatter.format(grossCash)} com ${brlFormatter.format(protectedWorkingCapital)} protegido para giro; foco em transformar novas vendas em lucro livre.`
+      ? `O caixa atual cobre as obrigações próximas; no período ${profitAvailability.period.label}, o lucro após retiradas está em ${brlFormatter.format(profitAvailability.profitAfterWithdrawals)}.`
+      : `Cenário equilibrado: caixa consolidado de ${brlFormatter.format(cashComposition.consolidatedCash)} e lucro realizado no período de ${brlFormatter.format(liquidProfitAvailable)}.`
   const strategy = requiredNewProfit > 0
     ? "Priorizar vendas cujo lucro cubra a conta, sem usar o custo de reposição do estoque como se fosse lucro. Toda promoção deve manter piso positivo e preservar capital de recompra."
     : coveredOnlyByGross
-      ? "A conta pode ser paga pelo saldo total, mas isso reduziria capital de giro. Execute venda com margem para separar lucro antes de consumir dinheiro de reposição."
-      : "Não há necessidade de liquidação: execute oferta balanceada, preserve margem e use acessórios para aumentar lucro livre por venda."
+      ? "A conta cabe no caixa, mas retirada ou recompra deve respeitar lucro realizado, contas próximas e estoque ativo."
+      : "Operação saudável com capital imobilizado típico; reinvestimento deve ser controlado e baseado em lucro realizado."
 
   return {
     headline,
@@ -319,9 +324,18 @@ function buildFinancialGoal(snapshot: OrionSnapshot) {
     projectedCashAfterCommitments,
     workingCapitalAfterPayables,
     profitBufferAfterPayables,
-    replacementCapitalBasis: snapshot.finance.reconciledSalesProfit30d > 0
-      ? `lucro de vendas conciliadas: ${brlFormatter.format(snapshot.finance.availableSalesProfit)} desde ${snapshot.finance.profitWindowStart}`
-      : "sem venda conciliada suficiente para separar lucro em caixa",
+    safeWithdrawalAmount: Math.round(cashComposition.availableForWithdrawal),
+    safeReinvestmentAmount: Math.round(cashComposition.availableForReinvestment),
+    operationalSurplusAfterBills: profitBufferAfterPayables,
+    replacementCapitalBasis: [
+      `Estoque ativo protegido: ${brlFormatter.format(workingCapital.activeInventoryCapital)}.`,
+      workingCapital.activeInventoryCapital > grossCash
+        ? "Inclui estoque ativo ainda não convertido em caixa; isso não é dívida nem erro de caixa."
+        : "Inclui estoque ativo ainda não convertido em caixa. Base atual, sem CMV histórico ou compras antigas já realizadas.",
+      financialContext.profitInterpretation,
+      `Retiradas de lucro no período: ${brlFormatter.format(profitAvailability.ownerProfitWithdrawalsInPeriod)}; devoluções de aporte: ${brlFormatter.format(profitAvailability.ownerCapitalReturnsInPeriod)}; devoluções sem lastro: ${brlFormatter.format(profitAvailability.untracedOwnerCapitalReturnsInPeriod)}; lucro após retiradas: ${brlFormatter.format(profitAvailability.profitAfterWithdrawals)}.`,
+      `Potencial projetado de estoque: ${brlFormatter.format(financialScenario.projectedInventoryProfit)} separado do lucro realizado.`,
+    ].filter(Boolean).join(" "),
     nextDueLabel: nextDue ? `${nextDue.label} · ${brlFormatter.format(nextDue.amount)} em ${nextDue.daysUntilDue} dia${nextDue.daysUntilDue === 1 ? "" : "s"}` : null,
     nextDueDays,
     strategy,
@@ -370,7 +384,11 @@ export function buildOrionExecutionPayload(
   const targetProfit = targetProfitFrom(analysis, operationalContext)
   const financialGoal = buildFinancialGoal(snapshot)
   const maxPossibleProfit = inventory.reduce((sum, item) => sum + item.profit * item.quantity, 0)
-  const goalProfit = targetProfit || financialGoal.requiredNewProfit || (priority ? priority.profit : 0)
+  const operationalTarget = resolveOperationalTarget({
+    explicitUserGoal: targetProfit,
+    realAvailableProfit: financialGoal.liquidProfitAvailable,
+  })
+  const goalProfit = operationalTarget.target.targetAmount || (priority ? priority.profit : 0)
   const gap = Math.max(0, goalProfit - maxPossibleProfit)
   const pressure = pressureLevel(snapshot)
   const recommendedScenario = pressure === "alta" ? "aggressive" : pressure === "media" ? "balanced" : "balanced"
@@ -432,6 +450,8 @@ export function buildOrionExecutionPayload(
       targetProfit,
       maxPossibleProfit,
       gap,
+      operationalTarget: operationalTarget.target,
+      gapToOperationalTarget: operationalTarget.gap,
       deadlineLabel: null,
       recommendedScenario,
       financialGoal,
@@ -490,5 +510,10 @@ export function buildOrionExecutionPayload(
       { window: "48-72h", action: "Escalar campanha vencedora ou pausar.", kpi: "Venda", expectedTarget: `${expectedSales} venda${expectedSales === 1 ? "" : "s"}` },
     ] : [],
     scenarios,
+    realProfitability: snapshot.finance.realProfitSnapshot.realProfitability,
+    protectedCapital: snapshot.finance.realProfitSnapshot.protectedCapital,
+    availableProfit: snapshot.finance.realProfitSnapshot.availableProfit,
+    inventoryPressure: snapshot.finance.realProfitSnapshot.inventoryPressure,
+    lowMarginWarnings: snapshot.finance.realProfitSnapshot.lowMarginWarnings,
   }
 }

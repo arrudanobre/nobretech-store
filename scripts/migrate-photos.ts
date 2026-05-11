@@ -11,6 +11,28 @@ type InventoryRow = {
   photos: string[] | null
 }
 
+type SupabaseError = {
+  message: string
+}
+
+type InventoryTable = {
+  select(columns: "id"): {
+    order(column: string, options: { ascending: boolean }): Promise<{ data: InventoryIdRow[] | null; error: SupabaseError | null }>
+  }
+  select(columns: "id, photos"): {
+    eq(column: string, value: string): {
+      single(): Promise<{ data: InventoryRow | null; error: SupabaseError | null }>
+    }
+  }
+  update(values: { photos: string[] }): {
+    eq(column: string, value: string): Promise<{ error: SupabaseError | null }>
+  }
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
 function loadEnvFile(fileName: string) {
   const envPath = path.resolve(process.cwd(), fileName)
   if (!existsSync(envPath)) return
@@ -84,8 +106,9 @@ async function main() {
   loadEnvFile(".env")
 
   const { supabase } = await import("../src/lib/supabase")
+  const inventoryTable = supabase.from("inventory") as unknown as InventoryTable
 
-  const { data: idsData, error: idsError } = await (supabase.from("inventory") as any)
+  const { data: idsData, error: idsError } = await inventoryTable
     .select("id")
     .order("created_at", { ascending: true })
 
@@ -102,7 +125,7 @@ async function main() {
   for (let i = 0; i < ids.length; i++) {
     const itemId = ids[i].id
 
-    const { data: rowData, error: rowError } = await (supabase.from("inventory") as any)
+    const { data: rowData, error: rowError } = await inventoryTable
       .select("id, photos")
       .eq("id", itemId)
       .single()
@@ -154,8 +177,8 @@ async function main() {
 
         nextPhotos[j] = publicData.publicUrl
         uploadedForItem++
-      } catch (err: any) {
-        console.error(`Falha no item ${row.id}, foto ${j + 1}: ${err?.message || err}`)
+      } catch (err: unknown) {
+        console.error(`Falha no item ${row.id}, foto ${j + 1}: ${errorMessage(err)}`)
       }
     }
 
@@ -170,7 +193,7 @@ async function main() {
       continue
     }
 
-    const { error: updateError } = await (supabase.from("inventory") as any)
+    const { error: updateError } = await inventoryTable
       .update({ photos: nextPhotos })
       .eq("id", row.id)
 

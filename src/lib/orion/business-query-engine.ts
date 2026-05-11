@@ -1,6 +1,9 @@
 import "server-only"
 
 import { pool } from "@/lib/db"
+import { classifyTransaction } from "@/lib/financial/money-classification-engine"
+import type { OrionFinancialOperationalContext } from "@/lib/orion/financial-context-consumer"
+import { buildFinancialDecisionResponse, buildOwnerMovementListResponse, formatFinancialDecisionResponse } from "@/lib/orion/financial-decision-response"
 import { calculateOperationalHealth } from "./operational-health-engine"
 import { buildCommercialStrategy } from "./commercial-strategy-engine"
 import { buildScenarioExecutionPlan } from "./scenario-execution-engine"
@@ -13,9 +16,11 @@ import {
 } from "@/lib/orion/inventory-filter"
 import { isActionableLead } from "@/lib/orion/lead-classification"
 import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
+import type { CommercialSubjectResolution } from "./commercial-subject-resolver"
 import type {
   OrionBusinessIntent,
   OrionBusinessToolName,
+  OrionIntentRouteSummary,
   OrionOperationalContext,
   OrionSnapshot,
 } from "@/lib/orion/types"
@@ -105,18 +110,20 @@ type TransactionContextItem = {
   amount: number
   status: string
   date: string
+  sourceType: string | null
   financialType: string | null
   statementSection: string | null
+  affectsInventory: boolean
   affectsOwnerEquity: boolean
 }
 
 const MAX_TOOL_ROWS = 18
 const MIN_SAFE_MARGIN = 0.12
 const ESTIMATED_CARD_FEE_PCT = 0.03
-const ESTIMATED_BUNDLE_COST = 40
-const ESTIMATED_WARRANTY_RESERVE = 80
-const ACCESSORY_TERMS = new Set(["acessorio", "acessorios", "accessory", "capa", "pelicula", "carregador", "cabo", "fonte", "stylus", "caneta"])
-const COLOR_TERMS = new Set(["lilas", "preto", "branco", "prata", "prateado", "azul", "rosa", "verde", "dourado", "natural", "grafite", "titanio", "deserto", "silver", "black", "white"])
+const FALLBACK_COMMERCIAL_ASSUMPTIONS = {
+  estimatedBundleCost: 40,
+  estimatedWarrantyReserve: 80,
+}
 
 function number(value: unknown) {
   const parsed = Number(value ?? 0)
@@ -156,6 +163,18 @@ function questionLooksFinancialGoal(question: string) {
   const normalized = compactText(question)
   const goalPhrase = /\b(quero tirar|preciso tirar|quero retirar|preciso retirar|quero levantar|preciso levantar|preciso pagar|quero me pagar|preciso me pagar|me pagar|pagar contas|pagar boleto|pagar boletos|fazer caixa|gerar caixa|meta financeira|objetivo financeiro|meta de lucro|lucrar)\b/.test(normalized)
   return goalPhrase && (parseMoneyTarget(question) !== null || /\b(pagar contas|me pagar|retirada|retirar|levantar dinheiro|fazer caixa|gerar caixa)\b/.test(normalized))
+}
+
+function questionLooksFinancialValidation(question: string) {
+  const normalized = compactText(question)
+  return parseMoneyTarget(question) !== null
+    && /\b(isso|essa estrategia|esse plano|essa oferta|esse caminho|esse produto|essa campanha)\b/.test(normalized)
+    && /\b(gera|geraria|bate|bateria|chega|chegaria|da|daria|alcan[cç]a|atinge)\b/.test(normalized)
+}
+
+function questionLooksAvailableOperationalProfit(question: string) {
+  const normalized = compactText(question)
+  return /\b(lucro real|realmente lucrei|lucro operacional|lucro livre|lucro disponivel|lucro disponível|lucro estimado|quanto tenho de lucro|retirar lucro|retirada|quanto posso retirar|posso retirar)\b/.test(normalized)
 }
 
 function questionLooksStrategicExecution(question: string) {
@@ -247,10 +266,7 @@ function extractSearchTokens(question: string) {
 }
 
 function questionLooksProductSpecific(question: string) {
-  const normalized = compactText(question)
-  return /\b(iphone|ipad|macbook|mac|watch|airpods|capa|pelicula|pelicula|stylus|apple)\b/.test(normalized)
-    || /\b(lilas|preto|branco|prata|prateado|azul|rosa|verde|dourado|natural|grafite|titânio|titanio)\b/.test(normalized)
-    || /\b\d{2}\b/.test(normalized)
+  return extractSearchTokens(question).length > 0
 }
 
 function questionReferencesUnidentifiedProduct(question: string) {
@@ -260,17 +276,43 @@ function questionReferencesUnidentifiedProduct(question: string) {
 }
 
 function questionMentionsAccessory(question: string) {
-  return extractSearchTokens(question).some((token) => ACCESSORY_TERMS.has(token))
+  return /\bacessor/i.test(question)
 }
 
-function routeIntent(question: string): { intent: OrionBusinessIntent; toolsUsed: OrionBusinessToolName[] } {
+function routeIntent(
+  question: string,
+  intentRoute?: OrionIntentRouteSummary | null
+): { intent: OrionBusinessIntent; toolsUsed: OrionBusinessToolName[] } {
   const normalized = compactText(question)
 
-  if (questionLooksFinancialGoal(question)) {
+  if (intentRoute) {
+    if (intentRoute.intent === "financial_analysis" || intentRoute.intent === "global_business_question") {
+      return { intent: "cash_health_analysis", toolsUsed: ["financial_tool", "cashflow_tool", "dre_tool", "sales_tool"] }
+    }
+    if (intentRoute.intent === "inventory_analysis") {
+      return { intent: "inventory_product_analysis", toolsUsed: ["inventory_tool", "pricing_tool", "campaign_tool", "sales_tool"] }
+    }
+    if (intentRoute.intent === "pricing_refinement") {
+      return { intent: "pricing_analysis", toolsUsed: ["inventory_tool", "pricing_tool", "sales_tool"] }
+    }
+    if (intentRoute.intent === "strategic_question" || intentRoute.intent === "operational_question") {
+      return { intent: "executive_business_overview", toolsUsed: ["inventory_tool", "financial_tool", "sales_tool", "crm_tool", "campaign_tool", "dre_tool", "cashflow_tool"] }
+    }
+    if (intentRoute.intent === "unrelated_question") {
+      return { intent: "general_question", toolsUsed: ["inventory_tool", "financial_tool", "sales_tool", "crm_tool"] }
+    }
+    return { intent: "promotion_recommendation", toolsUsed: ["inventory_tool", "sales_tool", "campaign_tool", "pricing_tool", "crm_tool", "financial_tool", "cashflow_tool"] }
+  }
+
+  if (questionLooksFinancialGoal(question) || questionLooksFinancialValidation(question)) {
     return {
       intent: "financial_goal_execution",
       toolsUsed: ["inventory_tool", "pricing_tool", "sales_tool", "financial_tool", "cashflow_tool", "crm_tool", "campaign_tool", "dre_tool"],
     }
+  }
+
+  if (questionLooksAvailableOperationalProfit(question)) {
+    return { intent: "cash_health_analysis", toolsUsed: ["financial_tool", "cashflow_tool", "dre_tool", "sales_tool"] }
   }
 
   if (questionLooksStrategicExecution(question)) {
@@ -295,7 +337,7 @@ function routeIntent(question: string): { intent: OrionBusinessIntent; toolsUsed
     return { intent: "cash_health_analysis", toolsUsed: ["financial_tool", "cashflow_tool", "dre_tool"] }
   }
 
-  if (/\b(recomprar|recompra|comprar estoque|reposicao|repor estoque)\b/.test(normalized)) {
+  if (/\b(recomprar|recompra|comprar estoque|reposicao|repor estoque|reinvestir|investir em estoque)\b/.test(normalized)) {
     return { intent: "purchase_capacity_analysis", toolsUsed: ["financial_tool", "cashflow_tool", "inventory_tool", "sales_tool"] }
   }
 
@@ -352,7 +394,7 @@ function minimumSafePrice(cost: number) {
 
   // Cálculo de margem operacional real (Regra: Piso mais inteligente)
   const cardFees = cost * ESTIMATED_CARD_FEE_PCT
-  const operationalCost = cost + cardFees + ESTIMATED_BUNDLE_COST + ESTIMATED_WARRANTY_RESERVE
+  const operationalCost = cost + cardFees + FALLBACK_COMMERCIAL_ASSUMPTIONS.estimatedBundleCost + FALLBACK_COMMERCIAL_ASSUMPTIONS.estimatedWarrantyReserve
 
   return round(operationalCost / (1 - MIN_SAFE_MARGIN))
 }
@@ -361,9 +403,21 @@ function marginPct(price: number, cost: number) {
   return price > 0 ? round(((price - cost) / price) * 100, 1) : 0
 }
 
-function scoreInventoryCandidate(row: InventoryCandidateRow, query: string, tokens: string[]) {
+function scoreInventoryCandidate(
+  row: InventoryCandidateRow,
+  query: string,
+  tokens: string[],
+  commercialSubject?: CommercialSubjectResolution | null
+) {
+  const resolvedMatch = commercialSubject?.matches.find((match) => match.inventoryId === row.id)
+  if (resolvedMatch) {
+    return {
+      score: resolvedMatch.score,
+      reason: `resolver dinâmico: ${resolvedMatch.reason}`,
+    }
+  }
+
   const normalizedQuery = compactText(query)
-  const joinedQuery = compactJoined(query)
   const haystack = compactText([
     row.brand,
     row.category,
@@ -377,48 +431,20 @@ function scoreInventoryCandidate(row: InventoryCandidateRow, query: string, toke
   ].map((part) => String(part || "")).join(" "))
   const joinedHaystack = compactJoined(haystack)
   const status = String(row.status || "pending")
-  const productType = compactText(String(row.product_type || row.category || ""))
   const reasons: string[] = []
   let score = 0
 
-  const has = (term: string) => haystack.includes(term) || joinedHaystack.includes(term)
-  const queryHas = (term: string) => tokens.includes(term) || normalizedQuery.split(" ").includes(term) || joinedQuery === term
-
-  if (queryHas("iphone") && has("iphone")) {
-    score += 50
-    reasons.push("+50 iPhone")
-  }
-  if (queryHas("16") && has("16")) {
-    score += 40
-    reasons.push("+40 16")
-  }
-  if (queryHas("pro") && has("pro")) {
-    score += 40
-    reasons.push("+40 Pro")
-  }
-  if (queryHas("max") && has("max")) {
-    score += 40
-    reasons.push("+40 Max")
-  }
-
   for (const token of tokens) {
-    if (["iphone", "16", "pro", "max"].includes(token) || COLOR_TERMS.has(token) || /\d+\s?gb/.test(token)) continue
-    if (has(token)) {
-      score += 12
-      reasons.push(`+12 ${token}`)
+    if (haystack.includes(token) || joinedHaystack.includes(token)) {
+      score += 18
+      reasons.push(`+18 ${token}`)
     }
   }
 
-  const capacityToken = tokens.find((token) => /^\d{2,4}gb$/.test(token) || /^\d{2,4}$/.test(token) && has(`${token}gb`))
-  if (capacityToken && (has(capacityToken) || has(`${capacityToken}gb`))) {
-    score += 20
-    reasons.push("+20 capacidade")
-  }
-
-  const colorToken = tokens.find((token) => COLOR_TERMS.has(token))
-  if (colorToken && has(colorToken)) {
-    score += 20
-    reasons.push("+20 cor")
+  if (tokens.length && score > 0) {
+    const coverage = tokens.filter((token) => haystack.includes(token) || joinedHaystack.includes(token)).length / tokens.length
+    score += Math.round(coverage * 35)
+    reasons.push(`cobertura ${Math.round(coverage * 100)}%`)
   }
 
   if (isOperationallyAvailable(status)) {
@@ -430,10 +456,7 @@ function scoreInventoryCandidate(row: InventoryCandidateRow, query: string, toke
     score += unavailablePenalty
     reasons.push(`${unavailablePenalty} ${isExplicitlyUnavailable(status) ? "indisponível" : "limbo"}`)
   }
-  if ((productType.includes("accessory") || productType.includes("acessorio") || haystack.includes("acessorios")) && !questionMentionsAccessory(query)) {
-    score -= 50
-    reasons.push("-50 acessório")
-  }
+  if (commercialSubject?.subjectType === "category" && commercialSubject.category && normalizedQuery.includes(compactText(commercialSubject.category))) score += 20
 
   return {
     score,
@@ -441,9 +464,14 @@ function scoreInventoryCandidate(row: InventoryCandidateRow, query: string, toke
   }
 }
 
-async function buildInventoryContext(companyId: string, question: string, toolsUsed: OrionBusinessToolName[]) {
+async function buildInventoryContext(
+  companyId: string,
+  question: string,
+  toolsUsed: OrionBusinessToolName[],
+  commercialSubject?: CommercialSubjectResolution | null
+) {
   if (!toolsUsed.includes("inventory_tool") && !toolsUsed.includes("pricing_tool")) return null
-  const tokens = questionLooksProductSpecific(question) ? extractSearchTokens(question) : []
+  const tokens = commercialSubject?.matches.length ? [] : questionLooksProductSpecific(question) ? extractSearchTokens(question) : []
 
   const result = await pool.query<InventoryCandidateRow>(
     `
@@ -475,9 +503,14 @@ async function buildInventoryContext(companyId: string, question: string, toolsU
   )
 
   const scoredRows = result.rows
-    .map((row) => ({ row, ...scoreInventoryCandidate(row, question, tokens) }))
+    .map((row) => ({ row, ...scoreInventoryCandidate(row, question, tokens, commercialSubject) }))
     .sort((a, b) => b.score - a.score)
-  const filteredRows = scoredRows.filter((item) => isOperationallyAvailable(String(item.row.status || "pending")) && !isExplicitlyUnavailable(String(item.row.status || "pending")))
+  const hasResolvedSubject = Boolean(commercialSubject?.matches.length)
+  const filteredRows = scoredRows.filter((item) => {
+    const available = isOperationallyAvailable(String(item.row.status || "pending")) && !isExplicitlyUnavailable(String(item.row.status || "pending"))
+    if (!available) return false
+    return hasResolvedSubject ? item.score > 0 : true
+  })
 
   const items: InventoryContextItem[] = filteredRows.map((row) => {
     const purchasePrice = number(row.row.purchase_price)
@@ -535,6 +568,13 @@ async function buildInventoryContext(companyId: string, question: string, toolsU
       filters_used: {
         companyId: "scoped",
         tokens,
+        dynamicSubject: commercialSubject ? {
+          subjectType: commercialSubject.subjectType,
+          confidence: commercialSubject.confidence,
+          needsClarification: commercialSubject.needsClarification,
+          primarySubject: commercialSubject.primarySubject?.productName || null,
+          compatibleAccessories: commercialSubject.compatibleAccessories.map((match) => match.productName).slice(0, 5),
+        } : null,
         activeStatuses: Array.from(OPERATIONAL_STATUSES),
         unavailableStatuses: Array.from(EXCLUDED_STATUSES),
         candidateLimit: "todos os produtos operacionais ativos",
@@ -784,8 +824,10 @@ async function buildFinancialContext(companyId: string, toolsUsed: OrionBusiness
         t.amount,
         COALESCE(t.status, 'pending') AS status,
         COALESCE(t.date, t.due_date)::text AS date,
+        t.source_type AS "sourceType",
         ca.financial_type AS "financialType",
         ca.statement_section AS "statementSection",
+        COALESCE(ca.affects_inventory, FALSE) AS "affectsInventory",
         COALESCE(ca.affects_owner_equity, FALSE) AS "affectsOwnerEquity"
       FROM transactions t
       LEFT JOIN finance_chart_accounts ca ON ca.id = t.chart_account_id
@@ -802,8 +844,13 @@ async function buildFinancialContext(companyId: string, toolsUsed: OrionBusiness
     ...tx,
     amount: number(tx.amount),
   }))
-  const isOwnerEquity = (tx: TransactionContextItem) => tx.affectsOwnerEquity || tx.financialType === "owner_equity" || tx.statementSection === "equity"
-  const isOperational = (tx: TransactionContextItem) => !isOwnerEquity(tx) && !["transfer", "adjustment"].includes(String(tx.financialType || tx.statementSection || ""))
+  const classifyTx = (tx: TransactionContextItem) => classifyTransaction(tx)
+  const isOwnerEquity = (tx: TransactionContextItem) => classifyTx(tx).affectsOwnerEquity
+  const isOperational = (tx: TransactionContextItem) => {
+    const classification = classifyTx(tx)
+    return classification.affectsCash
+      && !["inventory_purchase", "owner_contribution", "owner_withdrawal", "owner_capital_return", "owner_profit_withdrawal", "transfer", "adjustment", "reversal", "receivable", "payable", "unknown"].includes(classification.movementType)
+  }
   const reconciled = transactions.filter((tx) => tx.status === "reconciled")
   const dreTransactions = transactions.filter((tx) => tx.statementSection === "dre")
 
@@ -813,8 +860,21 @@ async function buildFinancialContext(companyId: string, toolsUsed: OrionBusiness
       cashBalanceSource: snapshot.finance.cashBalanceSource,
       operationalCashFlow30d: snapshot.finance.operationalCashFlow30d,
       ownerEquityMovement30d: snapshot.finance.ownerEquityMovement30d,
+      availableOperationalProfitEstimate: snapshot.finance.availableOperationalProfitEstimate,
       pendingReceivables: snapshot.executive.pendingReceivables,
       pendingPayables: snapshot.executive.pendingPayables,
+    },
+    operationalContext: snapshot.finance.financialOperationalContext,
+    realProfit: snapshot.finance.realProfitSnapshot,
+    workingCapital: snapshot.finance.workingCapitalSnapshot,
+    profitAvailability: snapshot.finance.profitAvailabilitySnapshot,
+    cashComposition: snapshot.finance.currentCashCompositionSnapshot,
+    moneyClassification: {
+      byMovementType: snapshot.finance.moneyClassification.totals.byMovementType,
+      byFinancialNature: snapshot.finance.moneyClassification.totals.byFinancialNature,
+      byOperationalNature: snapshot.finance.moneyClassification.totals.byOperationalNature,
+      uncertainCount: snapshot.finance.moneyClassification.totals.uncertainCount,
+      availableOperationalProfitEstimate: snapshot.finance.moneyClassification.availableOperationalProfitEstimate,
     },
     reconciledMovementSummary: {
       income: round(reconciled.filter((tx) => tx.type === "income").reduce((sum, tx) => sum + tx.amount, 0)),
@@ -944,7 +1004,7 @@ function promotionActionAnswer(
 
 function expectedProductProfit(product: InventoryContextItem) {
   const salePrice = product.suggestedPrice || product.purchasePrice * 1.2
-  return Math.max(0, round(salePrice - product.purchasePrice - ESTIMATED_BUNDLE_COST))
+  return Math.max(0, round(salePrice - product.purchasePrice - FALLBACK_COMMERCIAL_ASSUMPTIONS.estimatedBundleCost))
 }
 
 function pressureGoalFromSnapshot(snapshot: OrionSnapshot) {
@@ -997,7 +1057,7 @@ function financialGoalAnswer(
 
 function unidentifiedProductActionAnswer() {
   return [
-    "Vinícius, consigo montar o plano, mas preciso que você me diga qual item específico para calcular preço seguro sem risco.",
+    "Consigo montar o plano, mas preciso do item específico para calcular preço seguro sem risco.",
     "",
     "Diagnóstico rápido:",
     "Sem identificar o produto, eu não devo assumir custo, margem ou preço mínimo. Isso evitaria uma recomendação perigosa.",
@@ -1024,7 +1084,24 @@ function buildAnswer(intent: OrionBusinessIntent, contexts: Record<string, unkno
   const sales = contexts.sales as { topProfitProducts?: Array<{ product: string; profit: number; revenue: number; sales: number; marginPct: number }> } | null
   const crm = contexts.crm as { hotLeads?: LeadContextItem[]; staleLeads?: LeadContextItem[] } | null
   const campaigns = contexts.campaigns as { bestCampaigns?: CampaignContextItem[]; weakCampaigns?: CampaignContextItem[] } | null
-  const finance = contexts.finance as { cash?: { reconciledCashBalance: number; operationalCashFlow30d: number; ownerEquityMovement30d: number; pendingReceivables: number; pendingPayables: number } } | null
+  const finance = contexts.finance as {
+    cash?: {
+      reconciledCashBalance: number
+      operationalCashFlow30d: number
+      ownerEquityMovement30d: number
+      pendingReceivables: number
+      pendingPayables: number
+    }
+    operationalContext?: OrionFinancialOperationalContext
+    realProfit?: OrionSnapshot["finance"]["realProfitSnapshot"]
+    workingCapital?: OrionSnapshot["finance"]["workingCapitalSnapshot"]
+    profitAvailability?: OrionSnapshot["finance"]["profitAvailabilitySnapshot"]
+    cashComposition?: OrionSnapshot["finance"]["currentCashCompositionSnapshot"]
+  } | null
+  const financialContext = finance?.operationalContext || snapshot.finance.financialOperationalContext
+  const workingCapital = finance?.workingCapital || snapshot.finance.workingCapitalSnapshot
+  const ownerMovementListAnswer = buildOwnerMovementListResponse(financialContext, question)
+  if (ownerMovementListAnswer) return ownerMovementListAnswer
   const product = inventory?.products?.[0]
   const hasSpecificProduct = questionLooksProductSpecific(question)
   const health = calculateOperationalHealth(snapshot)
@@ -1080,34 +1157,52 @@ function buildAnswer(intent: OrionBusinessIntent, contexts: Record<string, unkno
   }
 
   if (intent === "purchase_capacity_analysis") {
-    const cash = finance?.cash
-    const cashBalance = cash?.reconciledCashBalance ?? snapshot.finance.reconciledCashBalance
-    const stockValue = snapshot.executive.activeStockValue
-    const canBuy = health.level === "growth" || health.level === "stable"
-    return [
-      `Caixa atual: ${brl(cashBalance)}. Fluxo operacional recente: ${brl(cash?.operationalCashFlow30d ?? snapshot.finance.operationalCashFlow30d)}.`,
-      canBuy
-        ? "A saúde operacional sustenta novas compras. Recompre, mas mantenha o foco no giro rápido."
-        : health.level === "attention"
-          ? "Atenção: A liquidez está ajustada. Priorize girar o estoque atual antes de fazer compras agressivas."
-          : "Reduza compras não prioritárias. Otimize a liquidez operacional convertendo o estoque atual antes de expandir.",
-      `Capital travado no estoque: ${brl(stockValue)}.`,
-    ].join("\n\n")
+    return formatFinancialDecisionResponse(buildFinancialDecisionResponse({
+      reasoningMode: "reinvestment_decision",
+      financialContext,
+      financialSafetyAudit: workingCapital.financialSafetyAudit,
+    }))
   }
 
   if (intent === "cash_health_analysis") {
-    const cash = finance?.cash
+    const forecast = snapshot.executive.liquidityForecast
+    const realProfit = finance?.realProfit || snapshot.finance.realProfitSnapshot
+    if (questionLooksAvailableOperationalProfit(question)) {
+      void realProfit
+      return formatFinancialDecisionResponse(buildFinancialDecisionResponse({
+        reasoningMode: "withdrawal_safety",
+        financialContext,
+        financialSafetyAudit: workingCapital.financialSafetyAudit,
+      }))
+    }
+    const profitAvailability = finance?.profitAvailability || snapshot.finance.profitAvailabilitySnapshot
+    const cashComposition = finance?.cashComposition || snapshot.finance.currentCashCompositionSnapshot
     return [
-      `Caixa real: ${brl(cash?.reconciledCashBalance ?? snapshot.finance.reconciledCashBalance)}. Fluxo recente: ${brl(cash?.operationalCashFlow30d ?? snapshot.finance.operationalCashFlow30d)}.`,
-      health.level === "critical"
-        ? "Liquidez pressionada. Mantenha foco em conversão e evite expansão agressiva no curto prazo."
-        : health.level === "attention"
-          ? "Caixa apertado, mas a operação resiste. Otimize os recebimentos sem parar as vendas."
-          : "Liquidez estável. A operação roda de forma saudável, mantenha a eficiência na margem.",
+      `Período analisado: ${profitAvailability.period.label}. Lucro realizado: ${brl(profitAvailability.realizedProfitInPeriod)}; retiradas de lucro: ${brl(profitAvailability.ownerProfitWithdrawalsInPeriod)}; devoluções de aporte: ${brl(profitAvailability.ownerCapitalReturnsInPeriod)}; devoluções sem lastro: ${brl(profitAvailability.untracedOwnerCapitalReturnsInPeriod)}; lucro após retiradas: ${brl(profitAvailability.profitAfterWithdrawals)}.`,
+      `Caixa consolidado: ${brl(cashComposition.consolidatedCash)}. Disponível para retirada: ${brl(cashComposition.availableForWithdrawal)}. Disponível para reinvestimento: ${brl(cashComposition.availableForReinvestment)}.`,
+      financialContext.operationalSummary,
+      financialContext.profitInterpretation,
+      `Próximos 7 dias: ${brl(forecast.receivables7d)} a receber e ${brl(forecast.payables7d)} a pagar. Isso não altera a liquidez disponível até conciliar.`,
+      financialContext.financialWarnings.length
+        ? financialContext.financialWarnings.slice(0, 3).join(" ")
+        : financialContext.cashHealth === "healthy"
+          ? "Caixa saudável, com baixa pressão de liquidez."
+          : "Caixa exige atenção operacional.",
     ].join("\n\n")
   }
 
   if (intent === "sales_profit_analysis") {
+    const realProfit = finance?.realProfit || snapshot.finance.realProfitSnapshot
+    const topRealProfit = realProfit.sales
+      .filter((sale) => sale.availableProfit > 0)
+      .sort((a, b) => b.availableProfit - a.availableProfit)
+      .slice(0, 3)
+    if (topRealProfit.length) {
+      return [
+        "Foque nestas vendas/produtos pelo lucro real disponível rastreável:",
+        ...topRealProfit.map((item, index) => `${index + 1}. ${item.saleLabel || item.saleId}: ${brl(item.availableProfit)} disponíveis, com ${brl(item.protectedCapital)} protegidos.`),
+      ].join("\n")
+    }
     const top = sales?.topProfitProducts?.slice(0, 3) || []
     if (!top.length) return "Dados de venda insuficientes para ranquear lucro."
     return [
@@ -1198,12 +1293,14 @@ function buildSummary(intent: OrionBusinessIntent, matchedRecords: number) {
 export async function buildOrionBusinessContext(
   companyId: string,
   question: string,
-  snapshot: OrionSnapshot
+  snapshot: OrionSnapshot,
+  intentRoute?: OrionIntentRouteSummary | null,
+  commercialSubject?: CommercialSubjectResolution | null
 ): Promise<OrionOperationalContext> {
   const cleanQuestion = safeQuestion(question)
-  const { intent, toolsUsed } = routeIntent(cleanQuestion)
+  const { intent, toolsUsed } = routeIntent(cleanQuestion, intentRoute)
   const [inventory, sales, crm, campaigns, finance] = await Promise.all([
-    buildInventoryContext(companyId, cleanQuestion, toolsUsed),
+    buildInventoryContext(companyId, cleanQuestion, toolsUsed, commercialSubject),
     buildSalesContext(companyId, toolsUsed, cleanQuestion),
     buildCrmContext(companyId, toolsUsed, cleanQuestion),
     buildCampaignContext(companyId, toolsUsed),
@@ -1238,6 +1335,183 @@ export async function buildOrionBusinessContext(
     ],
     gaps,
     inventory_search_debug: inventory?.inventory_search_debug,
+    intentRoute: intentRoute || undefined,
+    commercialSubject: commercialSubject ? {
+      subjectType: commercialSubject.subjectType,
+      category: commercialSubject.category,
+      productFamily: commercialSubject.productFamily,
+      model: commercialSubject.model,
+      variation: commercialSubject.variation,
+      compatibilityFamily: commercialSubject.compatibilityFamily,
+      ambiguity: commercialSubject.ambiguity,
+      needsClarification: commercialSubject.needsClarification,
+      confidence: commercialSubject.confidence,
+      reason: commercialSubject.reason,
+      primarySubject: commercialSubject.primarySubject ? {
+        inventoryId: commercialSubject.primarySubject.inventoryId,
+        productName: commercialSubject.primarySubject.productName,
+        category: commercialSubject.primarySubject.category,
+        productFamily: commercialSubject.primarySubject.productFamily,
+        model: commercialSubject.primarySubject.model,
+        variation: commercialSubject.primarySubject.variation,
+        color: commercialSubject.primarySubject.color,
+        compatibilityFamily: commercialSubject.primarySubject.compatibilityFamily,
+        quantity: commercialSubject.primarySubject.quantity,
+        price: commercialSubject.primarySubject.price,
+        cost: commercialSubject.primarySubject.cost,
+        marginPct: commercialSubject.primarySubject.marginPct,
+        daysInStock: commercialSubject.primarySubject.daysInStock,
+        status: commercialSubject.primarySubject.status,
+        productType: commercialSubject.primarySubject.productType,
+        entityType: commercialSubject.primarySubject.entityType,
+        entityRole: commercialSubject.primarySubject.entityRole,
+        entityPriorityWeight: commercialSubject.primarySubject.entityPriorityWeight,
+        score: commercialSubject.primarySubject.score,
+        finalScore: commercialSubject.primarySubject.finalScore,
+        reason: commercialSubject.primarySubject.reason,
+      } : null,
+      relatedProducts: commercialSubject.relatedProducts.slice(0, 8).map((match) => ({
+        inventoryId: match.inventoryId,
+        productName: match.productName,
+        category: match.category,
+        productFamily: match.productFamily,
+        model: match.model,
+        variation: match.variation,
+        color: match.color,
+        compatibilityFamily: match.compatibilityFamily,
+        quantity: match.quantity,
+        price: match.price,
+        cost: match.cost,
+        marginPct: match.marginPct,
+        daysInStock: match.daysInStock,
+        status: match.status,
+        productType: match.productType,
+        entityType: match.entityType,
+        entityRole: match.entityRole,
+        entityPriorityWeight: match.entityPriorityWeight,
+        score: match.score,
+        finalScore: match.finalScore,
+        reason: match.reason,
+      })),
+      compatibleAccessories: commercialSubject.compatibleAccessories.slice(0, 8).map((match) => ({
+        inventoryId: match.inventoryId,
+        productName: match.productName,
+        category: match.category,
+        productFamily: match.productFamily,
+        model: match.model,
+        variation: match.variation,
+        color: match.color,
+        compatibilityFamily: match.compatibilityFamily,
+        quantity: match.quantity,
+        price: match.price,
+        cost: match.cost,
+        marginPct: match.marginPct,
+        daysInStock: match.daysInStock,
+        status: match.status,
+        productType: match.productType,
+        entityType: match.entityType,
+        entityRole: match.entityRole,
+        entityPriorityWeight: match.entityPriorityWeight,
+        score: match.score,
+        finalScore: match.finalScore,
+        reason: match.reason,
+      })),
+      bundleCandidates: commercialSubject.bundleCandidates.slice(0, 4).map((candidate) => ({
+        primary: {
+          inventoryId: candidate.primary.inventoryId,
+          productName: candidate.primary.productName,
+          category: candidate.primary.category,
+          productFamily: candidate.primary.productFamily,
+          model: candidate.primary.model,
+          variation: candidate.primary.variation,
+          color: candidate.primary.color,
+          compatibilityFamily: candidate.primary.compatibilityFamily,
+          quantity: candidate.primary.quantity,
+          price: candidate.primary.price,
+          cost: candidate.primary.cost,
+          marginPct: candidate.primary.marginPct,
+          daysInStock: candidate.primary.daysInStock,
+          status: candidate.primary.status,
+          productType: candidate.primary.productType,
+          entityType: candidate.primary.entityType,
+          entityRole: candidate.primary.entityRole,
+          entityPriorityWeight: candidate.primary.entityPriorityWeight,
+          score: candidate.primary.score,
+          finalScore: candidate.primary.finalScore,
+          reason: candidate.primary.reason,
+        },
+        accessories: candidate.accessories.slice(0, 6).map((accessory) => ({
+          inventoryId: accessory.inventoryId,
+          productName: accessory.productName,
+          category: accessory.category,
+          productFamily: accessory.productFamily,
+          model: accessory.model,
+          variation: accessory.variation,
+          color: accessory.color,
+          compatibilityFamily: accessory.compatibilityFamily,
+          quantity: accessory.quantity,
+          price: accessory.price,
+          cost: accessory.cost,
+          marginPct: accessory.marginPct,
+          daysInStock: accessory.daysInStock,
+          status: accessory.status,
+          productType: accessory.productType,
+          entityType: accessory.entityType,
+          entityRole: accessory.entityRole,
+          entityPriorityWeight: accessory.entityPriorityWeight,
+          score: accessory.score,
+          finalScore: accessory.finalScore,
+          reason: accessory.reason,
+        })),
+        reason: candidate.reason,
+      })),
+      secondarySuggestions: commercialSubject.secondarySuggestions.slice(0, 8).map((match) => ({
+        inventoryId: match.inventoryId,
+        productName: match.productName,
+        category: match.category,
+        productFamily: match.productFamily,
+        model: match.model,
+        variation: match.variation,
+        color: match.color,
+        compatibilityFamily: match.compatibilityFamily,
+        quantity: match.quantity,
+        price: match.price,
+        cost: match.cost,
+        marginPct: match.marginPct,
+        daysInStock: match.daysInStock,
+        status: match.status,
+        productType: match.productType,
+        entityType: match.entityType,
+        entityRole: match.entityRole,
+        entityPriorityWeight: match.entityPriorityWeight,
+        score: match.score,
+        finalScore: match.finalScore,
+        reason: match.reason,
+      })),
+      matches: commercialSubject.matches.slice(0, 8).map((match) => ({
+        inventoryId: match.inventoryId,
+        productName: match.productName,
+        category: match.category,
+        productFamily: match.productFamily,
+        model: match.model,
+        variation: match.variation,
+        color: match.color,
+        compatibilityFamily: match.compatibilityFamily,
+        quantity: match.quantity,
+        price: match.price,
+        cost: match.cost,
+        marginPct: match.marginPct,
+        daysInStock: match.daysInStock,
+        status: match.status,
+        productType: match.productType,
+        entityType: match.entityType,
+        entityRole: match.entityRole,
+        entityPriorityWeight: match.entityPriorityWeight,
+        score: match.score,
+        finalScore: match.finalScore,
+        reason: match.reason,
+      })),
+    } : undefined,
     contexts,
   }
 }
@@ -1246,10 +1520,23 @@ export function summarizeOperationalContext(context: OrionOperationalContext) {
   return {
     intent: context.intent,
     toolsUsed: context.toolsUsed,
+    intentRoute: context.intentRoute,
+    commercialSubject: context.commercialSubject,
     dataStatus: context.dataStatus,
     matchedRecords: context.matchedRecords,
     summary: context.summary,
     gaps: context.gaps,
     inventory_search_debug: context.inventory_search_debug,
+    operationalMemoryContext: context.operationalMemoryContext ? {
+      businessPersonalityProfile: context.operationalMemoryContext.businessPersonalityProfile,
+      memoryGuardrails: context.operationalMemoryContext.memoryGuardrails,
+      relevantOperationalMemories: context.operationalMemoryContext.relevantOperationalMemories.map((item) => ({
+        type: item.memory.type,
+        scope: item.memory.scope,
+        summary: item.memory.summary,
+        memoryInfluenceWeight: item.memoryInfluenceWeight,
+        conflictWithCurrentData: item.conflictWithCurrentData,
+      })),
+    } : null,
   }
 }

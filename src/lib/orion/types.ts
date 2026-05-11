@@ -1,3 +1,15 @@
+import type { MoneyClassificationSnapshot } from "@/lib/financial/money-classification-engine"
+import type { RealProfitSnapshot } from "@/lib/financial/real-profit-engine"
+import type { WorkingCapitalSnapshot } from "@/lib/financial/working-capital-engine"
+import type { FinancialScenarioSnapshot } from "@/lib/financial/financial-scenario-separation"
+import type { InventoryLiquidityQuality } from "@/lib/financial/inventory-liquidity-quality"
+import type { FinancialConfidenceBreakdown } from "@/lib/financial/financial-confidence-breakdown"
+import type { ProfitAvailabilityPeriod, ProfitAvailabilitySnapshot } from "@/lib/financial/profit-availability-engine"
+import type { CurrentCashCompositionSnapshot } from "@/lib/financial/current-cash-composition-engine"
+import type { OwnerCapitalSnapshot } from "@/lib/financial/owner-capital-engine"
+import type { OrionFinancialOperationalContext } from "@/lib/orion/financial-context-consumer"
+import type { OrionAppliedOperationalMemoryContext } from "@/lib/orion/operational-memory"
+
 export type OrionPriority = "low" | "medium" | "high" | "critical"
 
 export type OrionInsight = {
@@ -131,6 +143,18 @@ export type OrionExecutionPayload = {
     targetProfit: number | null
     maxPossibleProfit: number
     gap: number
+    operationalTarget: {
+      targetAmount: number | null
+      source: "explicit_user_goal" | "upcoming_bills" | "configured_target" | "no_active_target"
+      label: string
+      explanation: string
+    }
+    gapToOperationalTarget: {
+      amount: number | null
+      label: string
+      tone: "neutral" | "green" | "red"
+      explanation: string
+    }
     deadlineLabel: string | null
     recommendedScenario: "conservative" | "balanced" | "aggressive"
     financialGoal: {
@@ -148,6 +172,9 @@ export type OrionExecutionPayload = {
       projectedCashAfterCommitments: number
       workingCapitalAfterPayables: number
       profitBufferAfterPayables: number
+      safeWithdrawalAmount: number
+      safeReinvestmentAmount: number
+      operationalSurplusAfterBills: number
       replacementCapitalBasis: string
       nextDueLabel: string | null
       nextDueDays: number | null
@@ -182,6 +209,11 @@ export type OrionExecutionPayload = {
   whatsappPlan: OrionExecutionWhatsappPlan | null
   timeline72h: OrionExecutionTimelineItem[]
   scenarios: OrionExecutionScenario[]
+  realProfitability: RealProfitSnapshot["realProfitability"]
+  protectedCapital: number
+  availableProfit: number
+  inventoryPressure: RealProfitSnapshot["inventoryPressure"]
+  lowMarginWarnings: string[]
 }
 
 export type OrionPriorityFocus = {
@@ -231,6 +263,161 @@ export type OrionBusinessToolName =
   | "cashflow_tool"
   | "pricing_tool"
 
+export type OrionOperationalGoalType =
+  | "profit_target"
+  | "inventory_liquidity"
+  | "inventory_rotation"
+  | "margin_optimization"
+  | "marketing_execution"
+  | "content_generation"
+  | "pricing_validation"
+  | "operational_diagnosis"
+  | "unknown"
+
+export type OrionOperationalGoal = {
+  goalType: OrionOperationalGoalType
+  targetProfit: number | null
+  horizonDays: number | null
+  urgency: "low" | "medium" | "high"
+  optimization: "liquidity" | "margin" | "liquidity_plus_margin" | "speed" | "execution" | "unknown"
+  directQuestion: boolean
+  needsExecution: boolean
+  reason: string
+}
+
+export type OrionReasoningMode =
+  | "financial_decision"
+  | "withdrawal_safety"
+  | "reinvestment_decision"
+  | "working_capital_analysis"
+  | "financial_health_analysis"
+  | "goal_planning"
+  | "inventory_liquidity"
+  | "inventory_rotation"
+  | "campaign_generation"
+  | "marketing_execution"
+  | "content_generation"
+  | "pricing_strategy"
+  | "operational_diagnosis"
+  | "offer_optimization"
+
+export type OrionExecutionGuardrails = {
+  allowCampaignGeneration: boolean
+  allowTrafficRecommendation: boolean
+  allowProductMixGeneration: boolean
+  allowCopyGeneration: boolean
+  allowPricingExecution: boolean
+  allowInventoryPush: boolean
+  reason: string
+}
+
+export type OrionOperationalPlan = {
+  directAnswer: "Sim" | "Não" | "Provavelmente" | null
+  directAnswerReason: string
+  feasibility: {
+    status: "feasible" | "not_feasible" | "partial" | "unknown"
+    targetProfit: number | null
+    estimatedProfit: number
+    conservativeProfit: number
+    optimisticProfit: number
+    horizonDays: number | null
+  }
+  recommendedPath: string
+  productMix: Array<{
+    inventoryId: string
+    productName: string
+    role: "primary" | "margin_addon" | "liquidity" | "backup"
+    quantity: number
+    unitProfit: number
+    estimatedProfit: number
+    marginPct: number
+    daysInStock: number
+    reason: string
+  }>
+  financialValidation: string
+  risks: string[]
+  nextActions: string[]
+  executionAllowed: boolean
+  response: string
+}
+
+export type OrionConversationIntent =
+  | "global_business_question"
+  | "mission_continuation"
+  | "mission_refinement"
+  | "pricing_refinement"
+  | "offer_refinement"
+  | "marketing_execution"
+  | "financial_analysis"
+  | "inventory_analysis"
+  | "strategic_question"
+  | "operational_question"
+  | "new_campaign_request"
+  | "product_switch"
+  | "unrelated_question"
+
+export type OrionMissionContextPolicy = "use" | "ignore" | "rebuild" | "switch"
+
+export type OrionIntentRouteSummary = {
+  intent: OrionConversationIntent
+  missionContextPolicy: OrionMissionContextPolicy
+  useMissionContext: boolean
+  ignoreMissionContext: boolean
+  rebuildMissionContext: boolean
+  reason: string
+  confidence: number
+}
+
+export type OrionCommercialEntityType = "device" | "accessory" | "addon" | "service" | "bundle" | "unknown"
+export type OrionCommercialEntityRole = "primary" | "related" | "compatible_accessory" | "bundle_candidate" | "secondary_suggestion"
+
+export type OrionCommercialSubjectMatchSummary = {
+  inventoryId: string
+  productName: string
+  category: string | null
+  productFamily: string | null
+  model: string | null
+  variation: string | null
+  color: string | null
+  compatibilityFamily: string | null
+  quantity: number
+  price: number
+  cost: number
+  marginPct: number
+  daysInStock: number
+  status: string
+  productType: string | null
+  entityType: OrionCommercialEntityType
+  entityRole: OrionCommercialEntityRole
+  entityPriorityWeight: number
+  score: number
+  finalScore: number
+  reason: string
+}
+
+export type OrionCommercialSubjectSummary = {
+  subjectType: "single_inventory_item" | "multi_inventory_match" | "category" | "accessory" | "bundle" | "unknown"
+  category: string | null
+  productFamily: string | null
+  model: string | null
+  variation: string | null
+  compatibilityFamily: string | null
+  ambiguity: string | null
+  needsClarification: boolean
+  confidence: number
+  reason: string
+  primarySubject: OrionCommercialSubjectMatchSummary | null
+  relatedProducts: OrionCommercialSubjectMatchSummary[]
+  compatibleAccessories: OrionCommercialSubjectMatchSummary[]
+  bundleCandidates: Array<{
+    primary: OrionCommercialSubjectMatchSummary
+    accessories: OrionCommercialSubjectMatchSummary[]
+    reason: string
+  }>
+  secondarySuggestions: OrionCommercialSubjectMatchSummary[]
+  matches: OrionCommercialSubjectMatchSummary[]
+}
+
 export type OrionOperationalContext = {
   intent: OrionBusinessIntent
   toolsUsed: OrionBusinessToolName[]
@@ -262,6 +449,13 @@ export type OrionOperationalContext = {
     } | null
   }
   contexts: Record<string, unknown>
+  intentRoute?: OrionIntentRouteSummary
+  commercialSubject?: OrionCommercialSubjectSummary
+  operationalGoal?: OrionOperationalGoal
+  reasoningMode?: OrionReasoningMode
+  executionGuardrails?: OrionExecutionGuardrails
+  operationalPlan?: OrionOperationalPlan
+  operationalMemoryContext?: OrionAppliedOperationalMemoryContext | null
 }
 
 export type OrionExecutionMode =
@@ -370,6 +564,13 @@ export type OrionOperationalConversationState = {
   currentBottleneck: string | null
   operationalIntent: OrionOperationalIntent | null
   activeMissionContext: OrionMissionContext | null
+  intentRoute: OrionIntentRouteSummary | null
+  commercialSubject: OrionCommercialSubjectSummary | null
+  activeGoal: OrionOperationalGoal | null
+  activeReasoningMode: OrionReasoningMode | null
+  executionGuardrails?: OrionExecutionGuardrails | null
+  activeOperationalPlanSummary: string | null
+  operationalMemoryContext?: OrionAppliedOperationalMemoryContext | null
 }
 
 export type OrionAnalysis = {
@@ -521,9 +722,13 @@ export type OrionSnapshot = {
     }>
   }
   finance: {
-    cashBalanceSource: "reconciled_balance_after" | "finance_accounts"
+    cashBalanceSource: "ledger" | "empty_ledger" | "reconciled_balance_after" | "finance_accounts"
     reconciledCashBalance: number
     accountCashBalance: number
+    availableLiquidity: number
+    pendingBalance: number
+    staleAccountBalance: boolean
+    ledgerVsAccountDiff: number
     operationalCashFlow30d: number
     ownerEquityMovement30d: number
     reconciledIncome30d: number
@@ -531,6 +736,22 @@ export type OrionSnapshot = {
     reconciledSalesRevenue30d: number
     reconciledSalesProfit30d: number
     availableSalesProfit: number
+    availableOperationalProfitEstimate: {
+      amount: number
+      confidence: number
+      reason: string
+    }
+    selectedFinancialPeriod: ProfitAvailabilityPeriod
+    moneyClassification: MoneyClassificationSnapshot
+    realProfitSnapshot: RealProfitSnapshot
+    financialScenarioSnapshot: FinancialScenarioSnapshot
+    inventoryLiquidityQuality: InventoryLiquidityQuality
+    financialConfidenceBreakdown: FinancialConfidenceBreakdown
+    ownerCapitalSnapshot: OwnerCapitalSnapshot
+    profitAvailabilitySnapshot: ProfitAvailabilitySnapshot
+    currentCashCompositionSnapshot: CurrentCashCompositionSnapshot
+    workingCapitalSnapshot: WorkingCapitalSnapshot
+    financialOperationalContext: OrionFinancialOperationalContext
     profitWindowStart: string
     cashFlowWeekly: OrionChartPoint[]
     expenseCategories: OrionChartPoint[]

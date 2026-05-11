@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { pool } from "@/lib/db"
 import { requireApiAuthContext } from "@/lib/auth-context"
+import { syncAccountBalanceFromLedger } from "@/lib/financial/ledger-balance-engine"
 import { canAccess, canDeleteSensitiveRecords, canEditFinance, canManageUsers } from "@/lib/permissions"
 import {
   getNextChartAccountCode,
@@ -647,6 +648,16 @@ async function writeAuditLogs(input: {
   }
 }
 
+async function syncLedgerAccountCacheIfNeeded(table: string, companyId: string) {
+  if (table !== "financial_account_movements") return
+
+  try {
+    await syncAccountBalanceFromLedger(pool, companyId)
+  } catch (error) {
+    console.warn("Failed to sync finance_accounts.current_balance from ledger", error)
+  }
+}
+
 async function hydrate(table: string, rows: Record<string, unknown>[], companyId: string) {
   if (rows.length === 0) return rows
 
@@ -878,6 +889,7 @@ export async function POST(request: Request) {
         action: action === "insert" ? "created" : "updated",
         newRows: result.rows,
       })
+      await syncLedgerAccountCacheIfNeeded(table, companyId)
       return NextResponse.json({ data: finalizeRows(data, body), error: null })
     }
 
@@ -948,6 +960,7 @@ export async function POST(request: Request) {
         oldRows,
         newRows: result.rows,
       })
+      await syncLedgerAccountCacheIfNeeded(table, companyId)
       return NextResponse.json({ data: finalizeRows(data, body), error: null })
     }
 
@@ -974,6 +987,7 @@ export async function POST(request: Request) {
         action: "deleted",
         oldRows,
       })
+      await syncLedgerAccountCacheIfNeeded(table, companyId)
       return NextResponse.json({ data: finalizeRows(result.rows, body), error: null })
     }
 

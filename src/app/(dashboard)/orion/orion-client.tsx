@@ -62,7 +62,37 @@ type ChatMessage = {
   source?: "operational" | "overview" | "strategic"
 }
 
+type SelectedFinancialPeriod = {
+  preset: "today" | "current_month" | "last_7_days" | "last_30_days" | "year_to_date" | "all_time" | "custom"
+  startDate?: string
+  endDate?: string
+}
+
+const FINANCIAL_PERIOD_OPTIONS: Array<{ value: SelectedFinancialPeriod["preset"]; label: string }> = [
+  { value: "today", label: "Hoje" },
+  { value: "current_month", label: "Mês atual" },
+  { value: "last_7_days", label: "Últimos 7 dias" },
+  { value: "last_30_days", label: "Últimos 30 dias" },
+  { value: "year_to_date", label: "Ano atual" },
+  { value: "all_time", label: "Todo o histórico" },
+  { value: "custom", label: "Personalizado" },
+]
+
 const chartColors = ["#38BDF8", "#34D399", "#FBBF24", "#F87171", "#A78BFA", "#F472B6"]
+
+function toDateInputValue(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
+}
+
+function periodParams(period: SelectedFinancialPeriod) {
+  const params = new URLSearchParams()
+  params.set("periodPreset", period.preset)
+  if (period.preset === "custom") {
+    if (period.startDate) params.set("startDate", period.startDate)
+    if (period.endDate) params.set("endDate", period.endDate)
+  }
+  return params.toString()
+}
 
 function formatBRL(value: number) {
   return new Intl.NumberFormat("pt-BR", {
@@ -319,22 +349,22 @@ function FinancialGoalCard({ payload }: { payload: OrionApiPayload }) {
         </span>
       </div>
       <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <BoardMetric label="Saldo bruto" value={formatBRL(goal.grossCash)} tone="blue" helper="dinheiro total na conta" />
-        <BoardMetric label="Capital de giro protegido" value={formatBRL(goal.protectedWorkingCapital)} tone="amber" helper={goal.replacementCapitalBasis} />
-        <BoardMetric label="Lucro livre estimado" value={formatBRL(goal.liquidProfitAvailable)} tone={goal.liquidProfitAvailable >= goal.payables30d ? "green" : "amber"} helper={`${formatBRL(goal.estimatedReceivableProfit)} de lucro estimado em recebíveis`} />
-        <BoardMetric label="Contas 30 dias" value={formatBRL(goal.payables30d)} tone={goal.payables30d > 0 ? "amber" : "neutral"} />
-        <BoardMetric label="Lucro novo necessário" value={formatBRL(goal.requiredNewProfit)} tone={goal.requiredNewProfit > 0 ? "red" : "green"} />
+        <BoardMetric label="Caixa disponível agora" value={formatBRL(goal.grossCash)} tone="blue" helper="Saldo reconciliado disponível hoje, consolidado das contas financeiras." />
+        <BoardMetric label="Capital operacional protegido" value={formatBRL(goal.protectedWorkingCapital)} tone="amber" helper="Inclui estoque ativo ainda não convertido em caixa." />
+        <BoardMetric label="Lucro realizado no período" value={formatBRL(goal.liquidProfitAvailable)} tone={goal.liquidProfitAvailable >= goal.payables30d ? "green" : "amber"} helper={`Lucro das vendas conciliadas no período selecionado. ${goal.replacementCapitalBasis}`} />
+        <BoardMetric label="Contas próximas" value={formatBRL(goal.payables30d)} tone={goal.payables30d > 0 ? "amber" : "neutral"} helper="Obrigações previstas nos próximos 30 dias." />
+        <BoardMetric label="Necessidade operacional adicional" value={goal.requiredNewProfit > 0 ? formatBRL(goal.requiredNewProfit) : "Coberto"} tone={goal.requiredNewProfit > 0 ? "red" : "green"} helper={goal.requiredNewProfit > 0 ? undefined : "Nenhum lucro adicional necessário para as contas próximas."} />
       </div>
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
         <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Se pagar pelo bruto</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Caixa projetado com recebíveis</p>
           <p className="mt-2 text-lg font-semibold text-white">{formatBRL(goal.projectedCashAfterCommitments)}</p>
           <p className="mt-1 text-sm leading-6 text-slate-400">Sobra na conta após contas e recebíveis, mas parte pode ser dinheiro de recompra.</p>
         </div>
         <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Buffer de lucro</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Sobra operacional após contas</p>
           <p className={cn("mt-2 text-lg font-semibold", goal.profitBufferAfterPayables >= 0 ? "text-emerald-300" : "text-red-300")}>{formatBRL(goal.profitBufferAfterPayables)}</p>
-          <p className="mt-1 text-sm leading-6 text-slate-400">Lucro livre estimado depois das contas previstas.</p>
+          <p className="mt-1 text-sm leading-6 text-slate-400">Lucro realizado no período, menos retiradas e contas próximas.</p>
         </div>
         <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Próximo vencimento</p>
@@ -544,14 +574,14 @@ function ScenarioCard({ scenario, bundle, recommended }: { scenario: OrionExecut
 
 function ExecutionBoard({ payload }: { payload: OrionApiPayload }) {
   const { execution } = payload
-  const operationalGoal = execution.objective.targetProfit ?? execution.objective.financialGoal.requiredNewProfit
-  const target = execution.objective.targetProfit
-    ? formatBRL(execution.objective.targetProfit)
-    : execution.objective.financialGoal.requiredNewProfit > 0
-      ? formatBRL(execution.objective.financialGoal.requiredNewProfit)
-      : "Caixa protegido"
-  const hasTarget = operationalGoal > 0
-  const gapTone = hasTarget && execution.objective.gap > 0 ? "red" : "green"
+  const operationalTarget = execution.objective.operationalTarget
+  const gapToOperationalTarget = execution.objective.gapToOperationalTarget
+  const hasTarget = operationalTarget.source !== "no_active_target" && operationalTarget.targetAmount !== null
+  const target = hasTarget && operationalTarget.targetAmount !== null
+    ? formatBRL(operationalTarget.targetAmount)
+    : "Sem meta ativa"
+  const targetTone = hasTarget ? "blue" : "neutral"
+  const gapTone = gapToOperationalTarget.tone
   const inventoryUnits = execution.inventory.reduce((sum, item) => sum + item.quantity, 0)
 
   return (
@@ -564,13 +594,13 @@ function ExecutionBoard({ payload }: { payload: OrionApiPayload }) {
           </span>
         </div>
         <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          <BoardMetric label="Meta operacional" value={target} tone="blue" />
-          <BoardMetric label="Lucro máximo atual" value={formatBRL(execution.objective.maxPossibleProfit)} tone="green" helper="com estoque operacional" />
+          <BoardMetric label={operationalTarget.label} value={target} tone={targetTone} helper={operationalTarget.explanation} />
+          <BoardMetric label="Potencial projetado estoque" value={formatBRL(execution.objective.maxPossibleProfit)} tone="green" helper="Cenário potencial do estoque, não lucro realizado." />
           <BoardMetric
             label="Gap para meta"
-            value={hasTarget ? formatBRL(execution.objective.gap) : "Sem gap"}
-            tone={hasTarget ? gapTone : "neutral"}
-            helper={hasTarget ? undefined : "Nenhuma meta adicional pendente"}
+            value={gapToOperationalTarget.amount !== null ? formatBRL(gapToOperationalTarget.amount) : "Sem meta ativa"}
+            tone={gapTone}
+            helper={gapToOperationalTarget.explanation}
           />
           <BoardMetric label="Caixa atual" value={formatBRL(payload.snapshot.executive.cashBalance)} tone={payload.snapshot.executive.cashBalance >= 0 ? "green" : "red"} />
           <BoardMetric label="Recebíveis" value={formatBRL(payload.snapshot.executive.pendingReceivables)} tone="blue" />
@@ -857,6 +887,12 @@ export function OrionClient() {
   const [question, setQuestion] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [operationalConversationState, setOperationalConversationState] = useState<OrionOperationalConversationState | null>(null)
+  const [selectedFinancialPeriod, setSelectedFinancialPeriod] = useState<SelectedFinancialPeriod>({
+    preset: "current_month",
+    startDate: toDateInputValue(new Date()),
+    endDate: toDateInputValue(new Date()),
+  })
+  const periodRequestKey = useMemo(() => periodParams(selectedFinancialPeriod), [selectedFinancialPeriod])
   const chatPrimedRef = useRef(false)
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -876,7 +912,7 @@ export function OrionClient() {
     setLoading(true)
     setError(null)
     try {
-      const response = await fetch("/api/orion/analysis", { cache: "no-store" })
+      const response = await fetch(`/api/orion/analysis?${periodRequestKey}`, { cache: "no-store" })
       const json = await response.json() as ApiResponse
       if (!response.ok || !json.data) {
         setError(json.error?.message || "Não foi possível carregar a ORION AI.")
@@ -903,7 +939,7 @@ export function OrionClient() {
       const response = await fetch("/api/orion/analysis", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "chat", message: trimmed, operationalConversationState }),
+        body: JSON.stringify({ mode: "chat", message: trimmed, operationalConversationState, selectedFinancialPeriod }),
       })
       const json = await response.json() as ApiResponse
       if (json.data) {
@@ -926,7 +962,8 @@ export function OrionClient() {
 
   useEffect(() => {
     let active = true
-    fetch("/api/orion/analysis", { cache: "no-store" })
+    setLoading(true)
+    fetch(`/api/orion/analysis?${periodRequestKey}`, { cache: "no-store" })
       .then((res) => res.json().then((json: ApiResponse) => ({ ok: res.ok, json })))
       .then(({ ok, json }) => {
         if (!active) return
@@ -941,7 +978,7 @@ export function OrionClient() {
       .catch(() => { if (active) setError("Não foi possível carregar a ORION AI.") })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
-  }, [])
+  }, [periodRequestKey])
 
   const allInsights = useMemo(() => {
     if (!payload) return []
@@ -997,6 +1034,38 @@ export function OrionClient() {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-slate-200">
+                Período financeiro
+                <select
+                  value={selectedFinancialPeriod.preset}
+                  onChange={(event) => setSelectedFinancialPeriod((current) => ({
+                    ...current,
+                    preset: event.target.value as SelectedFinancialPeriod["preset"],
+                  }))}
+                  className="bg-transparent text-slate-100 outline-none"
+                >
+                  {FINANCIAL_PERIOD_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value} className="bg-slate-950 text-slate-100">{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              {selectedFinancialPeriod.preset === "custom" ? (
+                <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-slate-200">
+                  <input
+                    type="date"
+                    value={selectedFinancialPeriod.startDate || ""}
+                    onChange={(event) => setSelectedFinancialPeriod((current) => ({ ...current, startDate: event.target.value }))}
+                    className="bg-transparent text-slate-100 outline-none"
+                  />
+                  <span className="text-slate-500">até</span>
+                  <input
+                    type="date"
+                    value={selectedFinancialPeriod.endDate || ""}
+                    onChange={(event) => setSelectedFinancialPeriod((current) => ({ ...current, endDate: event.target.value }))}
+                    className="bg-transparent text-slate-100 outline-none"
+                  />
+                </div>
+              ) : null}
               {(generating || chatLoading) ? (
                 <span className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs font-semibold text-emerald-100">
                   <span className="mr-2 inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-300" />

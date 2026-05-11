@@ -22,6 +22,12 @@ function scoreToLevel(score: number): ConfidenceLevel {
   return "low"
 }
 
+function usesLedgerCashSource(snapshot: OrionSnapshot) {
+  return snapshot.finance.cashBalanceSource === "ledger"
+    || snapshot.finance.cashBalanceSource === "empty_ledger"
+    || snapshot.finance.cashBalanceSource === "reconciled_balance_after"
+}
+
 /**
  * Calculate confidence for a stock-related insight.
  */
@@ -72,13 +78,25 @@ function stockInsightConfidence(snapshot: OrionSnapshot): InsightConfidence {
  * Calculate confidence for a financial insight.
  */
 function financialInsightConfidence(snapshot: OrionSnapshot): InsightConfidence {
+  const financialConfidence = snapshot.finance.financialConfidenceBreakdown
+  if (financialConfidence) {
+    return {
+      level: financialConfidence.level,
+      score: financialConfidence.overallConfidence,
+      reason: [
+        ...financialConfidence.reasoning,
+        ...financialConfidence.warnings,
+      ].slice(0, 3).join("; ") || "confiança financeira recalibrada por breakdown estrutural",
+    }
+  }
+
   let score = 0
   let factors = 0
   const reasons: string[] = []
 
   // Has reconciled cash balance
   factors++
-  if (snapshot.finance.cashBalanceSource === "reconciled_balance_after") {
+  if (usesLedgerCashSource(snapshot)) {
     score++
     reasons.push("saldo reconciliado")
   } else {
@@ -232,6 +250,10 @@ export function enrichAnalysisWithConfidence(
  * Calculate overall analysis confidence based on data quality signals.
  */
 function calculateOverallConfidence(snapshot: OrionSnapshot): number {
+  if (snapshot.finance.financialConfidenceBreakdown) {
+    return snapshot.finance.financialConfidenceBreakdown.overallConfidence
+  }
+
   let score = 0
   let factors = 0
 
@@ -245,7 +267,7 @@ function calculateOverallConfidence(snapshot: OrionSnapshot): number {
 
   // Has reconciled balance
   factors++
-  if (snapshot.finance.cashBalanceSource === "reconciled_balance_after") score++
+  if (usesLedgerCashSource(snapshot)) score++
 
   // Has leads
   factors++
