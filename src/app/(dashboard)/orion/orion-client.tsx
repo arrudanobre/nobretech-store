@@ -600,6 +600,40 @@ function ProactiveAlertsPanel({ payload }: { payload: OrionApiPayload }) {
   )
 }
 
+function DecisionMemoryPanel({ payload }: { payload: OrionApiPayload }) {
+  const decisions = (payload.decisionMemory?.open || []).slice(0, 3)
+  if (decisions.length === 0) return null
+  return (
+    <section className="rounded-3xl border border-emerald-300/20 bg-[#08111f] p-5 shadow-xl shadow-emerald-950/10">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-white">Decisões em acompanhamento</h2>
+          <p className="mt-0.5 text-xs text-slate-400">Recomendações registradas que ainda esperam resultado.</p>
+        </div>
+        <CheckCircle2 className="h-5 w-5 text-emerald-300" />
+      </div>
+      <div className="grid gap-3 lg:grid-cols-3">
+        {decisions.map((decision) => (
+          <article key={decision.id} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+            <div className="flex items-center justify-between gap-2 text-xs font-semibold uppercase text-slate-400">
+              <span>{decision.status === "in_progress" ? "Em andamento" : "Em acompanhamento"}</span>
+              <span className="rounded-full bg-black/20 px-2 py-0.5 text-[10px]">{decision.resultStatus !== "pending" ? decision.resultStatus : "aguardando resultado"}</span>
+            </div>
+            <h3 className="mt-2 text-sm font-semibold text-white">{humanizeOrionText(decision.title)}</h3>
+            <p className="mt-1 text-xs leading-5 text-slate-300">{polishBusinessDecisionText(decision.recommendation)}</p>
+            {decision.reflection ? (
+              <p className="mt-2 text-[11px] leading-5 text-emerald-200">{polishBusinessDecisionText(decision.reflection)}</p>
+            ) : null}
+            {decision.reviewAfter ? (
+              <p className="mt-2 text-[11px] text-slate-400">Próxima revisão: {decision.reviewAfter.slice(0, 10)}</p>
+            ) : null}
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 // ─── Operational execution board ───────────────────────────────────────────
 
 function scenarioLabel(mode: OrionExecutionScenario["mode"] | OrionApiPayload["execution"]["objective"]["recommendedScenario"]) {
@@ -1639,6 +1673,7 @@ export function OrionClient() {
         {/* Main dashboard */}
         <div className="space-y-5">
             <ProactiveAlertsPanel payload={payload} />
+            <DecisionMemoryPanel payload={payload} />
             <ExecutionBoard payload={payload} />
 
             {/* 8. Analytics recolhido */}

@@ -234,4 +234,112 @@ function snapshot(): OrionSnapshot {
   }
 }
 
+// Decision memory: business_decision creates a candidate when companyId is provided
+{
+  const response = buildOrionResponse({
+    semanticPlan: buildSemanticPlan({ userQuestion: "Com R$ 4.000, o que eu compro?" }),
+    snapshot: snapshot(),
+    userQuestion: "Com R$ 4.000, o que eu compro?",
+    companyId: "co-1",
+  })
+  assert.ok(response.decisionMemoryCandidates && response.decisionMemoryCandidates.length > 0, "must surface a memory candidate")
+  const candidate = response.decisionMemoryCandidates![0]
+  assert.equal(candidate.decisionType, "capital_allocation")
+  assert.equal(candidate.companyId, "co-1")
+  assert.ok(typeof candidate.decisionPayload?.decisionKey === "string")
+  // decisionKey includes subtype (action) to disambiguate decisions on the same product
+  const key = String(candidate.decisionPayload!.decisionKey)
+  assert.match(key, /:buy$|:hold$/, `decisionKey must end with subtype, got ${key}`)
+  assert.equal(candidate.decisionPayload?.subtype, key.endsWith(":buy") ? "buy" : "hold")
+  // reviewAfter: capital_allocation → 7 days horizon
+  assert.ok(candidate.reviewAfter, "reviewAfter must be set")
+  const reviewMs = new Date(candidate.reviewAfter!).getTime() - Date.now()
+  assert.ok(reviewMs > 6 * 24 * 60 * 60 * 1000 && reviewMs < 8 * 24 * 60 * 60 * 1000, "capital_allocation review_after ~7 days")
+}
+
+// Decision memory: reinvestment_decision creates a candidate when companyId is provided
+{
+  const response = buildOrionResponse({
+    semanticPlan: buildSemanticPlan({ userQuestion: "Posso fazer novas compras agora?" }),
+    snapshot: snapshot(),
+    userQuestion: "Posso fazer novas compras agora?",
+    companyId: "co-1",
+  })
+  assert.ok(response.decisionMemoryCandidates && response.decisionMemoryCandidates.length > 0)
+  const candidate = response.decisionMemoryCandidates![0]
+  assert.equal(candidate.decisionType, "capital_allocation")
+  assert.match(String(candidate.decisionPayload?.decisionKey), /:buy$/)
+  assert.ok(candidate.reviewAfter)
+}
+
+// Decision memory: audit_traceability does NOT create memory
+{
+  const response = buildOrionResponse({
+    semanticPlan: buildSemanticPlan({ userQuestion: "Abra o cálculo do reinvestimento" }),
+    snapshot: snapshot(),
+    userQuestion: "Abra o cálculo do reinvestimento",
+    companyId: "co-1",
+  })
+  assert.equal(response.responseKind, "audit_traceability")
+  assert.ok(!response.decisionMemoryCandidates || response.decisionMemoryCandidates.length === 0)
+}
+
+// Decision memory: generic response does NOT create memory
+{
+  const response = buildOrionResponse({
+    semanticPlan: buildSemanticPlan({ userQuestion: "Olá" }),
+    snapshot: snapshot(),
+    userQuestion: "Olá",
+    companyId: "co-1",
+  })
+  assert.equal(response.responseKind, "generic_executive")
+  assert.ok(!response.decisionMemoryCandidates || response.decisionMemoryCandidates.length === 0)
+}
+
+// Decision memory: no companyId → no candidates
+{
+  const response = buildOrionResponse({
+    semanticPlan: buildSemanticPlan({ userQuestion: "Com R$ 4.000, o que eu compro?" }),
+    snapshot: snapshot(),
+    userQuestion: "Com R$ 4.000, o que eu compro?",
+  })
+  assert.ok(!response.decisionMemoryCandidates || response.decisionMemoryCandidates.length === 0)
+}
+
+// Memory context: prior open decision shows up as a finding (continuity)
+{
+  const priorMemory = {
+    id: "prev-1",
+    companyId: "co-1",
+    decisionType: "capital_allocation" as const,
+    title: "Comprar com teto",
+    recommendation: "Priorizar iPad como produto âncora.",
+    reason: "Margem e giro.",
+    status: "open" as const,
+    priority: "high" as const,
+    confidence: "high" as const,
+    sourceQuestion: "",
+    decisionPayload: { entityLabel: "iPad (11ª geração)" },
+    expectedOutcome: {},
+    actualOutcome: {},
+    resultStatus: "pending" as const,
+    reflection: "",
+    createdAt: "2026-05-01T00:00:00Z",
+    updatedAt: "2026-05-01T00:00:00Z",
+    resolvedAt: null,
+    reviewAfter: null,
+  }
+  const response = buildOrionResponse({
+    semanticPlan: buildSemanticPlan({ userQuestion: "Com R$ 4.000, o que eu compro?" }),
+    snapshot: snapshot(),
+    userQuestion: "Com R$ 4.000, o que eu compro?",
+    companyId: "co-1",
+    decisionMemoryContext: { openDecisions: [priorMemory], recentDecisions: [priorMemory] },
+  })
+  assert.equal(response.responseKind, "business_decision")
+  const priorFinding = response.structured?.businessDecision?.keyFindings.find((f) => f.label === "Decisão de capital pendente")
+  assert.ok(priorFinding, "must surface prior decision finding with type-specific label")
+  assert.match(priorFinding!.evidence, /Continuidade/i)
+}
+
 console.log("orion-response-orchestrator tests passed")

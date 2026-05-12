@@ -1,6 +1,12 @@
 import type { OrionBusinessReview } from "./business-review-engine"
-import { buildOrionBusinessDecision, type OrionBusinessDecision } from "./business-decision-orchestrator"
+import {
+  buildDecisionMemoryCandidate,
+  buildOrionBusinessDecision,
+  reviewHorizonDaysFor,
+  type OrionBusinessDecision,
+} from "./business-decision-orchestrator"
 import { buildFinancialTraceabilityResponse } from "./financial-decision-response"
+import type { OrionDecisionMemoryContext, OrionDecisionMemoryInput } from "./orion-decision-memory-store"
 import { buildReinvestmentDecision, type ReinvestmentDecision } from "./reinvestment-intelligence-engine"
 import { buildSemanticPlan, type OrionSemanticPlan } from "./semantic-planner"
 import type { OrionAppliedOperationalMemoryContext } from "./operational-memory"
@@ -47,6 +53,7 @@ export type OrionResponsePayload = {
       text: string
     }
   }
+  decisionMemoryCandidates?: OrionDecisionMemoryInput[]
 }
 
 export type BuildOrionResponseInput = {
@@ -54,6 +61,8 @@ export type BuildOrionResponseInput = {
   snapshot: OrionSnapshot
   userQuestion: string
   memoryContext?: OrionAppliedOperationalMemoryContext | null
+  decisionMemoryContext?: OrionDecisionMemoryContext | null
+  companyId?: string | null
 }
 
 function brl(value: number) {
@@ -65,13 +74,48 @@ function readNumber(value: unknown) {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
-function buildReinvestmentResponse(plan: OrionSemanticPlan, snapshot: OrionSnapshot): OrionResponsePayload {
+function buildReinvestmentResponse(plan: OrionSemanticPlan, snapshot: OrionSnapshot, companyId: string | null): OrionResponsePayload {
   const reinvestmentDecision = buildReinvestmentDecision(snapshot)
+  const candidates: OrionDecisionMemoryInput[] = []
+  if (companyId && reinvestmentDecision.recommendedReinvestmentAmount > 0 && reinvestmentDecision.recommendedProducts.length > 0) {
+    const top = reinvestmentDecision.recommendedProducts[0]
+    const entitySlug = top.label
+      .normalize("NFD")
+      .replace(/[̀-ͯ]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+    const days = reviewHorizonDaysFor("capital_allocation")
+    const reviewAfter = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString()
+    candidates.push({
+      companyId,
+      decisionType: "capital_allocation",
+      title: `Recompra recomendada: ${top.label}`,
+      recommendation: reinvestmentDecision.recommendedAction,
+      reason: top.reason || "Reinvestment Intelligence indicou produto prioritário.",
+      priority: "high",
+      confidence: reinvestmentDecision.confidence === "low" ? "low" : reinvestmentDecision.confidence === "medium" ? "medium" : "high",
+      sourceQuestion: "",
+      decisionPayload: {
+        decisionKey: `${entitySlug}:buy`,
+        subtype: "buy",
+        entityLabel: top.label,
+        amount: reinvestmentDecision.recommendedReinvestmentAmount,
+        safeCap: reinvestmentDecision.safeReinvestmentCap,
+      },
+      expectedOutcome: {
+        action: reinvestmentDecision.recommendedAction,
+        targetProducts: reinvestmentDecision.recommendedProducts.slice(0, 3).map((product) => product.label),
+      },
+      reviewAfter,
+    })
+  }
   return {
     responseKind: "reinvestment_decision",
     renderMode: "structured_cards",
     semanticPlan: plan,
     structured: { reinvestmentDecision },
+    decisionMemoryCandidates: candidates,
     text: [
       "Decisão de recompra:",
       reinvestmentDecision.recommendedAction,
@@ -109,18 +153,32 @@ function renderBusinessDecisionBlocks(decision: OrionBusinessDecision): string {
   return lines.join("\n\n")
 }
 
-function buildBusinessDecisionResponse(plan: OrionSemanticPlan, snapshot: OrionSnapshot, userQuestion: string, memoryContext?: OrionAppliedOperationalMemoryContext | null): OrionResponsePayload {
+function buildBusinessDecisionResponse(
+  plan: OrionSemanticPlan,
+  snapshot: OrionSnapshot,
+  userQuestion: string,
+  memoryContext?: OrionAppliedOperationalMemoryContext | null,
+  decisionMemoryContext?: OrionDecisionMemoryContext | null,
+  companyId?: string | null
+): OrionResponsePayload {
   const businessDecision = buildOrionBusinessDecision({
     semanticPlan: plan,
     snapshot,
     userQuestion,
     memoryContext,
+    decisionMemoryContext: decisionMemoryContext || null,
   })
+  const candidates: OrionDecisionMemoryInput[] = []
+  if (companyId) {
+    const candidate = buildDecisionMemoryCandidate(businessDecision, userQuestion)
+    if (candidate) candidates.push({ companyId, ...candidate })
+  }
   return {
     responseKind: "business_decision",
     renderMode: "executive_blocks",
     semanticPlan: plan,
     structured: { businessDecision },
+    decisionMemoryCandidates: candidates,
     text: renderBusinessDecisionBlocks(businessDecision),
   }
 }
@@ -195,11 +253,12 @@ function buildAuditTraceabilityResponse(plan: OrionSemanticPlan, snapshot: Orion
 export function buildOrionResponse(input: BuildOrionResponseInput): OrionResponsePayload {
   const semanticPlan = input.semanticPlan || buildSemanticPlan({ userQuestion: input.userQuestion })
 
+  const companyId = input.companyId || null
   if (semanticPlan.primaryGoal === "audit_traceability" || semanticPlan.responseMode === "audit_traceability") {
     return buildAuditTraceabilityResponse(semanticPlan, input.snapshot, input.userQuestion)
   }
   if (semanticPlan.primaryGoal === "purchase_capacity" || semanticPlan.primaryGoal === "reinvestment_decision") {
-    return buildReinvestmentResponse(semanticPlan, input.snapshot)
+    return buildReinvestmentResponse(semanticPlan, input.snapshot, companyId)
   }
   if (
     semanticPlan.primaryGoal === "capital_allocation"
@@ -212,7 +271,7 @@ export function buildOrionResponse(input: BuildOrionResponseInput): OrionRespons
     || semanticPlan.primaryGoal === "sales_performance_review"
     || semanticPlan.primaryGoal === "lead_review"
   ) {
-    return buildBusinessDecisionResponse(semanticPlan, input.snapshot, input.userQuestion, input.memoryContext)
+    return buildBusinessDecisionResponse(semanticPlan, input.snapshot, input.userQuestion, input.memoryContext, input.decisionMemoryContext, companyId)
   }
   if (semanticPlan.primaryGoal === "cash_health") {
     return buildCashHealthSummary(semanticPlan, input.snapshot)

@@ -835,6 +835,10 @@ export type OrionApiPayload = {
   operationalContext?: OrionOperationalContext
   operationalConversationState?: OrionOperationalConversationState
   activeMissionContext?: OrionMissionContext
+  decisionMemory?: {
+    open: import("./orion-decision-memory-store").OrionDecisionMemoryItem[]
+    recent: import("./orion-decision-memory-store").OrionDecisionMemoryItem[]
+  }
   history: OrionHistoryItem[]
   usage: OrionUsageSummary
   config: {

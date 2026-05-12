@@ -22,6 +22,16 @@ import {
   resolveOrionOperationalMemory,
   upsertOrionOperationalMemory,
 } from "@/lib/orion/orion-operational-memory-store"
+import {
+  buildDecisionMemoryContext,
+  createDecisionMemory,
+  hasOrionDecisionMemoryTable,
+  loadOpenDecisionMemories,
+  loadRecentDecisionMemories,
+  recordDecisionOutcome,
+  type OrionDecisionMemoryItem,
+} from "@/lib/orion/orion-decision-memory-store"
+import { buildDecisionReflections } from "@/lib/orion/orion-reflection-loop"
 import { buildOrionProactiveAlerts, filterStaleOrionMemoryItems, type OrionProactiveAlert } from "@/lib/orion/orion-proactive-alerts"
 import { buildOrionResponse } from "@/lib/orion/orion-response-orchestrator"
 import { buildReinvestmentDecision } from "@/lib/orion/reinvestment-intelligence-engine"
@@ -240,7 +250,7 @@ function shouldBuildGoalDrivenPlan(input: {
 
 async function buildPayload(
   companyId: string,
-  companyName: string,
+  _companyName: string,
   analysis: OrionAnalysis,
   snapshot: OrionSnapshot,
   cached = false,
@@ -322,13 +332,51 @@ async function buildPayload(
       boardProduct,
     })
   }
+  const decisionMemoryTableReady = await hasOrionDecisionMemoryTable()
+  const openDecisionMemories: OrionDecisionMemoryItem[] = decisionMemoryTableReady
+    ? await loadOpenDecisionMemories(companyId)
+    : []
+  const recentDecisionMemories: OrionDecisionMemoryItem[] = decisionMemoryTableReady
+    ? await loadRecentDecisionMemories(companyId)
+    : []
+  if (decisionMemoryTableReady && openDecisionMemories.length > 0) {
+    const reflections = buildDecisionReflections(snapshot, openDecisionMemories)
+    void Promise.all(
+      reflections
+        .filter((reflection) => reflection.resultStatus !== "pending" && reflection.resultStatus !== "inconclusive")
+        .map((reflection) =>
+          recordDecisionOutcome({
+            companyId,
+            memoryId: reflection.memoryId,
+            resultStatus: reflection.resultStatus,
+            reflection: reflection.reflection,
+            actualOutcome: reflection.actualOutcome,
+            status: reflection.resultStatus === "successful" || reflection.resultStatus === "failed" || reflection.resultStatus === "mixed" ? "done" : "open",
+          })
+        )
+    ).catch((error) => {
+      console.warn("[orion-decision-memory] reflection persistence skipped", error)
+    })
+  }
+  const decisionMemoryContext = buildDecisionMemoryContext(openDecisionMemories, recentDecisionMemories)
   const orionResponse = strategicQuestion
     ? buildOrionResponse({
         snapshot,
         userQuestion: strategicQuestion,
         memoryContext: operationalMemoryContext,
+        decisionMemoryContext,
+        companyId,
       })
     : undefined
+  if (decisionMemoryTableReady && orionResponse?.decisionMemoryCandidates?.length) {
+    void Promise.all(
+      orionResponse.decisionMemoryCandidates.map((candidate) =>
+        createDecisionMemory(candidate)
+      )
+    ).catch((error) => {
+      console.warn("[orion-decision-memory] candidate persistence skipped", error)
+    })
+  }
   const orchestratedAnswer = orionResponse && orionResponse.responseKind !== "generic_executive"
     ? orionResponse.text
     : null
@@ -392,6 +440,7 @@ async function buildPayload(
     operationalContext: sanitizeOperationalContextForClient(operationalContext),
     operationalConversationState,
     activeMissionContext: operationalConversationState.activeMissionContext || undefined,
+    decisionMemory: decisionMemoryTableReady ? { open: openDecisionMemories, recent: recentDecisionMemories } : undefined,
     history,
     usage,
     cached,

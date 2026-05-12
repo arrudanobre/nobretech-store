@@ -2,6 +2,7 @@ import {
   isLowAbsoluteProfit,
   isTrafficRiskyWithoutAnchor,
 } from "./nobretech-decision-principles"
+import type { OrionDecisionMemoryContext, OrionDecisionMemoryItem, OrionDecisionType } from "./orion-decision-memory-store"
 import { runOrionTools, type OrionMetricPeriod, type OrionToolName, type OrionToolResult } from "./orion-tool-registry"
 import type { ReinvestmentDecision } from "./reinvestment-intelligence-engine"
 import type { OrionSemanticPlan } from "./semantic-planner"
@@ -53,6 +54,7 @@ export type BuildOrionBusinessDecisionInput = {
   snapshot: OrionSnapshot
   userQuestion: string
   memoryContext?: OrionAppliedOperationalMemoryContext | null
+  decisionMemoryContext?: OrionDecisionMemoryContext | null
 }
 
 type CashPositionData = {
@@ -280,10 +282,180 @@ function smallSampleAlternatives(products: MarginProduct[], primary: MarginProdu
     .sort((a, b) => commercialSignalScore(b) - commercialSignalScore(a))
 }
 
+const SECONDARY_TYPE_AFFINITY: Record<OrionDecisionType, OrionDecisionType[]> = {
+  capital_allocation: ["inventory_priority", "business_strategy"],
+  business_strategy: ["operational_action", "capital_allocation", "marketing_strategy", "inventory_priority"],
+  marketing_strategy: ["business_strategy", "capital_allocation"],
+  inventory_priority: ["capital_allocation", "business_strategy"],
+  cash_health: ["capital_allocation", "business_strategy"],
+  sales_performance: ["business_strategy", "capital_allocation"],
+  operational_action: ["business_strategy", "capital_allocation"],
+}
+
+const TARGETS_PENALIZING_OPERATIONAL: ReadonlyArray<OrionDecisionType> = [
+  "capital_allocation",
+  "marketing_strategy",
+  "inventory_priority",
+]
+
+function businessDecisionTypeToMemoryType(decisionType: OrionBusinessDecisionType): OrionDecisionType {
+  if (decisionType === "generic_business_review") return "business_strategy"
+  if (decisionType === "capital_allocation") return "capital_allocation"
+  if (decisionType === "business_strategy") return "business_strategy"
+  if (decisionType === "marketing_strategy") return "marketing_strategy"
+  if (decisionType === "inventory_priority") return "inventory_priority"
+  if (decisionType === "cash_health") return "cash_health"
+  if (decisionType === "sales_performance") return "sales_performance"
+  return "business_strategy"
+}
+
+export function decisionSubtypeFromStoredKey(decisionKey: unknown): string | null {
+  if (typeof decisionKey !== "string") return null
+  const normalized = decisionKey.trim().toLowerCase()
+  if (!normalized) return null
+  const segments = normalized.split(":")
+  const subtype = segments[segments.length - 1]?.trim()
+  return subtype || null
+}
+
+function memorySubtype(memory: OrionDecisionMemoryItem): string | null {
+  const keySubtype = decisionSubtypeFromStoredKey(memory.decisionPayload?.decisionKey)
+  if (keySubtype) return keySubtype
+  return typeof memory.decisionPayload?.subtype === "string" ? memory.decisionPayload.subtype : null
+}
+
+function effectiveDecisionTypeForMemory(memory: OrionDecisionMemoryItem): OrionDecisionType {
+  const subtype = memorySubtype(memory)
+  return subtype === "first-move" || subtype === "act" ? "operational_action" : memory.decisionType
+}
+
+function normalizeContinuitySentence(value: string) {
+  let normalized = value.trim()
+  while (normalized.endsWith(".") || normalized.endsWith("!") || normalized.endsWith("?")) {
+    normalized = normalized.slice(0, -1).trimEnd()
+  }
+  return normalized
+}
+
+function memoryRelevanceScore(memory: OrionDecisionMemoryItem, plan: OrionSemanticPlan, targetType: OrionDecisionType): number {
+  let score = 0
+  const effectiveDecisionType = effectiveDecisionTypeForMemory(memory)
+  if (effectiveDecisionType === targetType) score += 100
+  else if (SECONDARY_TYPE_AFFINITY[targetType]?.includes(effectiveDecisionType)) score += 40
+  else score += 5
+
+  const memTimeframeLabel = typeof memory.decisionPayload?.timeframeLabel === "string"
+    ? memory.decisionPayload.timeframeLabel
+    : null
+  if (memTimeframeLabel && plan.timeframe.label && memTimeframeLabel === plan.timeframe.label) {
+    score += 60
+  }
+
+  const memSubtype = memorySubtype(memory)
+  const isTemporal = plan.timeframe.type === "next_n_days"
+  const isFirstToday = plan.responseMode === "operational_plan" && !isTemporal
+  if (isTemporal) {
+    if (memSubtype === "anchor-product" || memSubtype === "buy" || memSubtype === "traffic-test" || memSubtype === "clear-stuck") score += 30
+    if (memSubtype === "first-move" || memSubtype === "act") score -= 25
+  }
+  if (isFirstToday) {
+    if (memSubtype === "first-move" || memSubtype === "act") score += 30
+    if (memSubtype === "anchor-product") score += 10
+    // For today-style questions, treat operational_action as a primary-equivalent type
+    // when the plan goal stays as business_strategy (default orchestration).
+    if (effectiveDecisionType === "operational_action" && targetType === "business_strategy") score += 60
+  }
+
+  if (memory.priority === "critical") score += 20
+  else if (memory.priority === "high") score += 15
+  else if (memory.priority === "medium") score += 8
+
+  if (memory.status === "in_progress") score += 5
+  else if (memory.status === "open") score += 3
+
+  // Operational/first-move memories should not dominate capital/marketing/inventory decisions.
+  if (
+    TARGETS_PENALIZING_OPERATIONAL.includes(targetType) &&
+    (effectiveDecisionType === "operational_action" || memSubtype === "first-move" || memSubtype === "act")
+  ) {
+    const memEntityLabel = typeof memory.decisionPayload?.entityLabel === "string"
+      ? memory.decisionPayload.entityLabel
+      : null
+    score -= memEntityLabel ? 60 : 90
+  }
+
+  return score
+}
+
+export function selectRelevantDecisionMemories(
+  plan: OrionSemanticPlan,
+  openDecisions: OrionDecisionMemoryItem[],
+  decisionType: OrionBusinessDecisionType,
+  limit = 2
+): OrionDecisionMemoryItem[] {
+  const targetType = businessDecisionTypeToMemoryType(decisionType)
+  const scored = openDecisions.map((memory) => ({ memory, score: memoryRelevanceScore(memory, plan, targetType) }))
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score
+    return (b.memory.updatedAt || "").localeCompare(a.memory.updatedAt || "")
+  })
+  return scored.slice(0, limit).map((entry) => entry.memory)
+}
+
+function findingLabelForMemory(memory: OrionDecisionMemoryItem, isSecondary: boolean): string {
+  if (isSecondary) return "Contexto anterior"
+  switch (effectiveDecisionTypeForMemory(memory)) {
+    case "business_strategy": return "Decisão estratégica pendente"
+    case "operational_action": return "Ação operacional pendente"
+    case "capital_allocation": return "Decisão de capital pendente"
+    case "marketing_strategy": return "Decisão de tráfego pendente"
+    case "inventory_priority": return "Decisão de estoque pendente"
+    case "cash_health": return "Decisão de caixa pendente"
+    case "sales_performance": return "Decisão sobre vendas pendente"
+    default: return "Decisão anterior pendente"
+  }
+}
+
+function memoryToFinding(memory: OrionDecisionMemoryItem, isSecondary: boolean): OrionBusinessDecision["keyFindings"][number] {
+  const reflectionRecap = memory.resultStatus !== "pending" && memory.reflection
+    ? ` Reflexão anterior: ${normalizeContinuitySentence(memory.reflection)}.`
+    : ""
+  const recommendation = normalizeContinuitySentence(memory.recommendation)
+  return {
+    label: findingLabelForMemory(memory, isSecondary),
+    value: memory.title,
+    severity: isSecondary ? "info" : "attention",
+    evidence: `Continuidade da recomendação registrada (${memory.status}): ${recommendation}.${reflectionRecap}`,
+  }
+}
+
+function priorDecisionFindings(
+  memoryContext: OrionDecisionMemoryContext | null | undefined,
+  decisionType: OrionBusinessDecisionType,
+  plan: OrionSemanticPlan
+): OrionBusinessDecision["keyFindings"] {
+  if (!memoryContext || memoryContext.openDecisions.length === 0) return []
+  const ranked = selectRelevantDecisionMemories(plan, memoryContext.openDecisions, decisionType, 2)
+  if (ranked.length === 0) return []
+  const primary = ranked[0]
+  const targetType = businessDecisionTypeToMemoryType(decisionType)
+  const primaryScore = memoryRelevanceScore(primary, plan, targetType)
+  if (primaryScore < 50) return []
+  const findings: OrionBusinessDecision["keyFindings"] = [memoryToFinding(primary, false)]
+  const secondary = ranked[1]
+  if (secondary && effectiveDecisionTypeForMemory(secondary) !== effectiveDecisionTypeForMemory(primary)) {
+    const secondaryScore = memoryRelevanceScore(secondary, plan, targetType)
+    if (secondaryScore >= 50) findings.push(memoryToFinding(secondary, true))
+  }
+  return findings
+}
+
+
 function buildCapitalAllocationDecision(input: {
   plan: OrionSemanticPlan
   results: OrionToolResult[]
   reinvestment: ReinvestmentDecision | null
+  memoryContext?: OrionDecisionMemoryContext | null
 }): OrionBusinessDecision {
   const margin = dataFor<MarginByProductData>(input.results, "sales.marginByProduct")
   const cash = dataFor<CashPositionData>(input.results, "finance.cashPosition")
@@ -296,7 +468,9 @@ function buildCapitalAllocationDecision(input: {
   const productCost = topProduct?.probableUnitCost ?? null
   const canBuyIdeal = productCost !== null && usableBudget >= productCost
 
+  const priorFindings = priorDecisionFindings(input.memoryContext, "capital_allocation", input.plan)
   const keyFindings: OrionBusinessDecision["keyFindings"] = [
+    ...priorFindings,
     {
       label: "Teto seguro",
       value: brl(safeCap),
@@ -381,6 +555,8 @@ function buildCapitalAllocationDecision(input: {
 function buildStrategyDecision(input: {
   plan: OrionSemanticPlan
   results: OrionToolResult[]
+  memoryContext?: OrionDecisionMemoryContext | null
+  decisionType: OrionBusinessDecisionType
 }): OrionBusinessDecision {
   const cash = dataFor<CashPositionData>(input.results, "finance.cashPosition")
   const sales = dataFor<SalesPerformanceData>(input.results, "sales.performance")
@@ -406,7 +582,9 @@ function buildStrategyDecision(input: {
     && input.plan.responseMode === "decision"
   const isTemporalStrategy = input.plan.timeframe.type === "next_n_days"
   const isFirstToday = input.plan.responseMode === "operational_plan" && !isTemporalStrategy
+  const priorFindings = priorDecisionFindings(input.memoryContext, input.decisionType, input.plan)
   const keyFindings: OrionBusinessDecision["keyFindings"] = [
+    ...priorFindings,
     {
       label: "Caixa",
       value: cash ? brl(cash.cash) : "sem dado",
@@ -583,6 +761,7 @@ function buildStrategyDecision(input: {
 function buildBusinessReviewDecision(input: {
   plan: OrionSemanticPlan
   results: OrionToolResult[]
+  memoryContext?: OrionDecisionMemoryContext | null
 }): OrionBusinessDecision {
   const margin = dataFor<MarginByProductData>(input.results, "sales.marginByProduct")
   const stock = dataFor<StuckItemsData>(input.results, "inventory.stuckItems")
@@ -591,7 +770,9 @@ function buildBusinessReviewDecision(input: {
   const weakProduct = margin?.products.find((product) => product.lowAbsoluteProfit || product.marginPct < 8) || null
   const stuck = stock?.items.find((item) => item.risk === "high") || stock?.items[0] || null
   const weakCampaign = campaigns?.campaigns.find((campaign) => campaign.leads > 0 && campaign.sales === 0) || null
+  const priorFindings = priorDecisionFindings(input.memoryContext, "generic_business_review", input.plan)
   const keyFindings: OrionBusinessDecision["keyFindings"] = [
+    ...priorFindings,
     {
       label: "Perda financeira total",
       value: "não conclusiva",
@@ -673,6 +854,159 @@ function buildBusinessReviewDecision(input: {
   }
 }
 
+function slug(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+}
+
+function extractEntityLabelFromDecision(decision: OrionBusinessDecision): string | null {
+  for (const finding of decision.keyFindings) {
+    if (finding.label === "Melhor sinal comercial" || finding.label === "Produto âncora" || finding.label === "Estoque preso") {
+      if (finding.value && finding.value !== "sem candidato forte" && finding.value !== "sem bloqueio forte" && finding.value !== "sem item crítico") {
+        return finding.value
+      }
+    }
+  }
+  return null
+}
+
+export function decisionSubtypeFor(
+  decisionType: import("./orion-decision-memory-store").OrionDecisionType,
+  decision: OrionBusinessDecision,
+  entityLabel: string | null
+): string {
+  const title = decision.recommendation.title.toLowerCase()
+  const action = decision.recommendation.action.toLowerCase()
+  switch (decisionType) {
+    case "capital_allocation": {
+      if (entityLabel && decision.avoid.some((item) => item.title === entityLabel)) return "hold"
+      if (title.includes("segurar") || title.includes("não comprar") || action.startsWith("não comprar")) return "hold"
+      if (title.includes("comprar") || action.includes("comprar seletivamente")) return "buy"
+      return "buy"
+    }
+    case "marketing_strategy": {
+      if (title.includes("não rodar") || title.includes("não abrir") || title.includes("não rode")) return "traffic-pause"
+      if (title.includes("rodar tráfego") || title.includes("tráfego seletivo") || title.includes("rodar campanha")) return "traffic-test"
+      return "traffic-review"
+    }
+    case "business_strategy": {
+      if (title.includes("primeiro movimento")) return "first-move"
+      if (title.includes("plano para")) return "anchor-product"
+      if (title.includes("priorizar giro")) return "anchor-product"
+      return "anchor-product"
+    }
+    case "inventory_priority": {
+      if (entityLabel && decision.avoid.some((item) => item.title === entityLabel)) return "avoid-main-capital"
+      if (title.includes("liberar")) return "clear-stuck"
+      if (title.includes("corrigir mix")) return "rebalance-mix"
+      return "clear-stuck"
+    }
+    case "cash_health":
+      return "preserve"
+    case "sales_performance":
+      return "review"
+    case "operational_action":
+      return "act"
+    default:
+      return "general"
+  }
+}
+
+export function reviewHorizonDaysFor(
+  decisionType: import("./orion-decision-memory-store").OrionDecisionType
+): number {
+  switch (decisionType) {
+    case "capital_allocation": return 7
+    case "marketing_strategy": return 5
+    case "business_strategy": return 15
+    case "inventory_priority": return 14
+    case "cash_health": return 7
+    case "sales_performance": return 14
+    case "operational_action": return 3
+    default: return 7
+  }
+}
+
+function reviewAfterIso(
+  decisionType: import("./orion-decision-memory-store").OrionDecisionType,
+  now: Date = new Date()
+): string {
+  const days = reviewHorizonDaysFor(decisionType)
+  return new Date(now.getTime() + days * 24 * 60 * 60 * 1000).toISOString()
+}
+
+export function buildDecisionMemoryCandidate(
+  decision: OrionBusinessDecision,
+  userQuestion: string,
+  options?: { now?: Date }
+): {
+  decisionType: import("./orion-decision-memory-store").OrionDecisionType
+  title: string
+  recommendation: string
+  reason: string
+  priority: import("./orion-decision-memory-store").OrionDecisionPriority
+  confidence: import("./orion-decision-memory-store").OrionDecisionConfidence
+  sourceQuestion: string
+  decisionPayload: Record<string, unknown>
+  expectedOutcome: Record<string, unknown>
+  reviewAfter: string
+} | null {
+  if (decision.decisionType === "generic_business_review" && !decision.keyFindings.some((f) => f.severity === "critical")) {
+    return null
+  }
+  if (decision.recommendation.confidence === "low" && !decision.recommendation.action.trim()) {
+    return null
+  }
+  const entityLabel = extractEntityLabelFromDecision(decision)
+  const rawDecisionType: import("./orion-decision-memory-store").OrionDecisionType =
+    decision.decisionType === "capital_allocation" ? "capital_allocation"
+    : decision.decisionType === "business_strategy" ? "business_strategy"
+    : decision.decisionType === "marketing_strategy" ? "marketing_strategy"
+    : decision.decisionType === "inventory_priority" ? "inventory_priority"
+    : decision.decisionType === "cash_health" ? "cash_health"
+    : decision.decisionType === "sales_performance" ? "sales_performance"
+    : "operational_action"
+  const priority: import("./orion-decision-memory-store").OrionDecisionPriority =
+    decision.keyFindings.some((f) => f.severity === "critical") ? "critical"
+    : decision.keyFindings.some((f) => f.severity === "attention") ? "high"
+    : "medium"
+  const subtype = decisionSubtypeFor(rawDecisionType, decision, entityLabel)
+  // Operational subtypes (first-move/act) belong to the operational_action memory type,
+  // regardless of the broader plan goal that produced the decision.
+  const decisionType: import("./orion-decision-memory-store").OrionDecisionType =
+    (subtype === "first-move" || subtype === "act") && rawDecisionType !== "operational_action"
+      ? "operational_action"
+      : rawDecisionType
+  const targetSlug = entityLabel ? slug(entityLabel) : slug(decision.timeframeLabel || "global")
+  const decisionKey = `${targetSlug}:${subtype}`
+  return {
+    decisionType,
+    title: decision.recommendation.title,
+    recommendation: decision.recommendation.action,
+    reason: decision.recommendation.reason,
+    priority,
+    confidence: decision.recommendation.confidence,
+    sourceQuestion: userQuestion,
+    decisionPayload: {
+      decisionKey,
+      subtype,
+      timeframeLabel: decision.timeframeLabel,
+      ...(entityLabel ? { entityLabel } : {}),
+      usedTools: decision.usedTools,
+    },
+    expectedOutcome: {
+      action: decision.recommendation.action,
+      nextSteps: decision.nextSteps.map((step) => step.action),
+      avoid: decision.avoid.map((item) => item.title),
+    },
+    reviewAfter: reviewAfterIso(decisionType, options?.now),
+  }
+}
+
 export function buildOrionBusinessDecision(input: BuildOrionBusinessDecisionInput): OrionBusinessDecision {
   const tools = input.semanticPlan.toolsNeeded.length
     ? input.semanticPlan.toolsNeeded
@@ -680,8 +1014,9 @@ export function buildOrionBusinessDecision(input: BuildOrionBusinessDecisionInpu
   const results = runOrionTools({ tools, snapshot: input.snapshot, semanticPlan: input.semanticPlan })
   const reinvestment = dataFor<ReinvestmentDecision>(results, "reinvestment.decision")
 
+  const memoryContext = input.decisionMemoryContext || null
   if (input.semanticPlan.primaryGoal === "capital_allocation") {
-    return buildCapitalAllocationDecision({ plan: input.semanticPlan, results, reinvestment })
+    return buildCapitalAllocationDecision({ plan: input.semanticPlan, results, reinvestment, memoryContext })
   }
   if (
     input.semanticPlan.primaryGoal === "business_strategy"
@@ -690,10 +1025,15 @@ export function buildOrionBusinessDecision(input: BuildOrionBusinessDecisionInpu
     || input.semanticPlan.primaryGoal === "inventory_priority"
     || input.semanticPlan.primaryGoal === "inventory_review"
   ) {
-    return buildStrategyDecision({ plan: input.semanticPlan, results })
+    const decisionType: OrionBusinessDecisionType = input.semanticPlan.primaryGoal === "marketing_strategy" || input.semanticPlan.primaryGoal === "campaign_review"
+      ? "marketing_strategy"
+      : input.semanticPlan.primaryGoal === "inventory_priority" || input.semanticPlan.primaryGoal === "inventory_review"
+        ? "inventory_priority"
+        : "business_strategy"
+    return buildStrategyDecision({ plan: input.semanticPlan, results, memoryContext, decisionType })
   }
   if (input.semanticPlan.primaryGoal === "business_review" || input.semanticPlan.primaryGoal === "sales_performance_review") {
-    return buildBusinessReviewDecision({ plan: input.semanticPlan, results })
+    return buildBusinessReviewDecision({ plan: input.semanticPlan, results, memoryContext })
   }
 
   return {
