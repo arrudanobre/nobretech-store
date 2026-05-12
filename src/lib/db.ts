@@ -42,8 +42,6 @@ const buildSslConfig = () => {
   return { rejectUnauthorized: false }
 }
 
-const isNewPool = !globalThis.nobretechPool
-
 export const pool =
   globalThis.nobretechPool ||
   new Pool({
@@ -52,17 +50,13 @@ export const pool =
     max: 20,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,
+    // onConnect is awaited by pg-pool before the client is dispatched to callers,
+    // preventing the concurrent-query DeprecationWarning that pool.on("connect") caused.
+    onConnect: (client) => client.query("SET statement_timeout = '8000'"),
   })
 
 if (process.env.NODE_ENV !== "production") {
   globalThis.nobretechPool = pool
-}
-
-if (isNewPool) {
-  pool.on("connect", (client) => {
-    // 8 s cap on all statements — protects against runaway queries on shared pool.
-    client.query("SET statement_timeout = '8000'").catch(() => {})
-  })
 }
 
 export const DEFAULT_USER_ID = process.env.SEED_USER_ID || "00000000-0000-0000-0000-000000000001"
