@@ -318,6 +318,31 @@ function conciseStrategicContext(
         conflictWithCurrentData: item.conflictWithCurrentData,
       })),
     } : null,
+    persistentOperationalMemory: snapshot.orionMemory ? {
+      recentDecisions: snapshot.orionMemory.recentDecisions.slice(0, 3).map((item) => ({
+        title: item.title,
+        summary: item.summary,
+        importance: item.importance,
+      })),
+      openAlerts: snapshot.orionMemory.openAlerts.slice(0, 3).map((item) => ({
+        title: item.title,
+        summary: item.summary,
+        importance: item.importance,
+      })),
+      recommendedActions: snapshot.orionMemory.recommendedActions.slice(0, 3).map((item) => ({
+        title: item.title,
+        summary: item.summary,
+        importance: item.importance,
+      })),
+    } : null,
+    proactiveAlerts: (snapshot.orionProactiveAlerts || []).map((alert) => ({
+      category: alert.category,
+      priority: alert.priority,
+      title: alert.title,
+      message: alert.message,
+      recommendedAction: alert.recommendedAction,
+      evidence: alert.evidence,
+    })),
     executionGuardrails,
     executionContract: executionAllowedByReasoning && executionAllowedByGuardrails
       ? {

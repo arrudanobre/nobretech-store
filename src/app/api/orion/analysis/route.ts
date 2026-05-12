@@ -13,6 +13,15 @@ import { deduplicateAnalysis } from "@/lib/orion/insight-deduplication"
 import { routeOrionIntent } from "@/lib/orion/intent-router"
 import { calculateOperationalHealth } from "@/lib/orion/operational-health-engine"
 import { applyMemoryToOrionContext, applyOperationalMemory, getRecentInsights } from "@/lib/orion/operational-memory"
+import {
+  buildOrionMemorySummary,
+  extractOperationalMemoryCandidates,
+  hasOrionOperationalMemoryTable,
+  loadOpenOrionOperationalMemory,
+  persistOrionOperationalMemoryCandidates,
+  upsertOrionOperationalMemory,
+} from "@/lib/orion/orion-operational-memory-store"
+import { buildOrionProactiveAlerts, type OrionProactiveAlert } from "@/lib/orion/orion-proactive-alerts"
 import { buildOperationalPlan } from "@/lib/orion/operational-planning-engine"
 import { buildExecutionGuardrails } from "@/lib/orion/execution-guardrails"
 import { resolveProfitAvailabilityPeriod, type ResolveProfitAvailabilityPeriodInput } from "@/lib/financial/profit-availability-engine"
@@ -40,7 +49,14 @@ import {
   hashOrionPrompt,
   saveOrionAnalysisLog,
 } from "@/lib/orion/data"
-import type { OrionAnalysis, OrionApiPayload, OrionOperationalContext, OrionOperationalConversationState, OrionSnapshot } from "@/lib/orion/types"
+import type {
+  OrionAnalysis,
+  OrionApiPayload,
+  OrionIntentRouteSummary,
+  OrionOperationalContext,
+  OrionOperationalConversationState,
+  OrionSnapshot,
+} from "@/lib/orion/types"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -77,6 +93,75 @@ function financialPeriodFromBody(body: Record<string, unknown>): ResolveProfitAv
 
 function invalidPeriod(message: string) {
   return NextResponse.json({ data: null, error: { message } }, { status: 400 })
+}
+
+async function enrichSnapshotWithPersistentOrionMemory(
+  companyId: string,
+  snapshot: OrionSnapshot,
+  persistAlerts: boolean
+) {
+  const memoryTableReady = await hasOrionOperationalMemoryTable()
+  const memoryItems = memoryTableReady
+    ? await loadOpenOrionOperationalMemory(companyId)
+    : []
+  const proactiveAlerts = buildOrionProactiveAlerts({ snapshot, memoryItems })
+
+  snapshot.orionMemory = buildOrionMemorySummary(memoryItems)
+  snapshot.orionProactiveAlerts = proactiveAlerts
+
+  if (memoryTableReady && persistAlerts) {
+    void persistProactiveAlerts(companyId, proactiveAlerts).catch((error) => {
+      console.warn("[orion-memory] proactive alert persistence skipped", error)
+    })
+  }
+
+  return { memoryTableReady, memoryItems, proactiveAlerts }
+}
+
+async function persistProactiveAlerts(companyId: string, alerts: OrionProactiveAlert[]) {
+  await Promise.all(alerts.map((alert) => upsertOrionOperationalMemory({
+    companyId,
+    memoryType: "open_alert",
+    title: alert.title,
+    summary: alert.message,
+    entityType: alert.entityType,
+    entityId: alert.entityId,
+    importance: alert.priority,
+    evidence: {
+      recommendedAction: alert.recommendedAction,
+      evidence: alert.evidence,
+    },
+    metadata: alert.metadata,
+  })))
+}
+
+async function persistUsefulOperationalMemories(input: {
+  companyId: string
+  memoryTableReady: boolean
+  question: string | null
+  intentRoute?: OrionIntentRouteSummary | null
+  snapshot: OrionSnapshot
+  payload: OrionApiPayload
+  operationalContext?: OrionOperationalContext | null
+  executionGuardrails?: ReturnType<typeof buildExecutionGuardrails> | null
+  usedFallback?: boolean
+}) {
+  if (!input.memoryTableReady) return
+  const finalResponse = input.payload.strategicCopilotAnswer
+    || input.payload.analysis.executive_summary
+    || input.payload.analysis.summary
+  const candidates = extractOperationalMemoryCandidates({
+    companyId: input.companyId,
+    userMessage: input.question,
+    intent: input.intentRoute,
+    snapshot: input.snapshot,
+    finalResponse,
+    executionGuardrails: input.executionGuardrails,
+    operationalContext: input.operationalContext,
+    analysis: input.payload.analysis,
+    usedFallback: input.usedFallback,
+  })
+  await persistOrionOperationalMemoryCandidates(candidates)
 }
 
 function sanitizeOperationalContextForClient(operationalContext?: OrionOperationalContext | null): OrionOperationalContext | undefined {
@@ -311,6 +396,7 @@ export async function GET(request: NextRequest) {
   const resolvedPeriod = resolveProfitAvailabilityPeriod(selectedFinancialPeriod)
   if (resolvedPeriod.error) return invalidPeriod(resolvedPeriod.error)
   const snapshot = await collectOrionSnapshot(companyId, companyName, selectedFinancialPeriod)
+  await enrichSnapshotWithPersistentOrionMemory(companyId, snapshot, true)
   const latest = await getLatestOrionAnalysis(companyId)
   const analysis = latest || buildLocalOrionAnalysis(snapshot)
 
@@ -348,6 +434,7 @@ export async function POST(request: NextRequest) {
     ? coerceOperationalConversationState(body.operationalConversationState || body.conversationState)
     : null
   const snapshot = await collectOrionSnapshot(companyId, companyName, selectedFinancialPeriod)
+  const persistentMemory = await enrichSnapshotWithPersistentOrionMemory(companyId, snapshot, false)
   const commercialSubject = mode === "chat" && question
     ? await resolveCommercialSubject(companyId, question)
     : null
@@ -495,6 +582,19 @@ export async function POST(request: NextRequest) {
       snapshot: dataSnapshot,
       errorMessage: usedFallback ? "A análise estratégica não pôde ser gerada pela IA." : undefined,
     })
+    void persistUsefulOperationalMemories({
+      companyId,
+      memoryTableReady: persistentMemory.memoryTableReady,
+      question,
+      intentRoute,
+      snapshot,
+      payload,
+      operationalContext,
+      executionGuardrails,
+      usedFallback,
+    }).catch((error) => {
+      console.warn("[orion-memory] response memory persistence skipped", error)
+    })
     return NextResponse.json({
       data: payload,
       error: null,
@@ -559,9 +659,23 @@ export async function POST(request: NextRequest) {
       totalTokens: result.totalTokens,
       estimatedCostUsd,
     })
+    const payload = await buildPayload(companyId, companyName, result.analysis, snapshot, false, operationalContext, question, null, previousConversationState)
+    void persistUsefulOperationalMemories({
+      companyId,
+      memoryTableReady: persistentMemory.memoryTableReady,
+      question,
+      intentRoute,
+      snapshot,
+      payload,
+      operationalContext,
+      executionGuardrails,
+      usedFallback: false,
+    }).catch((error) => {
+      console.warn("[orion-memory] response memory persistence skipped", error)
+    })
 
     return NextResponse.json({
-      data: await buildPayload(companyId, companyName, result.analysis, snapshot, false, operationalContext, question, null, previousConversationState),
+      data: payload,
       error: null,
     })
   } catch (error) {

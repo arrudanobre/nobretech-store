@@ -197,6 +197,8 @@ export function buildRelevantChatContext(input: {
       traceabilityListsFirst: true,
     },
     operationalMemory: input.operationalContext?.operationalMemoryContext || input.conversationState?.operationalMemoryContext || null,
+    persistentOperationalMemory: input.snapshot.orionMemory || null,
+    proactiveAlerts: input.snapshot.orionProactiveAlerts || [],
     operationalPlan: input.operationalContext?.operationalPlan ? {
       directAnswer: input.operationalContext.operationalPlan.directAnswer,
       directAnswerReason: input.operationalContext.operationalPlan.directAnswerReason,

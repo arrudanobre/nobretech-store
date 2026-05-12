@@ -1338,6 +1338,8 @@ export async function buildOrionBusinessContext(
     crm,
     campaigns,
     finance,
+    persistentOperationalMemory: snapshot.orionMemory || null,
+    proactiveAlerts: snapshot.orionProactiveAlerts || null,
   }).filter(([, value]) => Boolean(value)))
   const matchedRecords = countRecords(contexts)
   const answer = buildAnswer(intent, contexts, snapshot, cleanQuestion)
@@ -1551,6 +1553,8 @@ export function summarizeOperationalContext(context: OrionOperationalContext) {
     summary: context.summary,
     gaps: context.gaps,
     inventory_search_debug: context.inventory_search_debug,
+    persistentOperationalMemory: context.contexts.persistentOperationalMemory || null,
+    proactiveAlerts: context.contexts.proactiveAlerts || null,
     operationalMemoryContext: context.operationalMemoryContext ? {
       businessPersonalityProfile: context.operationalMemoryContext.businessPersonalityProfile,
       memoryGuardrails: context.operationalMemoryContext.memoryGuardrails,

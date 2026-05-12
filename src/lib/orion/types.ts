@@ -9,6 +9,8 @@ import type { CurrentCashCompositionSnapshot } from "@/lib/financial/current-cas
 import type { OwnerCapitalSnapshot } from "@/lib/financial/owner-capital-engine"
 import type { OrionFinancialOperationalContext } from "@/lib/orion/financial-context-consumer"
 import type { OrionAppliedOperationalMemoryContext } from "@/lib/orion/operational-memory"
+import type { OrionOperationalMemorySummary } from "@/lib/orion/orion-operational-memory-store"
+import type { OrionProactiveAlert } from "@/lib/orion/orion-proactive-alerts"
 
 export type OrionPriority = "low" | "medium" | "high" | "critical"
 
@@ -617,6 +619,8 @@ export type OrionSnapshot = {
   generatedAt: string
   companyName: string
   dataBasis: "internal" | "internal_external"
+  orionMemory?: OrionOperationalMemorySummary
+  orionProactiveAlerts?: OrionProactiveAlert[]
   executive: {
     revenue30d: number
     revenuePrevious30d: number

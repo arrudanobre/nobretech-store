@@ -185,6 +185,10 @@ function polishOrionCopy(value: string) {
 }
 
 function buildProactiveMessage(payload: OrionApiPayload) {
+  const alert = payload.snapshot.orionProactiveAlerts?.[0]
+  if (alert) {
+    return `Vinícius, antes de você perguntar: ${alert.message} Minha sugestão: ${alert.recommendedAction}`
+  }
   const executive = payload.snapshot.executive
   const lead = payload.snapshot.marketing.forgottenLeads.find((item) => isActionableLead(item.status) && item.classification !== "lost")
   const leadProduct = lead?.productInterest ? ` sobre ${lead.productInterest}` : ""
@@ -206,6 +210,60 @@ function buildProactiveMessage(payload: OrionApiPayload) {
     return `Vinícius, o estoque tem ${executive.stuckStockCount} item(ns) parado(s). Posso sugerir uma campanha segura sem sacrificar margem.`
   }
   return "Vinícius, o cenário está sem bloqueio crítico no momento. Posso apontar a melhor oportunidade de crescimento para hoje."
+}
+
+function priorityLabel(priority: OrionPriority) {
+  if (priority === "critical") return "Crítico"
+  if (priority === "high") return "Alta"
+  if (priority === "medium") return "Média"
+  return "Baixa"
+}
+
+function ProactiveAlertsPanel({ payload }: { payload: OrionApiPayload }) {
+  const alerts = payload.snapshot.orionProactiveAlerts || []
+
+  return (
+    <section className="rounded-3xl border border-cyan-300/20 bg-[#08111f] p-5 shadow-xl shadow-cyan-950/10">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-white">Antes de você perguntar</h2>
+          <p className="mt-0.5 text-xs text-slate-400">Observações operacionais baseadas no snapshot atual.</p>
+        </div>
+        <RadioTower className="h-5 w-5 text-cyan-300" />
+      </div>
+
+      {alerts.length ? (
+        <div className="grid gap-3 lg:grid-cols-3">
+          {alerts.map((alert) => (
+            <article key={alert.id} className={cn("rounded-2xl border p-4", priorityClasses(alert.priority))}>
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2 text-xs font-semibold uppercase">
+                  <PriorityGlyph priority={alert.priority} className="h-4 w-4" />
+                  {priorityLabel(alert.priority)}
+                </div>
+                <span className="rounded-full bg-black/20 px-2 py-0.5 text-[10px] uppercase text-current/80">{areaLabel(alert.category)}</span>
+              </div>
+              <h3 className="text-sm font-semibold text-white">{humanizeOrionText(alert.title)}</h3>
+              <p className="mt-2 text-sm leading-6 text-slate-200">{humanizeOrionText(alert.message)}</p>
+              <p className="mt-3 text-xs font-semibold uppercase text-slate-400">Ação</p>
+              <p className="mt-1 text-sm leading-5 text-slate-100">{humanizeOrionText(alert.recommendedAction)}</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {alert.evidence.slice(0, 3).map((item) => (
+                  <span key={`${alert.id}-${item.label}`} className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[11px] text-slate-200">
+                    {item.label}: {item.value}
+                  </span>
+                ))}
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-slate-400">
+          Sem alerta operacional relevante agora.
+        </p>
+      )}
+    </section>
+  )
 }
 
 // ─── Operational execution board ───────────────────────────────────────────
@@ -1093,6 +1151,7 @@ export function OrionClient() {
 
           {/* Left: execution flow */}
           <div className="space-y-5">
+            <ProactiveAlertsPanel payload={payload} />
             <ExecutionBoard payload={payload} />
 
             {/* 8. Analytics recolhido */}
