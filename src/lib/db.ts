@@ -15,14 +15,27 @@ declare global {
 const isBuildPhase = process.env.NEXT_PHASE === "phase-production-build"
 
 const buildSslConfig = () => {
-  if (!connectionString?.includes("railway")) return undefined
+  const isRailwayDatabase =
+    process.env.DATABASE_PROVIDER === "railway" || Boolean(connectionString?.includes("railway"))
+  if (!isRailwayDatabase) return undefined
   const ca = process.env.DATABASE_SSL_CA
   if (ca) return { ca, rejectUnauthorized: true }
-  // In production runtime, unverified SSL is not permitted — fail fast at startup.
+  const isExplicitRailwayException =
+    process.env.DATABASE_PROVIDER === "railway" &&
+    process.env.DATABASE_SSL_ALLOW_UNVERIFIED === "true"
+
+  if (process.env.NODE_ENV === "production" && isExplicitRailwayException) {
+    console.warn(
+      "[db] Railway SSL unverified mode enabled: connection is encrypted, but server identity is not verified."
+    )
+    return { rejectUnauthorized: false }
+  }
+
+  // In production runtime, unverified SSL is not permitted unless Railway is explicitly allowed.
   if (process.env.NODE_ENV === "production" && !isBuildPhase) {
     throw new Error(
       "[db] DATABASE_SSL_CA must be configured in production. " +
-      "Download the certificate from Railway > your project > Settings > Database > Public Certificate."
+        "Set DATABASE_PROVIDER=railway and DATABASE_SSL_ALLOW_UNVERIFIED=true only for Railway public proxy SSL hostname mismatch."
     )
   }
   console.warn("[db] DATABASE_SSL_CA não configurada — SSL sem verificação de certificado. Configure em produção.")
