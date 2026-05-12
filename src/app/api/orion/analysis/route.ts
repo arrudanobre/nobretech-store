@@ -19,9 +19,12 @@ import {
   hasOrionOperationalMemoryTable,
   loadOpenOrionOperationalMemory,
   persistOrionOperationalMemoryCandidates,
+  resolveOrionOperationalMemory,
   upsertOrionOperationalMemory,
 } from "@/lib/orion/orion-operational-memory-store"
-import { buildOrionProactiveAlerts, type OrionProactiveAlert } from "@/lib/orion/orion-proactive-alerts"
+import { buildOrionProactiveAlerts, filterStaleOrionMemoryItems, type OrionProactiveAlert } from "@/lib/orion/orion-proactive-alerts"
+import { buildOrionResponse } from "@/lib/orion/orion-response-orchestrator"
+import { buildReinvestmentDecision } from "@/lib/orion/reinvestment-intelligence-engine"
 import { buildOperationalPlan } from "@/lib/orion/operational-planning-engine"
 import { buildExecutionGuardrails } from "@/lib/orion/execution-guardrails"
 import { resolveProfitAvailabilityPeriod, type ResolveProfitAvailabilityPeriodInput } from "@/lib/financial/profit-availability-engine"
@@ -104,6 +107,16 @@ async function enrichSnapshotWithPersistentOrionMemory(
   const memoryItems = memoryTableReady
     ? await loadOpenOrionOperationalMemory(companyId)
     : []
+
+  if (memoryTableReady && memoryItems.length > 0) {
+    const { stale } = filterStaleOrionMemoryItems(memoryItems, snapshot)
+    if (stale.length > 0) {
+      void Promise.all(stale.map((m) => resolveOrionOperationalMemory(companyId, m.id))).catch((error) => {
+        console.warn("[orion-memory] stale memory supersede skipped", error)
+      })
+    }
+  }
+
   const proactiveAlerts = buildOrionProactiveAlerts({ snapshot, memoryItems })
 
   snapshot.orionMemory = buildOrionMemorySummary(memoryItems)
@@ -309,6 +322,16 @@ async function buildPayload(
       boardProduct,
     })
   }
+  const orionResponse = strategicQuestion
+    ? buildOrionResponse({
+        snapshot,
+        userQuestion: strategicQuestion,
+        memoryContext: operationalMemoryContext,
+      })
+    : undefined
+  const orchestratedAnswer = orionResponse && orionResponse.responseKind !== "generic_executive"
+    ? orionResponse.text
+    : null
   const planAnswer = strategicQuestion
     && operationalContext?.operationalPlan
     && operationalConversationState.activeReasoningMode
@@ -332,7 +355,7 @@ async function buildPayload(
     )
     ? operationalContext.answer
     : null
-  let strategicCopilotAnswer = planAnswer || operationalExecutionAnswer || deterministicFinancialAnswer || strategicAnswerOverride || undefined
+  let strategicCopilotAnswer = orchestratedAnswer || planAnswer || operationalExecutionAnswer || deterministicFinancialAnswer || strategicAnswerOverride || undefined
   if (!strategicCopilotAnswer && strategicQuestion && shouldUseStrategicCopilotByRoute(operationalContext)) {
     strategicCopilotAnswer = await buildStrategicCopilotAnswer({
       question: strategicQuestion,
@@ -348,6 +371,10 @@ async function buildPayload(
         executive_summary: strategicCopilotAnswer,
       }
     : executiveAnalysis
+  const reinvestmentDecision = orionResponse?.structured?.reinvestmentDecision || (strategicQuestion
+    && (operationalContext?.reasoningMode === "reinvestment_decision" || operationalContext?.intent === "purchase_capacity_analysis")
+    ? buildReinvestmentDecision(snapshot)
+    : undefined)
 
   const [history, usage, logTableReady] = await Promise.all([
     getOrionHistory(companyId),
@@ -360,6 +387,8 @@ async function buildPayload(
     analysis: responseAnalysis,
     execution,
     strategicCopilotAnswer,
+    reinvestmentDecision,
+    orionResponse,
     operationalContext: sanitizeOperationalContextForClient(operationalContext),
     operationalConversationState,
     activeMissionContext: operationalConversationState.activeMissionContext || undefined,
@@ -449,7 +478,7 @@ export async function POST(request: NextRequest) {
     ? extractOperationalGoal({ message: question, previousState: previousConversationState, intentRoute })
     : null
   const reasoningMode = mode === "chat" && question && operationalGoal
-    ? selectReasoningMode({ goal: operationalGoal, intentRoute })
+    ? selectReasoningMode({ goal: operationalGoal, intentRoute, userQuestion: question })
     : null
   const executionGuardrails = mode === "chat" && question && reasoningMode
     ? buildExecutionGuardrails({ reasoningMode, goal: operationalGoal, intentRoute, previousState: previousConversationState })

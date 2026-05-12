@@ -5,6 +5,9 @@ import { classifyTransaction } from "@/lib/financial/money-classification-engine
 import type { OrionFinancialOperationalContext } from "@/lib/orion/financial-context-consumer"
 import { buildFinancialDecisionResponse, buildFinancialTraceabilityResponse, formatFinancialDecisionResponse } from "@/lib/orion/financial-decision-response"
 import { isFinancialReinvestmentDecisionRequest, isFinancialTraceabilityRequest, isFinancialWithdrawalDecisionRequest } from "@/lib/orion/financial-traceability-router"
+import { buildReinvestmentDecision } from "@/lib/orion/reinvestment-intelligence-engine"
+import { buildSemanticPlan } from "@/lib/orion/semantic-planner"
+import { buildBusinessReview, renderBusinessReviewBlocks } from "@/lib/orion/business-review-engine"
 import { calculateOperationalHealth } from "./operational-health-engine"
 import { buildCommercialStrategy } from "./commercial-strategy-engine"
 import { buildScenarioExecutionPlan } from "./scenario-execution-engine"
@@ -280,17 +283,21 @@ function questionMentionsAccessory(question: string) {
   return /\bacessor/i.test(question)
 }
 
-function routeIntent(
+export function resolveOrionBusinessIntent(
   question: string,
   intentRoute?: OrionIntentRouteSummary | null
 ): { intent: OrionBusinessIntent; toolsUsed: OrionBusinessToolName[] } {
   const normalized = compactText(question)
+  const isReinvestmentDecision = isFinancialReinvestmentDecisionRequest(question)
 
   if (intentRoute) {
     if (intentRoute.intent === "financial_traceability") {
       return { intent: "financial_traceability", toolsUsed: ["financial_tool", "cashflow_tool", "dre_tool", "sales_tool"] }
     }
     if (intentRoute.intent === "financial_analysis" || intentRoute.intent === "global_business_question") {
+      if (isReinvestmentDecision) {
+        return { intent: "purchase_capacity_analysis", toolsUsed: ["financial_tool", "cashflow_tool", "inventory_tool", "sales_tool"] }
+      }
       return { intent: "cash_health_analysis", toolsUsed: ["financial_tool", "cashflow_tool", "dre_tool", "sales_tool"] }
     }
     if (intentRoute.intent === "inventory_analysis") {
@@ -316,7 +323,7 @@ function routeIntent(
     return { intent: "cash_health_analysis", toolsUsed: ["financial_tool", "cashflow_tool", "dre_tool", "sales_tool"] }
   }
 
-  if (isFinancialReinvestmentDecisionRequest(question)) {
+  if (isReinvestmentDecision) {
     return { intent: "purchase_capacity_analysis", toolsUsed: ["financial_tool", "cashflow_tool", "inventory_tool", "sales_tool"] }
   }
 
@@ -390,6 +397,8 @@ function routeIntent(
 
   return { intent: "general_question", toolsUsed: ["inventory_tool", "financial_tool", "sales_tool", "crm_tool"] }
 }
+
+const routeIntent = resolveOrionBusinessIntent
 
 function productLabel(category: unknown, model: unknown, color: unknown) {
   const categoryLabel = String(category || "").trim()
@@ -1095,7 +1104,7 @@ function unidentifiedProductActionAnswer() {
   ].join("\n")
 }
 
-function buildAnswer(intent: OrionBusinessIntent, contexts: Record<string, unknown>, snapshot: OrionSnapshot, question: string) {
+export function buildOrionBusinessAnswer(intent: OrionBusinessIntent, contexts: Record<string, unknown>, snapshot: OrionSnapshot, question: string) {
   const inventory = contexts.inventory as { products?: InventoryContextItem[]; stuckProducts?: InventoryContextItem[] } | null
   const sales = contexts.sales as { topProfitProducts?: Array<{ product: string; profit: number; revenue: number; sales: number; marginPct: number }> } | null
   const crm = contexts.crm as { hotLeads?: LeadContextItem[]; staleLeads?: LeadContextItem[] } | null
@@ -1116,8 +1125,30 @@ function buildAnswer(intent: OrionBusinessIntent, contexts: Record<string, unkno
   } | null
   const financialContext = finance?.operationalContext || snapshot.finance.financialOperationalContext
   const workingCapital = finance?.workingCapital || snapshot.finance.workingCapitalSnapshot
-  const traceabilityAnswer = buildFinancialTraceabilityResponse(financialContext, question)
+  const semanticPlan = buildSemanticPlan({ userQuestion: question })
+
+  if (semanticPlan.primaryGoal === "business_review") {
+    const review = buildBusinessReview({ snapshot, plan: semanticPlan })
+    return renderBusinessReviewBlocks(review)
+  }
+  if (semanticPlan.primaryGoal === "purchase_capacity" || semanticPlan.primaryGoal === "reinvestment_decision") {
+    const reinvestmentDecision = buildReinvestmentDecision(snapshot)
+    const decision = buildFinancialDecisionResponse({
+      reasoningMode: "reinvestment_decision",
+      userQuestion: question,
+      financialContext,
+      financialSafetyAudit: workingCapital.financialSafetyAudit,
+      reinvestmentDecision,
+    })
+    return formatFinancialDecisionResponse(decision)
+  }
+
+  const reinvestmentDecisionForTraceability = isFinancialTraceabilityRequest(question)
+    ? buildReinvestmentDecision(snapshot)
+    : null
+  const traceabilityAnswer = buildFinancialTraceabilityResponse(financialContext, question, reinvestmentDecisionForTraceability)
   if (traceabilityAnswer) return traceabilityAnswer
+
   const product = inventory?.products?.[0]
   const hasSpecificProduct = questionLooksProductSpecific(question)
   const health = calculateOperationalHealth(snapshot)
@@ -1178,12 +1209,15 @@ function buildAnswer(intent: OrionBusinessIntent, contexts: Record<string, unkno
   }
 
   if (intent === "purchase_capacity_analysis") {
-    return formatFinancialDecisionResponse(buildFinancialDecisionResponse({
+    const reinvestmentDecision = buildReinvestmentDecision(snapshot)
+    const decision = buildFinancialDecisionResponse({
       reasoningMode: "reinvestment_decision",
       userQuestion: question,
       financialContext,
       financialSafetyAudit: workingCapital.financialSafetyAudit,
-    }))
+      reinvestmentDecision,
+    })
+    return formatFinancialDecisionResponse(decision)
   }
 
   if (intent === "cash_health_analysis") {
@@ -1342,7 +1376,7 @@ export async function buildOrionBusinessContext(
     proactiveAlerts: snapshot.orionProactiveAlerts || null,
   }).filter(([, value]) => Boolean(value)))
   const matchedRecords = countRecords(contexts)
-  const answer = buildAnswer(intent, contexts, snapshot, cleanQuestion)
+  const answer = buildOrionBusinessAnswer(intent, contexts, snapshot, cleanQuestion)
   const gaps = matchedRecords
     ? []
     : ["Não encontrei dados suficientes no estoque operacional para afirmar isso com segurança. O item pode estar vendido, em reparo ou com cadastro incompleto."]

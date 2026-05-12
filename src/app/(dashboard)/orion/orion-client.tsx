@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { createPortal } from "react-dom"
 import {
   Area,
   AreaChart,
@@ -34,6 +35,7 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
+  X,
   Zap,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -60,6 +62,8 @@ type ChatMessage = {
   role: "user" | "orion"
   content: string
   source?: "operational" | "overview" | "strategic"
+  reinvestmentDecision?: OrionApiPayload["reinvestmentDecision"]
+  orionResponse?: OrionApiPayload["orionResponse"]
 }
 
 type SelectedFinancialPeriod = {
@@ -102,8 +106,63 @@ function formatBRL(value: number) {
   }).format(value)
 }
 
+function formatPct(value: number | null | undefined) {
+  if (value === null || value === undefined) return "Sem dado"
+  return `${new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 }).format(value)}%`
+}
+
+function formatDays(value: number | null | undefined) {
+  if (value === null || value === undefined) return "Sem dado"
+  return `${new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 }).format(value)} dias`
+}
+
+function confidenceCopy(value: "low" | "medium" | "high") {
+  if (value === "high") return "boa amostra"
+  if (value === "medium") return "sinal consistente"
+  return "sinal inicial"
+}
+
 function formatNumber(value: number) {
   return new Intl.NumberFormat("pt-BR").format(value)
+}
+
+function pluralizePt(count: number, singular: string, plural: string) {
+  return `${formatNumber(count)} ${count === 1 ? singular : plural}`
+}
+
+function sentenceCasePt(value: string) {
+  let shouldCapitalize = true
+  let lastWasSentencePunctuation = false
+  return Array.from(value).map((char) => {
+    const isLetter = char.toLocaleLowerCase("pt-BR") !== char.toLocaleUpperCase("pt-BR")
+    const isDigit = char >= "0" && char <= "9"
+    if (isDigit) {
+      if (shouldCapitalize && !lastWasSentencePunctuation) shouldCapitalize = false
+      lastWasSentencePunctuation = false
+      return char
+    }
+    if (isLetter && shouldCapitalize) {
+      shouldCapitalize = false
+      lastWasSentencePunctuation = false
+      return char.toLocaleUpperCase("pt-BR")
+    }
+    if (isLetter) {
+      shouldCapitalize = false
+      lastWasSentencePunctuation = false
+    }
+    if (char === "." || char === "!" || char === "?") {
+      lastWasSentencePunctuation = true
+    } else if (lastWasSentencePunctuation && char === " ") {
+      shouldCapitalize = true
+    } else if (char !== " ") {
+      lastWasSentencePunctuation = false
+    }
+    return char
+  }).join("")
+}
+
+function polishBusinessDecisionText(value: string) {
+  return sentenceCasePt(humanizeOrionText(value))
 }
 
 function formatUSD(value: number) {
@@ -182,6 +241,281 @@ function polishOrionCopy(value: string) {
     .replace(/\bCRM\b/g, "comercial")
     .replace(/\s{2,}/g, " ")
     .trim()
+}
+
+function MessageParagraphs({ content }: { content: string }) {
+  const paragraphs = humanizeOrionText(content)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  return (
+    <div className="space-y-3">
+      {paragraphs.map((paragraph, index) => (
+        <p key={`${paragraph}-${index}`} className="text-sm leading-6 text-slate-200">{paragraph}</p>
+      ))}
+    </div>
+  )
+}
+
+function ReinvestmentDecisionMessage({ decision, fallback }: {
+  decision: NonNullable<OrionApiPayload["reinvestmentDecision"]>
+  fallback: string
+}) {
+  const product = decision.recommendedProducts[0]
+  const avoid = decision.avoid[0]
+  const decisionLabel = decision.decision === "reinvest_recommended"
+    ? "Recomprar de forma seletiva"
+    : decision.decision === "reinvest_with_cap"
+      ? "Recomprar com teto"
+      : decision.capitalStatus === "demand_without_safe_capital"
+        ? "Demanda existe, capital ainda não"
+        : "Segurar recompra agora"
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-4">
+        <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-cyan-200">Decisão</p>
+        <p className="mt-2 text-base font-semibold leading-6 text-white">{decisionLabel}</p>
+        <p className="mt-2 text-sm leading-6 text-cyan-50">{humanizeOrionText(decision.recommendedAction)}</p>
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-3">
+        <div className="rounded-2xl border border-emerald-300/20 bg-emerald-300/10 p-3">
+          <p className="text-[11px] text-emerald-200">Recompra recomendada</p>
+          <p className="mt-1 text-lg font-semibold text-white">{formatBRL(decision.recommendedReinvestmentAmount)}</p>
+        </div>
+        <div className="rounded-2xl border border-amber-300/20 bg-amber-300/10 p-3">
+          <p className="text-[11px] text-amber-200">Reserva mínima</p>
+          <p className="mt-1 text-lg font-semibold text-white">{formatBRL(decision.preserveCashAmount)}</p>
+        </div>
+        <div className="rounded-2xl border border-sky-300/20 bg-sky-300/10 p-3">
+          <p className="text-[11px] text-sky-200">Teto teórico</p>
+          <p className="mt-1 text-lg font-semibold text-white">{formatBRL(decision.safeReinvestmentCap)}</p>
+        </div>
+      </div>
+
+      {product ? (
+        <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">Prioridade</p>
+          <p className="mt-2 text-base font-semibold text-white">{product.label}</p>
+          <p className="mt-1 text-sm leading-6 text-slate-300">{humanizeOrionText(product.reason)}</p>
+          <div className="mt-3 grid gap-2 text-xs text-slate-300 sm:grid-cols-2">
+            <span className="rounded-xl bg-white/[0.05] px-3 py-2">{pluralizePt(product.recentSalesCount, "venda recente", "vendas recentes")}</span>
+            <span className="rounded-xl bg-white/[0.05] px-3 py-2">{formatPct(product.historicalMargin)} margem média</span>
+            <span className="rounded-xl bg-white/[0.05] px-3 py-2">{formatDays(product.averageDaysInStock)} em estoque</span>
+            <span className="rounded-xl bg-white/[0.05] px-3 py-2">{confidenceCopy(product.confidence)}</span>
+          </div>
+        </div>
+      ) : null}
+
+      {avoid ? (
+        <div className="rounded-2xl border border-red-300/15 bg-red-300/10 p-4">
+          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-red-200">Evitar como prioridade</p>
+          <p className="mt-2 text-sm font-semibold text-white">{avoid.label}</p>
+          <p className="mt-1 text-sm leading-6 text-red-50">{humanizeOrionText(avoid.reason)}</p>
+        </div>
+      ) : null}
+
+      <div className="rounded-2xl border border-white/10 bg-black/15 p-4">
+        <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">Observação</p>
+        <p className="mt-2 text-sm leading-6 text-slate-200">{humanizeOrionText(decision.leadContext.note)}</p>
+        {decision.precisionWarnings[0] ? (
+          <p className="mt-2 text-xs leading-5 text-amber-200">{humanizeOrionText(decision.precisionWarnings[0])}</p>
+        ) : null}
+      </div>
+
+      {!product && !avoid ? <MessageParagraphs content={fallback} /> : null}
+    </div>
+  )
+}
+
+function BusinessReviewMessage({ review, fallback }: {
+  review: NonNullable<NonNullable<OrionApiPayload["orionResponse"]>["structured"]>["businessReview"]
+  fallback: string
+}) {
+  if (!review) return <MessageParagraphs content={fallback} />
+  const topProduct = review.sales.topProducts[0]
+  const stuckItem = review.inventory.stuckItems[0]
+  const recommendation = review.recommendations[0]
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-4">
+        <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-cyan-200">Resultado do período</p>
+        <p className="mt-2 text-sm text-slate-300">{review.timeframeLabel}</p>
+        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          <span className="rounded-xl bg-white/[0.06] px-3 py-2 text-sm text-white">{pluralizePt(review.sales.totalSales, "venda", "vendas")}</span>
+          <span className="rounded-xl bg-white/[0.06] px-3 py-2 text-sm text-white">{formatBRL(review.sales.totalRevenue)} receita</span>
+          <span className="rounded-xl bg-white/[0.06] px-3 py-2 text-sm text-white">{review.sales.realizedProfit === null ? "Lucro sem dado" : `${formatBRL(review.sales.realizedProfit)} lucro`}</span>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+        <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">Produtos que performaram</p>
+        {topProduct ? (
+          <p className="mt-2 text-sm leading-6 text-slate-200">
+            {topProduct.label}: {pluralizePt(topProduct.salesCount, "venda", "vendas")}, {formatBRL(topProduct.revenue)} de receita{topProduct.profit !== null ? ` e ${formatBRL(topProduct.profit)} de lucro` : ""}.
+          </p>
+        ) : (
+          <p className="mt-2 text-sm text-slate-400">Sem produto vendido suficiente no snapshot atual.</p>
+        )}
+      </div>
+
+      <div className="rounded-2xl border border-amber-300/20 bg-amber-300/10 p-4">
+        <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-amber-200">Estoque preso</p>
+        {stuckItem ? (
+          <p className="mt-2 text-sm leading-6 text-amber-50">
+            {stuckItem.label}: {stuckItem.daysInStock === null ? "tempo sem dado" : `${stuckItem.daysInStock} dias`} em estoque{stuckItem.investedCapital !== null ? `, ${formatBRL(stuckItem.investedCapital)} imobilizado` : ""}.
+          </p>
+        ) : (
+          <p className="mt-2 text-sm text-amber-50">Sem estoque preso relevante no snapshot atual.</p>
+        )}
+      </div>
+
+      <div className="rounded-2xl border border-emerald-300/20 bg-emerald-300/10 p-4">
+        <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-emerald-200">Minha recomendação</p>
+        <p className="mt-2 text-sm leading-6 text-emerald-50">
+          {recommendation ? `${recommendation.title}: ${recommendation.action}` : "Manter leitura comercial cautelosa até haver mais dados do período."}
+        </p>
+      </div>
+
+      {review.caveats[0] ? (
+        <p className="rounded-2xl border border-white/10 bg-black/15 px-4 py-3 text-xs leading-5 text-slate-400">{review.caveats[0]}</p>
+      ) : null}
+    </div>
+  )
+}
+
+function CashHealthMessage({ summary, fallback }: {
+  summary: NonNullable<NonNullable<OrionApiPayload["orionResponse"]>["structured"]>["cashHealthSummary"]
+  fallback: string
+}) {
+  if (!summary) return <MessageParagraphs content={fallback} />
+  return (
+    <div className="space-y-3">
+      {summary.blocks.slice(0, 4).map((block) => (
+        <div key={block.title} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">{block.title}</p>
+          <p className="mt-2 text-sm leading-6 text-slate-200">{block.body}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function BusinessDecisionMessage({ decision, fallback }: {
+  decision: NonNullable<NonNullable<OrionApiPayload["orionResponse"]>["structured"]>["businessDecision"]
+  fallback: string
+}) {
+  if (!decision) return <MessageParagraphs content={fallback} />
+  return (
+    <div className="space-y-3">
+      <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-4">
+        <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-cyan-200">Decisão</p>
+        <p className="mt-2 text-base font-semibold leading-6 text-white">{decision.recommendation.title}</p>
+        <p className="mt-2 text-sm leading-6 text-cyan-50">{polishBusinessDecisionText(decision.recommendation.action)}</p>
+        <p className="mt-2 text-xs leading-5 text-cyan-100/80">{polishBusinessDecisionText(decision.recommendation.reason)}</p>
+      </div>
+
+      {decision.keyFindings.length ? (
+        <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">Evidências principais</p>
+          <div className="mt-3 space-y-2">
+            {decision.keyFindings.slice(0, 5).map((finding) => (
+              <div key={`${finding.label}-${finding.value || finding.evidence}`} className="rounded-xl bg-white/[0.05] px-3 py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-white">{finding.label}</p>
+                  {finding.value ? <span className="text-xs text-cyan-200">{finding.value}</span> : null}
+                </div>
+                <p className="mt-1 text-xs leading-5 text-slate-300">{polishBusinessDecisionText(finding.evidence)}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {decision.alternatives.length ? (
+        <div className="rounded-2xl border border-sky-300/20 bg-sky-300/10 p-4">
+          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-sky-200">Alternativas</p>
+          <div className="mt-3 space-y-2">
+            {decision.alternatives.slice(0, 3).map((item) => (
+              <p key={item.title} className="text-sm leading-6 text-sky-50"><span className="font-semibold text-white">{item.title}:</span> {polishBusinessDecisionText(item.tradeoff)}</p>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {decision.avoid.length ? (
+        <div className="rounded-2xl border border-red-300/15 bg-red-300/10 p-4">
+          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-red-200">Evitar</p>
+          <div className="mt-3 space-y-2">
+            {decision.avoid.slice(0, 3).map((item) => (
+              <p key={item.title} className="text-sm leading-6 text-red-50"><span className="font-semibold text-white">{item.title}:</span> {polishBusinessDecisionText(item.reason)}</p>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {decision.nextSteps.length ? (
+        <div className="rounded-2xl border border-emerald-300/20 bg-emerald-300/10 p-4">
+          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-emerald-200">Próximos passos</p>
+          <div className="mt-3 space-y-2">
+            {decision.nextSteps.slice(0, 3).map((step) => (
+              <p key={`${step.priority}-${step.action}`} className="text-sm leading-6 text-emerald-50">{polishBusinessDecisionText(step.action)}</p>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {decision.caveats.length ? (
+        <div className="rounded-2xl border border-white/10 bg-black/15 px-4 py-3 text-xs leading-5 text-slate-400">
+          <p className="font-bold uppercase tracking-[0.16em] text-slate-500">Limitações</p>
+          <div className="mt-2 space-y-1">
+            {decision.caveats.slice(0, 3).map((caveat) => (
+              <p key={caveat}>{polishBusinessDecisionText(caveat)}</p>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function AuditTraceabilityMessage({ text }: { text: string }) {
+  const blocks = text.split("\n\n").map((block) => block.trim()).filter(Boolean)
+  return (
+    <div className="space-y-3">
+      {blocks.map((block, index) => (
+        <div key={`${index}-${block.slice(0, 16)}`} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+          <MessageParagraphs content={block} />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function OrionMessageContent({ message }: { message: ChatMessage }) {
+  const response = message.orionResponse
+  if (response?.responseKind === "reinvestment_decision" && response.structured?.reinvestmentDecision) {
+    return <ReinvestmentDecisionMessage decision={response.structured.reinvestmentDecision} fallback={response.text || message.content} />
+  }
+  if (response?.responseKind === "business_decision") {
+    return <BusinessDecisionMessage decision={response.structured?.businessDecision} fallback={response.text || message.content} />
+  }
+  if (response?.responseKind === "business_review") {
+    return <BusinessReviewMessage review={response.structured?.businessReview} fallback={response.text || message.content} />
+  }
+  if (response?.responseKind === "cash_health_summary") {
+    return <CashHealthMessage summary={response.structured?.cashHealthSummary} fallback={response.text || message.content} />
+  }
+  if (response?.responseKind === "audit_traceability") {
+    return <AuditTraceabilityMessage text={response.structured?.auditBreakdown?.text || response.text || message.content} />
+  }
+  if (message.reinvestmentDecision) {
+    return <ReinvestmentDecisionMessage decision={message.reinvestmentDecision} fallback={message.content} />
+  }
+  return <MessageParagraphs content={message.source === "strategic" ? message.content : humanizeOrionText(message.content)} />
 }
 
 function buildProactiveMessage(payload: OrionApiPayload) {
@@ -386,8 +720,17 @@ function PriorityActionCard({ payload }: { payload: OrionApiPayload }) {
 
 function FinancialGoalCard({ payload }: { payload: OrionApiPayload }) {
   const goal = payload.execution.objective.financialGoal
+  const reinvestmentDecision = payload.reinvestmentDecision
   const tone = goal.urgencyLevel === "urgent" ? "red" : goal.urgencyLevel === "attention" ? "amber" : "green"
   const label = goal.urgencyLevel === "urgent" ? "Urgente" : goal.urgencyLevel === "attention" ? "Atenção" : "Coberto"
+  const reserveValue = reinvestmentDecision?.preserveCashAmount ?? goal.protectedWorkingCapital
+  const recompositionValue = reinvestmentDecision?.recommendedReinvestmentAmount ?? goal.safeReinvestmentAmount
+  const recompositionLabel = reinvestmentDecision ? "Recompra recomendada" : "Potencial projetado"
+  const executiveReading = reinvestmentDecision
+    ? reinvestmentDecision.recommendedAction
+    : goal.strategy
+  const riskReading = reinvestmentDecision?.rationale[0] || goal.replacementCapitalBasis
+
   return (
     <section className={cn(
       "rounded-3xl border p-6 shadow-xl shadow-black/20",
@@ -407,29 +750,39 @@ function FinancialGoalCard({ payload }: { payload: OrionApiPayload }) {
         </span>
       </div>
       <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <BoardMetric label="Caixa disponível agora" value={formatBRL(goal.grossCash)} tone="blue" helper="Saldo reconciliado disponível hoje, consolidado das contas financeiras." />
-        <BoardMetric label="Capital operacional protegido" value={formatBRL(goal.protectedWorkingCapital)} tone="amber" helper="Inclui estoque ativo ainda não convertido em caixa." />
-        <BoardMetric label="Lucro realizado no período" value={formatBRL(goal.liquidProfitAvailable)} tone={goal.liquidProfitAvailable >= goal.payables30d ? "green" : "amber"} helper={`Lucro das vendas conciliadas no período selecionado. ${goal.replacementCapitalBasis}`} />
-        <BoardMetric label="Contas próximas" value={formatBRL(goal.payables30d)} tone={goal.payables30d > 0 ? "amber" : "neutral"} helper="Obrigações previstas nos próximos 30 dias." />
-        <BoardMetric label="Necessidade operacional adicional" value={goal.requiredNewProfit > 0 ? formatBRL(goal.requiredNewProfit) : "Coberto"} tone={goal.requiredNewProfit > 0 ? "red" : "green"} helper={goal.requiredNewProfit > 0 ? undefined : "Nenhum lucro adicional necessário para as contas próximas."} />
+        <BoardMetric label="Caixa disponível" value={formatBRL(goal.grossCash)} tone="blue" helper="Saldo conciliado hoje." />
+        <BoardMetric label="Reserva mínima" value={formatBRL(reserveValue)} tone="amber" helper="Capital preservado." />
+        <BoardMetric label="Contas próximas" value={formatBRL(goal.payables30d)} tone={goal.payables30d > 0 ? "amber" : "neutral"} helper="Próximos 30 dias." />
+        <BoardMetric label="Recebíveis pendentes" value={formatBRL(payload.snapshot.executive.pendingReceivables)} tone="blue" helper="A conciliar." />
+        <BoardMetric label={recompositionLabel} value={formatBRL(recompositionValue)} tone={recompositionValue > 0 ? "green" : "neutral"} helper={reinvestmentDecision ? "Teto seletivo." : "Estoque ativo."} />
       </div>
-      <div className="mt-4 grid gap-4 lg:grid-cols-3">
-        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Caixa projetado com recebíveis</p>
-          <p className="mt-2 text-lg font-semibold text-white">{formatBRL(goal.projectedCashAfterCommitments)}</p>
-          <p className="mt-1 text-sm leading-6 text-slate-400">Sobra na conta após contas e recebíveis, mas parte pode ser dinheiro de recompra.</p>
-        </div>
-        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Sobra operacional após contas</p>
-          <p className={cn("mt-2 text-lg font-semibold", goal.profitBufferAfterPayables >= 0 ? "text-emerald-300" : "text-red-300")}>{formatBRL(goal.profitBufferAfterPayables)}</p>
-          <p className="mt-1 text-sm leading-6 text-slate-400">Lucro realizado no período, menos retiradas e contas próximas.</p>
-        </div>
-        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Próximo vencimento</p>
-          <p className="mt-2 text-lg font-semibold text-white">{goal.nextDueDays === null ? "Sem vencimento" : `${goal.nextDueDays} dia${goal.nextDueDays === 1 ? "" : "s"}`}</p>
-          <p className="mt-1 text-sm leading-6 text-slate-400">{goal.nextDueLabel || "Sem pressão imediata registrada."}</p>
-        </div>
+      <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+        <p className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Leitura executiva</p>
+        <p className="mt-3 max-w-5xl text-sm leading-6 text-slate-200">{humanizeOrionText(executiveReading)}</p>
+        {riskReading ? <p className="mt-2 max-w-5xl text-sm leading-6 text-slate-400">{humanizeOrionText(riskReading)}</p> : null}
       </div>
+      <details className="mt-4 rounded-2xl border border-white/10 bg-black/10">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 text-sm font-semibold text-slate-300 [&::-webkit-details-marker]:hidden">
+          <span className="flex items-center gap-2">
+            <ChevronDown className="h-4 w-4 text-slate-500" />
+            Ver composição
+          </span>
+          <span className="text-xs font-normal text-slate-500">lucro, recebíveis, proteção e vencimentos</span>
+        </summary>
+        <div className="grid gap-3 border-t border-white/10 p-5 md:grid-cols-2 xl:grid-cols-3">
+          <BoardMetric label="Lucro realizado" value={formatBRL(goal.liquidProfitAvailable)} tone={goal.liquidProfitAvailable >= goal.payables30d ? "green" : "amber"} helper="Vendas conciliadas." />
+          <BoardMetric label="Caixa projetado" value={formatBRL(goal.projectedCashAfterCommitments)} tone={goal.projectedCashAfterCommitments >= 0 ? "green" : "red"} helper="Após contas e recebíveis." />
+          <BoardMetric label="Sobra operacional" value={formatBRL(goal.profitBufferAfterPayables)} tone={goal.profitBufferAfterPayables >= 0 ? "green" : "red"} helper="Lucro menos contas." />
+          <BoardMetric label="Capital protegido" value={formatBRL(goal.protectedWorkingCapital)} tone="amber" helper="Estoque e operação." />
+          <BoardMetric label="Necessidade adicional" value={goal.requiredNewProfit > 0 ? formatBRL(goal.requiredNewProfit) : "Coberto"} tone={goal.requiredNewProfit > 0 ? "red" : "green"} helper="Para contas próximas." />
+          <BoardMetric
+            label="Próximo vencimento"
+            value={goal.nextDueDays === null ? "Sem vencimento" : `${goal.nextDueDays} dia${goal.nextDueDays === 1 ? "" : "s"}`}
+            tone={goal.nextDueDays !== null && goal.nextDueDays <= 7 ? "amber" : "neutral"}
+            helper={goal.nextDueLabel || "Sem pressão registrada."}
+          />
+        </div>
+      </details>
     </section>
   )
 }
@@ -638,8 +991,6 @@ function ExecutionBoard({ payload }: { payload: OrionApiPayload }) {
   const target = hasTarget && operationalTarget.targetAmount !== null
     ? formatBRL(operationalTarget.targetAmount)
     : "Sem meta ativa"
-  const targetTone = hasTarget ? "blue" : "neutral"
-  const gapTone = gapToOperationalTarget.tone
   const inventoryUnits = execution.inventory.reduce((sum, item) => sum + item.quantity, 0)
 
   return (
@@ -651,18 +1002,31 @@ function ExecutionBoard({ payload }: { payload: OrionApiPayload }) {
             Cenário recomendado: {scenarioLabel(execution.objective.recommendedScenario)}
           </span>
         </div>
-        <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          <BoardMetric label={operationalTarget.label} value={target} tone={targetTone} helper={operationalTarget.explanation} />
-          <BoardMetric label="Potencial projetado estoque" value={formatBRL(execution.objective.maxPossibleProfit)} tone="green" helper="Cenário potencial do estoque, não lucro realizado." />
-          <BoardMetric
-            label="Gap para meta"
-            value={gapToOperationalTarget.amount !== null ? formatBRL(gapToOperationalTarget.amount) : "Sem meta ativa"}
-            tone={gapTone}
-            helper={gapToOperationalTarget.explanation}
-          />
-          <BoardMetric label="Caixa atual" value={formatBRL(payload.snapshot.executive.cashBalance)} tone={payload.snapshot.executive.cashBalance >= 0 ? "green" : "red"} />
-          <BoardMetric label="Recebíveis" value={formatBRL(payload.snapshot.executive.pendingReceivables)} tone="blue" />
-        </div>
+        {(() => {
+          const cash = payload.snapshot.executive.cashBalance
+          const reserveMin = Math.max(1000, Math.round(Math.max(0, cash) * 0.25))
+          const payables = payload.snapshot.executive.liquidityForecast?.payables7d ?? 0
+          const receivables = payload.snapshot.executive.pendingReceivables
+          return (
+            <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+              <BoardMetric label="Caixa disponível" value={formatBRL(cash)} tone={cash >= 0 ? "green" : "red"} helper="Saldo conciliado." />
+              <BoardMetric label="Reserva mínima" value={formatBRL(reserveMin)} tone="amber" helper="Caixa protegido." />
+              <BoardMetric label="Contas próximas" value={formatBRL(payables)} tone={payables > 0 ? "amber" : "neutral"} helper="Próximos 7 dias." />
+              <BoardMetric label="Recebíveis pendentes" value={formatBRL(receivables)} tone="blue" helper="A conciliar." />
+              <BoardMetric label="Potencial projetado" value={formatBRL(execution.objective.maxPossibleProfit)} tone="green" helper="Estoque ativo." />
+            </div>
+          )
+        })()}
+        {hasTarget ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">{operationalTarget.label}: {target}</span>
+            {gapToOperationalTarget.amount !== null ? (
+              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">
+                Cobertura por lucro realizado: {formatBRL(gapToOperationalTarget.amount)} {gapToOperationalTarget.amount > 0 ? "faltando" : "coberto"}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       </BoardSection>
 
       <FinancialGoalCard payload={payload} />
@@ -942,6 +1306,8 @@ export function OrionClient() {
   const [loading, setLoading] = useState(true)
   const generating = false
   const [chatLoading, setChatLoading] = useState(false)
+  const [chatOpen, setChatOpen] = useState(false)
+  const [chatPortalReady, setChatPortalReady] = useState(false)
   const [question, setQuestion] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [operationalConversationState, setOperationalConversationState] = useState<OrionOperationalConversationState | null>(null)
@@ -952,6 +1318,7 @@ export function OrionClient() {
   })
   const periodRequestKey = useMemo(() => periodParams(selectedFinancialPeriod), [selectedFinancialPeriod])
   const chatPrimedRef = useRef(false)
+  const chatScrollRef = useRef<HTMLDivElement | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "orion",
@@ -989,6 +1356,7 @@ export function OrionClient() {
   async function sendQuestion() {
     const trimmed = question.trim()
     if (!trimmed || chatLoading) return
+    setChatOpen(true)
     setQuestion("")
     setMessages((current) => [...current, { role: "user", content: trimmed }])
     setChatLoading(true)
@@ -1001,13 +1369,16 @@ export function OrionClient() {
       })
       const json = await response.json() as ApiResponse
       if (json.data) {
-        setPayload(json.data)
-        setOperationalConversationState(json.data.operationalConversationState || operationalConversationState)
-        const strategicResponse = json.data.strategicCopilotAnswer || null
+        const data = json.data
+        setPayload(data)
+        setOperationalConversationState(data.operationalConversationState || operationalConversationState)
+        const strategicResponse = data.strategicCopilotAnswer || null
         setMessages((current) => [...current, {
           role: "orion",
-          content: strategicResponse || humanizeOrionText(json.data?.analysis.executive_summary || json.data?.analysis.summary || "Análise concluída."),
-          source: strategicResponse ? "strategic" : json.data?.operationalContext ? "operational" : "overview",
+          content: strategicResponse || humanizeOrionText(data.analysis.executive_summary || data.analysis.summary || "Análise concluída."),
+          source: strategicResponse ? "strategic" : data.operationalContext ? "operational" : "overview",
+          reinvestmentDecision: data.reinvestmentDecision,
+          orionResponse: data.orionResponse,
         }])
       }
       if (json.error?.message) setError(json.error.message)
@@ -1037,6 +1408,18 @@ export function OrionClient() {
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [periodRequestKey])
+
+  useEffect(() => {
+    setChatPortalReady(true)
+  }, [])
+
+  useEffect(() => {
+    if (!chatOpen) return
+    chatScrollRef.current?.scrollTo({
+      top: chatScrollRef.current.scrollHeight,
+      behavior: "smooth",
+    })
+  }, [chatOpen, messages, chatLoading])
 
   const allInsights = useMemo(() => {
     if (!payload) return []
@@ -1075,6 +1458,113 @@ export function OrionClient() {
       </div>
     )
   }
+
+  const chatPortal = (
+    <>
+      <button
+        type="button"
+        onClick={() => setChatOpen(true)}
+        aria-label="Abrir Chat ORION"
+        style={{ position: "fixed", right: 24, bottom: 24, zIndex: 9999 }}
+        className="fixed bottom-6 right-6 z-[9999] flex items-center gap-3 rounded-2xl border border-cyan-200/50 bg-cyan-300 px-4 py-3 text-sm font-bold text-slate-950 shadow-2xl shadow-cyan-950/40 ring-1 ring-white/20 backdrop-blur hover:bg-cyan-200"
+      >
+        <span className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-slate-950 text-cyan-200">
+          <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full border border-cyan-300 bg-emerald-300" />
+          <MessageSquareText className="h-4 w-4" />
+        </span>
+        <span>Chat ORION</span>
+      </button>
+
+      {chatOpen ? (
+        <div className="fixed inset-0 z-[10000]" style={{ position: "fixed", inset: 0, zIndex: 10000 }}>
+          <button
+            type="button"
+            aria-label="Fechar painel do Chat ORION"
+            onClick={() => setChatOpen(false)}
+            className="absolute inset-0 z-0 bg-black/45 backdrop-blur-[2px]"
+          />
+          <aside className="absolute bottom-2 right-2 top-2 z-10 flex w-[min(calc(100vw-1rem),520px)] flex-col rounded-3xl border border-white/10 bg-[#07111f]/95 shadow-2xl shadow-black/50 backdrop-blur-xl sm:bottom-4 sm:right-4 sm:top-4">
+            <section className="flex min-h-0 flex-1 flex-col p-4">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold text-white">Chat ORION</h2>
+                  <p className="mt-0.5 text-xs text-slate-400">Pergunte sobre estoque, leads, margem ou campanha.</p>
+                </div>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="outline"
+                  onClick={() => setChatOpen(false)}
+                  className="h-10 w-10 border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"
+                  aria-label="Fechar Chat ORION"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+
+              <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-white/10 bg-[#050914]">
+                <div ref={chatScrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+                  {messages.map((msg, index) => {
+                    const isUser = msg.role === "user"
+                    return (
+                      <div key={`${msg.role}-${index}`} className={cn("flex", isUser ? "justify-end" : "justify-start")}>
+                        <div className={cn(
+                          "rounded-2xl px-4 py-3 text-sm leading-6",
+                          isUser
+                            ? "max-w-[88%] whitespace-pre-line bg-cyan-300 text-slate-950"
+                            : "w-full max-w-full border border-white/10 bg-white/[0.05] text-slate-200"
+                        )}>
+                          {isUser ? msg.content : <OrionMessageContent message={msg} />}
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {chatLoading ? (
+                    <div className="flex justify-start">
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-3 text-sm text-cyan-100">
+                        <Loader2 className="mr-2 inline h-3.5 w-3.5 animate-spin" />
+                        Recalculando
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="border-t border-white/10 p-3">
+                  <div className="flex gap-2">
+                    <input
+                      value={question}
+                      onChange={(e) => setQuestion(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") sendQuestion() }}
+                      placeholder="Pergunte para a ORION..."
+                      className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-300/50"
+                    />
+                    <Button type="button" size="icon" onClick={sendQuestion} disabled={chatLoading || !question.trim()} className="h-12 w-12 bg-cyan-300 text-slate-950 hover:bg-cyan-200">
+                      {chatLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              <details className="mt-3 rounded-2xl border border-white/10 bg-white/[0.02]">
+                <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-xs text-slate-500 [&::-webkit-details-marker]:hidden">
+                  <ChevronDown className="h-3.5 w-3.5" />
+                  Controle técnico
+                </summary>
+                <div className="space-y-2 border-t border-white/10 p-4 text-xs text-slate-400">
+                  <p className="flex items-center gap-2"><ShieldCheck className="h-3.5 w-3.5 text-emerald-300" /> Chamadas no mês: {payload.usage.callsThisMonth}</p>
+                  <p className="flex items-center gap-2"><Database className="h-3.5 w-3.5" /> Histórico: {payload.config.logTableReady ? "ativo" : "aguardando"}</p>
+                  <p className="flex items-center gap-2"><Clock3 className="h-3.5 w-3.5" /> Cache: {payload.config.cacheMinutes} min</p>
+                  <p>Modo: {payload.config.openaiConfigured ? "Análise completa" : "Análise local"}</p>
+                  <p>Custo: {payload.usage.estimatedCostUsdThisMonth == null ? "sem chamadas externas" : formatUSD(payload.usage.estimatedCostUsdThisMonth)}</p>
+                </div>
+              </details>
+            </section>
+          </aside>
+        </div>
+      ) : null}
+    </>
+  )
+
   return (
     <div className="min-h-screen bg-[#050914] text-slate-100">
       <div className="mx-auto max-w-[1800px] px-4 py-5 sm:px-6">
@@ -1146,11 +1636,8 @@ export function OrionClient() {
           <div className="mb-6 rounded-2xl border border-amber-300/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">{error}</div>
         ) : null}
 
-        {/* Main grid: content + chat */}
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-
-          {/* Left: execution flow */}
-          <div className="space-y-5">
+        {/* Main dashboard */}
+        <div className="space-y-5">
             <ProactiveAlertsPanel payload={payload} />
             <ExecutionBoard payload={payload} />
 
@@ -1185,78 +1672,9 @@ export function OrionClient() {
                 )}
               </div>
             </details>
-          </div>
-
-          {/* Right: chat */}
-          <aside className="xl:sticky xl:top-5 xl:h-[calc(100vh-2.5rem)]">
-            <section className="flex h-full min-h-[480px] flex-col rounded-3xl border border-white/10 bg-[#0b1220] p-4 shadow-2xl shadow-black/25">
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-semibold text-white">Chat ORION</h2>
-                  <p className="mt-0.5 text-xs text-slate-400">Pergunte sobre estoque, leads, margem ou campanha.</p>
-                </div>
-                <MessageSquareText className="h-4 w-4 text-cyan-300" />
-              </div>
-
-              <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-white/10 bg-[#050914]">
-                <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-                  {messages.slice(-6).map((msg, index) => {
-                    const isUser = msg.role === "user"
-                    const text = msg.source === "strategic" ? msg.content : humanizeOrionText(msg.content)
-                    return (
-                      <div key={`${msg.role}-${index}`} className={cn("flex", isUser ? "justify-end" : "justify-start")}>
-                        <div className={cn(
-                          "max-w-[88%] whitespace-pre-line rounded-2xl px-4 py-3 text-sm leading-6",
-                          isUser ? "bg-cyan-300 text-slate-950" : "border border-white/10 bg-white/[0.05] text-slate-200"
-                        )}>
-                          {text}
-                        </div>
-                      </div>
-                    )
-                  })}
-                  {chatLoading ? (
-                    <div className="flex justify-start">
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-3 text-sm text-cyan-100">
-                        <Loader2 className="mr-2 inline h-3.5 w-3.5 animate-spin" />
-                        Recalculando
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="border-t border-white/10 p-3">
-                  <div className="flex gap-2">
-                    <input
-                      value={question}
-                      onChange={(e) => setQuestion(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") sendQuestion() }}
-                      placeholder="Pergunte para a ORION..."
-                      className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-300/50"
-                    />
-                    <Button type="button" size="icon" onClick={sendQuestion} disabled={chatLoading || !question.trim()} className="h-12 w-12 bg-cyan-300 text-slate-950 hover:bg-cyan-200">
-                      {chatLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Controle técnico recolhido */}
-              <details className="mt-3 rounded-2xl border border-white/10 bg-white/[0.02]">
-                <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-xs text-slate-500 [&::-webkit-details-marker]:hidden">
-                  <ChevronDown className="h-3.5 w-3.5" />
-                  Controle técnico
-                </summary>
-                <div className="space-y-2 border-t border-white/10 p-4 text-xs text-slate-400">
-                  <p className="flex items-center gap-2"><ShieldCheck className="h-3.5 w-3.5 text-emerald-300" /> Chamadas no mês: {payload.usage.callsThisMonth}</p>
-                  <p className="flex items-center gap-2"><Database className="h-3.5 w-3.5" /> Histórico: {payload.config.logTableReady ? "ativo" : "aguardando"}</p>
-                  <p className="flex items-center gap-2"><Clock3 className="h-3.5 w-3.5" /> Cache: {payload.config.cacheMinutes} min</p>
-                  <p>Modo: {payload.config.openaiConfigured ? "Análise completa" : "Análise local"}</p>
-                  <p>Custo: {payload.usage.estimatedCostUsdThisMonth == null ? "sem chamadas externas" : formatUSD(payload.usage.estimatedCostUsdThisMonth)}</p>
-                </div>
-              </details>
-            </section>
-          </aside>
         </div>
+
+        {chatPortalReady && typeof document !== "undefined" ? createPortal(chatPortal, document.body) : null}
       </div>
     </div>
   )

@@ -2,7 +2,8 @@ import assert from "node:assert/strict"
 import { buildCurrentCashCompositionSnapshot } from "@/lib/financial/current-cash-composition-engine"
 import { buildFinancialSafetyAudit } from "@/lib/financial/financial-safety-audit"
 import { buildProfitAvailabilitySnapshot, resolveProfitAvailabilityPeriod } from "@/lib/financial/profit-availability-engine"
-import { buildFinancialDecisionResponse, buildFinancialTraceabilityResponse, buildOwnerMovementListResponse, formatFinancialDecisionResponse } from "./financial-decision-response"
+import { buildFinancialDecisionResponse, buildFinancialTraceabilityResponse, buildOwnerMovementListResponse, buildReinvestmentAuditBreakdown, formatFinancialDecisionResponse } from "./financial-decision-response"
+import { selectFinancialTraceabilityKind } from "./financial-traceability-router"
 import type { OrionFinancialOperationalContext } from "./financial-context-consumer"
 
 const period = resolveProfitAvailabilityPeriod({ preset: "current_month" }, new Date("2026-05-10T12:00:00")).period
@@ -304,6 +305,248 @@ const financialContext: OrionFinancialOperationalContext = {
   assert.ok(text)
   assert.ok(text.startsWith("Entradas no período:"))
   assert.match(text, /Caixa atual consolidado/)
+}
+
+// Reinvestment: zero safeReinvestment → not_recommended, no "controlled reinvestment"
+{
+  const zeroReinvestAudit = {
+    ...highConfidenceAudit,
+    safeReinvestmentAmount: 0,
+    exactValuesAllowed: true,
+    confidence: "high" as const,
+  }
+  const baseCashComposition = buildCurrentCashCompositionSnapshot({
+    cashByAccount: [{ accountId: "pagbank", accountName: "PagBank", reconciledBalance: 2000, availableLiquidity: 2000 }],
+    profitAvailability,
+    protectedOperationalCapital: 2000,
+    upcomingBills: 100,
+  })
+  const zeroReinvestContext: OrionFinancialOperationalContext = {
+    ...financialContext,
+    pendingBalance: 3500,
+    safeReinvestmentAmount: 0,
+    currentCashCompositionSnapshot: { ...baseCashComposition, availableForReinvestment: 0 },
+    financialSafetyAudit: zeroReinvestAudit,
+  }
+  const response = buildFinancialDecisionResponse({
+    reasoningMode: "reinvestment_decision",
+    financialContext: zeroReinvestContext,
+    financialSafetyAudit: zeroReinvestAudit,
+  })
+  assert.ok(response.executiveContext, "reinvestment branch must build executiveContext")
+  assert.equal(response.executiveContext?.baseDecision?.decision, "not_recommended")
+  const text = formatFinancialDecisionResponse(response).split(" ").join(" ")
+  assert.ok(text.indexOf("Leitura:") >= 0)
+  assert.ok(text.indexOf("não recomendo reinvestir") >= 0, "must make a clear negative decision")
+  assert.ok(text.indexOf("recebíveis pendentes") >= 0, "must explain pending receivables are not free cash")
+  assert.equal(text.indexOf("controlad"), -1, "must not suggest controlled reinvestment when not_recommended")
+  assert.equal(text.indexOf("confiança medium"), -1, "must not expose confidence label")
+  assert.equal(text.indexOf("devoluções sem lastro"), -1, "must not dump raw financial breakdown")
+  assert.equal(text.indexOf("Período analisado"), -1, "must not dump raw financial period")
+  assert.equal(text.indexOf("availableForReinvestment"), -1, "must not expose internal term")
+  assert.equal(text.indexOf("safeWithdrawalAmount"), -1, "must not expose internal term")
+  assert.equal(text.indexOf("workingCapitalSnapshot"), -1, "must not expose internal term")
+}
+
+// Reinvestment: positive safeReinvestment + exactValuesAllowed → allowed
+{
+  const response = buildFinancialDecisionResponse({
+    reasoningMode: "reinvestment_decision",
+    financialContext,
+    financialSafetyAudit: highConfidenceAudit,
+  })
+  assert.ok(response.executiveContext, "reinvestment branch must build executiveContext")
+  assert.equal(response.executiveContext?.baseDecision?.decision, "allowed")
+  const text = formatFinancialDecisionResponse(response).split(" ").join(" ")
+  assert.ok(text.indexOf("Leitura:") >= 0)
+  assert.ok(text.indexOf("reinvestimento") >= 0)
+  assert.equal(text.indexOf("controlad"), -1)
+}
+
+// Reinvestment: high cash but zero reinvestment — cash ≠ free capital
+{
+  const highCashBase = buildCurrentCashCompositionSnapshot({
+    cashByAccount: [{ accountId: "pagbank", accountName: "PagBank", reconciledBalance: 50000, availableLiquidity: 50000 }],
+    profitAvailability,
+    protectedOperationalCapital: 50000,
+    upcomingBills: 100,
+  })
+  const highCashContext: OrionFinancialOperationalContext = {
+    ...financialContext,
+    reconciledCashBalance: 50000,
+    availableLiquidity: 50000,
+    safeReinvestmentAmount: 0,
+    currentCashCompositionSnapshot: { ...highCashBase, availableForReinvestment: 0 },
+    financialSafetyAudit: { ...highConfidenceAudit, safeReinvestmentAmount: 0 },
+  }
+  const response = buildFinancialDecisionResponse({
+    reasoningMode: "reinvestment_decision",
+    financialContext: highCashContext,
+    financialSafetyAudit: highCashContext.financialSafetyAudit!,
+  })
+  assert.equal(response.executiveContext?.baseDecision?.decision, "not_recommended")
+  const text = formatFinancialDecisionResponse(response).split(" ").join(" ")
+  assert.ok(text.indexOf("não recomendo reinvestir") >= 0, "must say not recommended for reinvestment")
+}
+
+// Reinvestment intelligence decision → natural executive answer, not withdrawal fallback
+{
+  const response = buildFinancialDecisionResponse({
+    reasoningMode: "reinvestment_decision",
+    financialContext,
+    financialSafetyAudit: highConfidenceAudit,
+    reinvestmentDecision: {
+      decision: "reinvest_with_cap",
+      confidence: "medium",
+      capitalStatus: "sku_slack",
+      safeReinvestmentCap: 5200,
+      theoreticalCap: 5200,
+      capAfterPayables: 5200,
+      recommendedReinvestmentAmount: 3600,
+      preserveCashAmount: 3000,
+      currentCash: 8269.26,
+      nearTermReceivables: 3500,
+      shortTermReceivables: 3500,
+      futureReceivables: 0,
+      undatedReceivables: 0,
+      receivablesDetailAvailable: true,
+      upcomingPayables: 0,
+      operationalReserve: 3000,
+      rationale: ["Há teto de recompra seletiva.", "iPad teve venda recente com margem boa."],
+      precisionWarnings: ["Amostra histórica pequena: trate a recomendação como sinal comercial, não prova estatística."],
+      recommendedAction: "Recomprar com teto pequeno e seletivo; não ampliar estoque de forma agressiva.",
+      recommendedCategories: [{
+        category: "iPad",
+        reason: "1 venda recente; margem boa; amostra pequena",
+        suggestedBudget: 3600,
+        confidence: "low",
+      }],
+      recommendedProducts: [{
+        label: "iPad",
+        productType: "iPad",
+        model: "iPad",
+        reason: "1 venda recente; 25% de margem média; amostra pequena, tratar como sinal e não prova",
+        historicalMargin: 25,
+        averageDaysInStock: 9,
+        recentSalesCount: 1,
+        priority: "high",
+        probableUnitCost: 2600,
+        sampleSize: 1, sampleWarning: "small_sample" as const, periodLabel: "Últimos 90 dias",
+        confidence: "low",
+      }],
+      avoid: [],
+      leadContext: {
+        activeOpportunities: 0,
+        lostLeads: 9,
+        shouldFollowUpLostLeads: false,
+        note: "Leads perdidos indicam demanda ou falha de conversão, mas não são oportunidade ativa de follow-up.",
+      },
+      analysisWindow: { label: "Últimos 90 dias", startDate: null, endDate: null, salesCount: 6, source: "last_90_days" as const },
+    },
+  })
+  assert.equal(response.executiveContext?.baseDecision?.decision, "partial")
+  const text = formatFinancialDecisionResponse(response).split(" ").join(" ")
+  assert.match(text, /recompraria com teto/i)
+  assert.match(text, /iPad/i)
+  assert.doesNotMatch(text, /Leitura:|Cálculo:|Decisão:|Observação:|safeReinvestmentAmount|availableForReinvestment/)
+}
+
+// Reinvestment audit kind: "Abra o cálculo do reinvestimento" routes to reinvestment_audit
+{
+  assert.equal(selectFinancialTraceabilityKind("Abra o cálculo do reinvestimento"), "reinvestment_audit")
+  assert.equal(selectFinancialTraceabilityKind("Detalhe minha recompra"), "reinvestment_audit")
+}
+
+// buildReinvestmentAuditBreakdown: shows recompra breakdown, not profit composition
+{
+  const fakeDecision = {
+    decision: "reinvest_with_cap" as const,
+    confidence: "medium" as const,
+    capitalStatus: "sku_slack" as const,
+    safeReinvestmentCap: 8000,
+    theoreticalCap: 8000,
+    capAfterPayables: 8000,
+    recommendedReinvestmentAmount: 5600,
+    preserveCashAmount: 3500,
+    currentCash: 10000,
+    nearTermReceivables: 3000,
+    shortTermReceivables: 3000,
+    futureReceivables: 500,
+    undatedReceivables: 0,
+    receivablesDetailAvailable: true,
+    upcomingPayables: 1000,
+    operationalReserve: 2500,
+    rationale: [],
+    precisionWarnings: [],
+    recommendedAction: "Recomprar com teto.",
+    recommendedCategories: [],
+    recommendedProducts: [{ label: "iPad (11ª geração)", productType: "iPad", model: "iPad (11ª geração)", reason: "3 vendas; 25% margem", historicalMargin: 25, averageDaysInStock: 9, recentSalesCount: 3, priority: "high" as const, probableUnitCost: 2600, sampleSize: 3, sampleWarning: null, periodLabel: "Últimos 90 dias", confidence: "high" as const }],
+    avoid: [{ label: "Cabo USB", reason: "Lucro absoluto baixo." }],
+    leadContext: { activeOpportunities: 0, lostLeads: 9, shouldFollowUpLostLeads: false, note: "Leads perdidos como sinal." },
+    analysisWindow: { label: "Últimos 90 dias", startDate: null, endDate: null, salesCount: 6, source: "last_90_days" as const },
+  }
+  const breakdown = buildReinvestmentAuditBreakdown(fakeDecision)
+  assert.ok(breakdown.startsWith("Cálculo da recompra"))
+  assert.ok(breakdown.includes("Teto teórico"))
+  assert.ok(breakdown.includes("Teto após contas"))
+  assert.ok(breakdown.includes("Recompra recomendada agora"))
+  assert.ok(breakdown.includes("Recebíveis até 3 dias"))
+  assert.ok(breakdown.includes("Reserva mínima operacional"))
+  assert.ok(breakdown.includes("Contas próximas"))
+  assert.ok(breakdown.includes("iPad (11ª geração)"))
+  assert.equal(breakdown.includes("iPad iPad"), false, "label must not duplicate")
+  assert.equal(breakdown.includes("Composição do lucro realizado"), false)
+
+  // Routed via buildFinancialTraceabilityResponse
+  const routed = buildFinancialTraceabilityResponse(financialContext, "Abra o cálculo do reinvestimento", fakeDecision)
+  assert.ok(routed)
+  assert.ok(routed!.startsWith("Cálculo da recompra"))
+}
+
+// Reinvestment executive context: primary number uses recommendedReinvestmentAmount before safeReinvestmentCap
+{
+  const decisionInput = {
+    decision: "reinvest_with_cap" as const,
+    confidence: "medium" as const,
+    capitalStatus: "sku_slack" as const,
+    safeReinvestmentCap: 8000,
+    theoreticalCap: 8000,
+    capAfterPayables: 8000,
+    recommendedReinvestmentAmount: 5600,
+    preserveCashAmount: 3500,
+    currentCash: 10000,
+    nearTermReceivables: 3000,
+    shortTermReceivables: 3000,
+    futureReceivables: 0,
+    undatedReceivables: 0,
+    receivablesDetailAvailable: true,
+    upcomingPayables: 1000,
+    operationalReserve: 2500,
+    rationale: ["Caixa atual 10000."],
+    precisionWarnings: [],
+    recommendedAction: "Recomprar com teto.",
+    recommendedCategories: [],
+    recommendedProducts: [{ label: "iPad (11ª geração)", productType: "iPad", model: "iPad (11ª geração)", reason: "3 vendas; 25% margem", historicalMargin: 25, averageDaysInStock: 9, recentSalesCount: 3, priority: "high" as const, probableUnitCost: 2600, sampleSize: 3, sampleWarning: null, periodLabel: "Últimos 90 dias", confidence: "high" as const }],
+    avoid: [],
+    leadContext: { activeOpportunities: 0, lostLeads: 0, shouldFollowUpLostLeads: false, note: "Sem leads." },
+    analysisWindow: { label: "Últimos 90 dias", startDate: null, endDate: null, salesCount: 6, source: "last_90_days" as const },
+  }
+  const response = buildFinancialDecisionResponse({
+    reasoningMode: "reinvestment_decision",
+    financialContext,
+    financialSafetyAudit: highConfidenceAudit,
+    reinvestmentDecision: decisionInput,
+  })
+  assert.equal(response.executiveContext?.baseDecision?.primaryNumber?.label, "recompra recomendada agora")
+  assert.equal(response.executiveContext?.baseDecision?.primaryNumber?.value, 5600)
+  const labels = (response.executiveContext?.baseDecision?.supportingNumbers || []).map((item) => item.label)
+  assert.ok(labels.includes("recompra recomendada agora"))
+  assert.ok(labels.includes("teto teórico"))
+  assert.ok(labels.includes("teto após contas"))
+  assert.ok(labels.includes("reserva mínima operacional"))
+  const text = formatFinancialDecisionResponse(response)
+  assert.ok(text.indexOf("Para recompra agora") >= 0 || text.indexOf("recompra recomendada") >= 0)
+  assert.equal(text.indexOf("iPad iPad"), -1, "rendered text must not duplicate iPad iPad")
 }
 
 console.log("financial-decision-response tests passed")

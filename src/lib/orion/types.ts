@@ -11,6 +11,8 @@ import type { OrionFinancialOperationalContext } from "@/lib/orion/financial-con
 import type { OrionAppliedOperationalMemoryContext } from "@/lib/orion/operational-memory"
 import type { OrionOperationalMemorySummary } from "@/lib/orion/orion-operational-memory-store"
 import type { OrionProactiveAlert } from "@/lib/orion/orion-proactive-alerts"
+import type { OrionResponsePayload } from "@/lib/orion/orion-response-orchestrator"
+import type { ReinvestmentDecision } from "@/lib/orion/reinvestment-intelligence-engine"
 
 export type OrionPriority = "low" | "medium" | "high" | "critical"
 
@@ -702,6 +704,61 @@ export type OrionSnapshot = {
     topProducts: OrionChartPoint[]
     lowProducts: OrionChartPoint[]
     paymentMix: OrionChartPoint[]
+    periodPerformance: {
+      period: {
+        label: string
+        startDate: string | null
+        endDate: string | null
+        source: "selected_period" | "current_month" | "last_15_days" | "last_30_days" | "last_90_days" | "all_loaded" | "unknown"
+      }
+      salesCount: number
+      revenue: number
+      netRevenue: number
+      profit: number | null
+      marginPct: number | null
+      includedStatuses: string[]
+      excludedStatuses: string[]
+      firstSaleDate: string | null
+      lastSaleDate: string | null
+      topProducts: Array<{
+        label: string
+        salesCount: number
+        revenue: number
+        profit: number | null
+        marginPct: number | null
+      }>
+    }
+    reinvestmentAnalysisWindow: {
+      label: string
+      startDate: string | null
+      endDate: string | null
+      salesCount: number
+      source: "selected_period" | "last_30_days" | "last_90_days" | "all_loaded" | "unknown"
+    }
+    reinvestmentCandidates: Array<{
+      label: string
+      category: string
+      productType: string | null
+      model: string | null
+      recentSalesCount: number
+      sampleSize: number
+      totalRevenue: number
+      totalProfit: number
+      averageTicket: number
+      averageProfit: number
+      averageMarginPct: number
+      averageDaysInStock: number | null
+      probableUnitCost: number | null
+      minRecentCost: number | null
+      currentStockCount: number
+      currentStockValue: number
+      stuckStockCount: number
+      campaignDemandLeads: number
+      campaignLostLeads: number
+      activeLeadSignals: number
+      lostLeadSignals: number
+      confidence: "low" | "medium" | "high"
+    }>
   }
   marketing: {
     campaigns: Array<{
@@ -713,6 +770,7 @@ export type OrionSnapshot = {
       leads: number
       sales: number
       roi: number
+      lostLeads: number
     }>
     leadFunnel: OrionChartPoint[]
     leadOrigins: OrionChartPoint[]
@@ -772,6 +830,8 @@ export type OrionApiPayload = {
   analysis: OrionAnalysis
   execution: OrionExecutionPayload
   strategicCopilotAnswer?: string
+  reinvestmentDecision?: ReinvestmentDecision
+  orionResponse?: OrionResponsePayload
   operationalContext?: OrionOperationalContext
   operationalConversationState?: OrionOperationalConversationState
   activeMissionContext?: OrionMissionContext

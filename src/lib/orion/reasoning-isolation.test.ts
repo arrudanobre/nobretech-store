@@ -24,6 +24,8 @@ let buildOperationalPlan: typeof import("./operational-planning-engine").buildOp
 let buildOperationalConversationState: typeof import("./operational-conversation-state").buildOperationalConversationState
 let selectReasoningMode: typeof import("./reasoning-mode-selector").selectReasoningMode
 let classifyOrionIntent: typeof import("./intent-router").classifyOrionIntent
+let resolveOrionBusinessIntent: typeof import("./business-query-engine").resolveOrionBusinessIntent
+let buildOrionBusinessAnswer: typeof import("./business-query-engine").buildOrionBusinessAnswer
 let buildOperationalExecutionAnswer: typeof import("./strategic-copilot").buildOperationalExecutionAnswer
 let shouldUseOperationalExecutionAnswer: typeof import("./strategic-copilot").shouldUseOperationalExecutionAnswer
 
@@ -74,8 +76,26 @@ function snapshot(): OrionSnapshot {
     executive: {
       leadsWithoutFollowUp: 0,
       stuckStockCount: 0,
+      pendingReceivables: 0,
+      revenue30d: 0,
+      revenuePrevious30d: 0,
+      activeStockValue: 0,
+      marginPct30d: 0,
+      liquidityForecast: {
+        pressureWindowStartDays: null,
+        overduePayables: 0,
+        overdueReceivables: 0,
+        payables7d: 0,
+        receivables7d: 0,
+        nextReceivables: [],
+      },
     },
     finance: {
+      reconciledCashBalance: 5869,
+      pendingBalance: 1200,
+      currentCashCompositionSnapshot: {
+        consolidatedCash: 5869,
+      },
       financialOperationalContext: {
         reconciledCashBalance: 5869,
         availableLiquidity: 5869,
@@ -103,6 +123,16 @@ function snapshot(): OrionSnapshot {
     },
     stock: {
       availableItems: [],
+      stuckItems: [],
+    },
+    sales: {
+      reinvestmentCandidates: [],
+    },
+    marketing: {
+      campaigns: [],
+      leadFunnel: [],
+      leadOrigins: [],
+      forgottenLeads: [],
     },
   } as unknown as OrionSnapshot
 }
@@ -224,6 +254,7 @@ async function main() {
   ;({ buildOperationalConversationState } = await import("./operational-conversation-state"))
   ;({ selectReasoningMode } = await import("./reasoning-mode-selector"))
   ;({ classifyOrionIntent } = await import("./intent-router"))
+  ;({ resolveOrionBusinessIntent, buildOrionBusinessAnswer } = await import("./business-query-engine"))
   ;({ buildOperationalExecutionAnswer, shouldUseOperationalExecutionAnswer } = await import("./strategic-copilot"));
 
 {
@@ -298,6 +329,177 @@ async function main() {
   })
   assert.doesNotMatch(forcedAnswer, /Campanha|Headline|Copy|Tráfego|iPhone/i)
   assert.match(forcedAnswer, /limite prudente|lucro do período|retirada/i)
+}
+
+{
+  const question = "Posso reinvestir em estoque agora?"
+  const routed = classifyOrionIntent({ message: question, previousState: activeMissionState() })
+  assert.equal(routed.intent, "financial_analysis")
+  assert.equal(routed.ignoreMissionContext, true)
+  const goal = extractOperationalGoal({
+    message: question,
+    previousState: activeMissionState(),
+    intentRoute: routed,
+  })
+  const mode = selectReasoningMode({ goal, intentRoute: routed, userQuestion: question })
+  assert.equal(mode, "reinvestment_decision")
+  assert.notEqual(mode, "financial_health_analysis")
+
+  const businessIntent = resolveOrionBusinessIntent(question, routed)
+  assert.equal(businessIntent.intent, "purchase_capacity_analysis")
+
+  const guardrails = buildExecutionGuardrails({ reasoningMode: mode, goal, intentRoute: routed, previousState: activeMissionState() })
+  assert.equal(guardrails.allowCampaignGeneration, false)
+  assert.equal(guardrails.allowTrafficRecommendation, false)
+  assert.equal(guardrails.allowProductMixGeneration, false)
+  assert.equal(guardrails.allowCopyGeneration, false)
+
+  const state = buildOperationalConversationState({
+    previousState: activeMissionState(),
+    question,
+    snapshot: snapshot(),
+    execution: executionPayload(),
+    operationalContext: operationalContext({ intent: "purchase_capacity_analysis", reasoningMode: mode, executionGuardrails: guardrails }),
+    intentRoute: routed,
+    operationalGoal: goal,
+    reasoningMode: mode,
+    executionGuardrails: guardrails,
+  })
+  assert.equal(state.activeReasoningMode, "reinvestment_decision")
+  assert.equal(state.activeMissionContext, null)
+  assert.equal(shouldUseOperationalExecutionAnswer(state), false)
+
+  const financialContext = {
+    reconciledCashBalance: 8269.26,
+    availableLiquidity: 8269.26,
+    pendingBalance: 3500,
+    operationalSummary: "Caixa existe, mas não representa folga livre para estoque.",
+    profitInterpretation: "Lucro após retiradas ainda curto para ampliar estoque.",
+    cashHealth: "needs_attention",
+    liquidityPressure: "medium",
+    financialWarnings: [],
+    safeWithdrawalAmount: 0,
+    safeReinvestmentAmount: 0,
+    profitAvailabilitySnapshot: {
+      period: { label: "mês atual" },
+      realizedProfitInPeriod: 1752.09,
+      ownerProfitWithdrawalsInPeriod: 0,
+      ownerCapitalReturnsInPeriod: 0,
+      untracedOwnerCapitalReturnsInPeriod: 0,
+      profitAfterWithdrawals: 1752.09,
+      upcomingBills: 0,
+      withdrawableProfitToday: 0,
+      partiallyTracedSales: [],
+      movementBreakdown: {
+        salesProfit: 1752.09,
+        ownerContributions: 0,
+        receivables: 0,
+        inventoryPurchases: 0,
+        operatingExpenses: 0,
+        ownerProfitWithdrawals: 0,
+        ownerCapitalReturns: 0,
+        untracedOwnerCapitalReturns: 0,
+      },
+    },
+    currentCashCompositionSnapshot: {
+      consolidatedCash: 8269.26,
+      availableForWithdrawal: 1752.09,
+      availableForReinvestment: 0,
+      compositionConfidence: "high",
+    },
+    financialSafetyAudit: {
+      confidence: "high",
+      exactValuesAllowed: true,
+      safeWithdrawalAmount: 0,
+      safeReinvestmentAmount: 0,
+      warnings: [],
+      deductions: [],
+      cashAfterBills: 8269.26,
+      profitAfterBills: 1752.09,
+      withdrawalBase: 0,
+      availableLiquidity: 8269.26,
+      profitBasis: { amount: 1752.09 },
+    },
+  }
+  const answer = buildOrionBusinessAnswer(
+    businessIntent.intent,
+    {
+      finance: {
+        operationalContext: financialContext,
+        workingCapital: { financialSafetyAudit: financialContext.financialSafetyAudit },
+      },
+    },
+    {
+      ...snapshot(),
+      executive: {
+        ...snapshot().executive,
+        pendingReceivables: 3500,
+        liquidityForecast: {
+          ...snapshot().executive.liquidityForecast,
+          payables7d: 0,
+          receivables7d: 3500,
+          nextReceivables: [{ id: "receivable-1", label: "Recebível D+1", amount: 3500, dueDate: "2026-05-13", daysUntilDue: 1 }],
+        },
+      },
+      finance: {
+        ...snapshot().finance,
+        reconciledCashBalance: 8269.26,
+        pendingBalance: 3500,
+        currentCashCompositionSnapshot: {
+          ...snapshot().finance.currentCashCompositionSnapshot,
+          consolidatedCash: 8269.26,
+        },
+      },
+      sales: {
+        ...snapshot().sales,
+        reinvestmentCandidates: [{
+          label: "iPad",
+          category: "iPad",
+          productType: "iPad",
+          model: "iPad",
+          recentSalesCount: 1,
+          sampleSize: 1,
+          totalRevenue: 3500,
+          totalProfit: 900,
+          averageTicket: 3500,
+          averageProfit: 900,
+          averageMarginPct: 25,
+          averageDaysInStock: 9,
+          probableUnitCost: 2600,
+          minRecentCost: 2500,
+          currentStockCount: 0,
+          currentStockValue: 0,
+          stuckStockCount: 0,
+          campaignDemandLeads: 10,
+          campaignLostLeads: 9,
+          activeLeadSignals: 0,
+          lostLeadSignals: 9,
+          confidence: "low",
+        }],
+      },
+      marketing: {
+        campaigns: [{ id: "campaign-ipad", name: "Campanha iPad", channel: "Meta", spend: 100, leads: 10, sales: 1, revenue: 3500, roi: 1, lostLeads: 9 }],
+        leadFunnel: [],
+        leadOrigins: [],
+        forgottenLeads: [],
+      },
+    } as OrionSnapshot,
+    question
+  ).split(" ").join(" ")
+  assert.match(answer, /recompraria|teto/i)
+  assert.match(answer, /iPad/i)
+  assert.match(answer, /9 leads perdidos/i)
+  assert.doesNotMatch(answer, /Leitura:|Cálculo:|Decisão:|Observação:|reinvestimento controlado|confiança medium|devoluções sem lastro|Período analisado|availableForReinvestment|financialOperationalContext/i)
+}
+
+{
+  const question = "Abra o cálculo do reinvestimento"
+  const routed = classifyOrionIntent({ message: question, previousState: activeMissionState() })
+  assert.equal(routed.intent, "financial_traceability")
+  assert.equal(routed.ignoreMissionContext, true)
+  const goal = extractOperationalGoal({ message: question, previousState: activeMissionState(), intentRoute: routed })
+  const mode = selectReasoningMode({ goal, intentRoute: routed, userQuestion: question })
+  assert.equal(mode, "financial_traceability")
 }
 
 {

@@ -2,6 +2,7 @@ import type { FinancialSafetyAuditBreakdown } from "@/lib/financial/financial-sa
 import { renderExecutiveResponseFallback, type OrionExecutiveDecisionContext } from "./executive-response-layer"
 import { normalizeExecutiveTone } from "./executive-tone"
 import { selectFinancialTraceabilityKind } from "./financial-traceability-router"
+import type { ReinvestmentDecision } from "./reinvestment-intelligence-engine"
 import type { OrionFinancialOperationalContext } from "./financial-context-consumer"
 import type { OrionOperationalGoal, OrionReasoningMode } from "./types"
 
@@ -29,6 +30,7 @@ export type BuildFinancialDecisionResponseInput = {
   userQuestion?: string | null
   financialContext: OrionFinancialOperationalContext
   financialSafetyAudit?: FinancialSafetyAuditBreakdown | null
+  reinvestmentDecision?: ReinvestmentDecision | null
 }
 
 function brl(value: number) {
@@ -196,12 +198,93 @@ function realizedProfitBreakdown(financialContext: OrionFinancialOperationalCont
   ].join("\n")
 }
 
+function smallSampleCount(decision: ReinvestmentDecision) {
+  return decision.recommendedProducts.filter((product) => product.sampleWarning === "small_sample" || product.sampleSize <= 1).length
+}
+
+export function buildReinvestmentAuditBreakdown(decision: ReinvestmentDecision): string {
+  const receivablesBlock = decision.receivablesDetailAvailable
+    ? [
+        `- Recebíveis até 3 dias: ${brlExact(decision.nearTermReceivables)}`,
+        `- Recebíveis até 7 dias: ${brlExact(decision.shortTermReceivables)}`,
+        `- Recebíveis após 7 dias: ${brlExact(decision.futureReceivables)}`,
+      ]
+    : [`- Recebíveis agregados (sem vencimento detalhado): ${brlExact(decision.undatedReceivables)}`]
+  const products = decision.recommendedProducts.length
+    ? decision.recommendedProducts.map((product) => {
+        const sampleNote = product.sampleWarning === "small_sample" || product.sampleSize <= 1
+          ? " (amostra pequena)"
+          : ""
+        return `- ${product.label}${sampleNote}: ${product.reason}`
+      })
+    : ["- Sem produto recomendado dentro do teto seguro no snapshot atual."]
+  const avoid = decision.avoid.length
+    ? decision.avoid.map((item) => `- ${item.label}: ${item.reason}`)
+    : ["- Sem item específico a evitar no snapshot atual."]
+  const leadNote = decision.leadContext.note
+
+  const caixa = [
+    "Caixa e recebíveis:",
+    `- Caixa atual: ${brlExact(decision.currentCash)}`,
+    ...receivablesBlock,
+  ].join("\n")
+
+  const obrigacoes = [
+    "Reserva e obrigações:",
+    `- Reserva mínima operacional: ${brlExact(decision.operationalReserve)}`,
+    `- Contas próximas (7 dias): ${brlExact(decision.upcomingPayables)}`,
+  ].join("\n")
+
+  const recompra = [
+    "Recompra:",
+    `- Teto teórico (caixa após reserva): ${brlExact(decision.theoreticalCap)}`,
+    `- Teto após contas: ${brlExact(decision.capAfterPayables)}`,
+    `- Recompra recomendada agora: ${brlExact(decision.recommendedReinvestmentAmount)}`,
+  ].join("\n")
+
+  const baseWindow = decision.analysisWindow || {
+    label: "Base não informada",
+    startDate: null,
+    endDate: null,
+    salesCount: 0,
+    source: "unknown" as const,
+  }
+  const smallSamples = smallSampleCount(decision)
+  const baseLines = [
+    "Base analisada:",
+    `- Período: ${baseWindow.label}${baseWindow.startDate && baseWindow.endDate ? ` (${baseWindow.startDate} a ${baseWindow.endDate})` : ""}`,
+    `- Vendas analisadas: ${baseWindow.salesCount}`,
+    smallSamples > 0 ? `- Aviso: ${smallSamples} candidato(s) com amostra pequena` : null,
+  ].filter(Boolean) as string[]
+  const base = baseLines.join("\n")
+
+  const produtos = ["Produtos/categorias recomendados:", ...products].join("\n")
+  const evitar = ["Itens a evitar:", ...avoid].join("\n")
+  const leads = `Observação sobre leads: ${leadNote}`
+
+  return [
+    "Cálculo da recompra (Reinvestment Intelligence):",
+    base,
+    caixa,
+    obrigacoes,
+    recompra,
+    produtos,
+    evitar,
+    leads,
+  ].join("\n\n")
+}
+
 export function buildFinancialTraceabilityResponse(
   financialContext: OrionFinancialOperationalContext,
-  question: string
+  question: string,
+  reinvestmentDecision?: ReinvestmentDecision | null
 ): string | null {
   const kind = selectFinancialTraceabilityKind(question)
   if (!kind) return null
+  if (kind === "reinvestment_audit") {
+    if (reinvestmentDecision) return buildReinvestmentAuditBreakdown(reinvestmentDecision)
+    return null
+  }
   const ownerList = buildOwnerMovementListResponse(financialContext, question)
   if (ownerList) return ownerList
   if (kind === "cash_origin") return compactMovementBreakdown(financialContext)
@@ -366,9 +449,11 @@ function financialDecisionContext(input: {
   reasoning: string[]
   risks: string[]
   recommendedAction: string
+  mode?: OrionExecutiveDecisionContext["mode"]
+  reinvestmentDecision?: ReinvestmentDecision
 }): OrionExecutiveDecisionContext {
   return {
-    mode: "financial_decision",
+    mode: input.mode ?? "financial_decision",
     userQuestion: input.question,
     baseDecision: {
       decision: input.decision,
@@ -392,6 +477,7 @@ function financialDecisionContext(input: {
       confidence: input.confidence,
       warnings: input.risks,
     },
+    reinvestmentDecision: input.reinvestmentDecision,
   }
 }
 
@@ -409,6 +495,7 @@ export function buildFinancialDecisionResponse(input: BuildFinancialDecisionResp
     && cashComposition?.compositionConfidence !== "low"
   )
   const safeReinvestment = cashComposition?.availableForReinvestment ?? profitAvailability?.safeReinvestmentAmount ?? audit?.safeReinvestmentAmount ?? input.financialContext.safeReinvestmentAmount ?? 0
+  const pendingReceivables = positive(input.financialContext.pendingBalance)
   const withdrawal = withdrawalBreakdown({ financialContext: input.financialContext, audit })
   const operationalReasoning = [
     input.financialContext.operationalSummary,
@@ -512,23 +599,177 @@ export function buildFinancialDecisionResponse(input: BuildFinancialDecisionResp
   }
 
   if (answerType === "reinvestment" || answerType === "working_capital") {
+    if (input.reinvestmentDecision) {
+      const decision = input.reinvestmentDecision
+      const mappedDecision = decision.decision === "reinvest_recommended"
+        ? "allowed" as const
+        : decision.decision === "reinvest_with_cap" ? "partial" as const : "not_recommended" as const
+      const primaryValue = decision.recommendedReinvestmentAmount > 0
+        ? decision.recommendedReinvestmentAmount
+        : decision.safeReinvestmentCap > 0 ? decision.safeReinvestmentCap : decision.currentCash
+      const primaryLabel = decision.recommendedReinvestmentAmount > 0
+        ? "recompra recomendada agora"
+        : decision.safeReinvestmentCap > 0 ? "teto seguro de recompra" : "caixa atual"
+      const executiveContext = financialDecisionContext({
+        question: input.userQuestion || input.goal?.reason || "",
+        decision: mappedDecision,
+        confidence: decision.confidence,
+        primaryLabel,
+        primaryValue,
+        primaryFormatted: brlExact(primaryValue),
+        supportingNumbers: [
+          {
+            label: "caixa atual",
+            value: decision.currentCash,
+            formatted: brlExact(decision.currentCash),
+            meaning: "caixa conciliado disponível antes de reserva e contas",
+          },
+          {
+            label: "reserva mínima operacional",
+            value: decision.operationalReserve,
+            formatted: brlExact(decision.operationalReserve),
+            meaning: "percentual do caixa preservado para segurança operacional",
+          },
+          decision.upcomingPayables > 0 ? {
+            label: "contas próximas",
+            value: decision.upcomingPayables,
+            formatted: brlExact(decision.upcomingPayables),
+            meaning: "obrigações previstas em 7 dias",
+          } : null,
+          decision.nearTermReceivables > 0 ? {
+            label: "recebíveis até 3 dias",
+            value: decision.nearTermReceivables,
+            formatted: brlExact(decision.nearTermReceivables),
+            meaning: "suporte de planejamento, não caixa já conciliado",
+          } : null,
+          decision.futureReceivables > 0 ? {
+            label: "recebíveis futuros",
+            value: decision.futureReceivables,
+            formatted: brlExact(decision.futureReceivables),
+            meaning: "contexto futuro, sem liberar recompra imediata sozinho",
+          } : null,
+          decision.recommendedReinvestmentAmount > 0 ? {
+            label: "recompra recomendada agora",
+            value: decision.recommendedReinvestmentAmount,
+            formatted: brlExact(decision.recommendedReinvestmentAmount),
+            meaning: "valor sugerido para recompra imediata, abaixo do teto após contas",
+          } : null,
+          decision.capAfterPayables > 0 ? {
+            label: "teto após contas",
+            value: decision.capAfterPayables,
+            formatted: brlExact(decision.capAfterPayables),
+            meaning: "caixa após reserva mínima e contas próximas",
+          } : null,
+          decision.theoreticalCap > 0 ? {
+            label: "teto teórico",
+            value: decision.theoreticalCap,
+            formatted: brlExact(decision.theoreticalCap),
+            meaning: "caixa atual após reserva mínima, sem descontar contas próximas",
+          } : null,
+        ].filter(Boolean) as NonNullable<OrionExecutiveDecisionContext["baseDecision"]>["supportingNumbers"],
+        reasoning: decision.rationale,
+        risks: [...decision.precisionWarnings, ...decision.avoid.map((item) => item.reason)].slice(0, 4),
+        recommendedAction: decision.recommendedAction,
+        mode: "reinvestment_decision",
+        reinvestmentDecision: decision,
+      })
+      return {
+        answerType,
+        executiveSummary: decision.recommendedAction,
+        operationalReasoning: decision.rationale,
+        risks: executiveContext.baseDecision?.risks || [],
+        recommendations: [decision.recommendedAction],
+        confidence: decision.confidence,
+        safeWithdrawalAmount: undefined,
+        safeReinvestmentAmount: decision.safeReinvestmentCap,
+        executiveContext,
+      }
+    }
+
+    const reinvestDecision = safeReinvestment <= 0
+      ? "not_recommended" as const
+      : exactValuesAllowed ? "allowed" as const : "needs_review" as const
+    const reinvestRecommendedAction = reinvestDecision === "not_recommended"
+      ? "Preserve caixa e realize o lucro antes de transformar capital em recompra."
+      : safeReinvestment > 0 && exactValuesAllowed
+        ? `Reinvista até ${brlExact(safeReinvestment)} e preserve o restante para obrigações próximas.`
+        : "Aguarde a próxima conciliação para confirmar a margem antes de recompra."
+    const reinvestPrimary = safeReinvestment > 0
+      ? { label: "limite de reinvestimento", value: safeReinvestment, formatted: brlExact(safeReinvestment) }
+      : withdrawal.profitAfterWithdrawals > 0
+        ? { label: "lucro após retiradas", value: withdrawal.profitAfterWithdrawals, formatted: brlExact(withdrawal.profitAfterWithdrawals) }
+        : { label: "caixa disponível", value: withdrawal.cashComposition?.consolidatedCash ?? 0, formatted: brlExact(withdrawal.cashComposition?.consolidatedCash ?? 0) }
+    const reinvestSupportingNumbers = [
+      withdrawal.cashComposition != null ? {
+        label: "caixa disponível",
+        value: withdrawal.cashComposition.consolidatedCash,
+        formatted: brlExact(withdrawal.cashComposition.consolidatedCash),
+        meaning: "total em caixa conciliado",
+      } : null,
+      {
+        label: "lucro após retiradas",
+        value: withdrawal.profitAfterWithdrawals,
+        formatted: brlExact(withdrawal.profitAfterWithdrawals),
+        meaning: "lucro do período depois das retiradas",
+      },
+      withdrawal.upcomingBills > 0 ? {
+        label: "contas próximas",
+        value: withdrawal.upcomingBills,
+        formatted: brlExact(withdrawal.upcomingBills),
+        meaning: "obrigações previstas",
+      } : null,
+      pendingReceivables > 0 ? {
+        label: "recebíveis pendentes",
+        value: pendingReceivables,
+        formatted: brlExact(pendingReceivables),
+        meaning: "valor previsto que ainda não virou caixa conciliado",
+      } : null,
+      safeReinvestment > 0 ? {
+        label: "limite de reinvestimento",
+        value: safeReinvestment,
+        formatted: brlExact(safeReinvestment),
+        meaning: "máximo seguro para recompra de estoque",
+      } : null,
+    ].filter(Boolean) as NonNullable<OrionExecutiveDecisionContext["baseDecision"]>["supportingNumbers"]
+    const reinvestReasoning = [
+      withdrawal.cashComposition != null
+        ? `Caixa disponível: ${brlExact(withdrawal.cashComposition.consolidatedCash)}; lucro após retiradas: ${brlExact(withdrawal.profitAfterWithdrawals)}; contas próximas: ${brlExact(withdrawal.upcomingBills)}.`
+        : `Lucro após retiradas: ${brlExact(withdrawal.profitAfterWithdrawals)}; contas próximas: ${brlExact(withdrawal.upcomingBills)}.`,
+      pendingReceivables > 0
+        ? `Recebíveis pendentes: ${brlExact(pendingReceivables)}; só entram na decisão depois de conciliados.`
+        : null,
+      withdrawal.divergenceExplanation,
+    ].filter(Boolean) as string[]
+    const reinvestRisks = reinvestDecision === "not_recommended"
+      ? ["Capital disponível está comprometido com operação ou capital protegido; recompra reduziria liquidez."]
+      : withdrawal.upcomingBills > 0
+        ? ["Preserve capital para cobrir obrigações próximas antes de ampliar estoque."]
+        : []
+    const reinvestContext = financialDecisionContext({
+      question: input.userQuestion || input.goal?.reason || "",
+      decision: reinvestDecision,
+      confidence,
+      primaryLabel: reinvestPrimary.label,
+      primaryValue: reinvestPrimary.value,
+      primaryFormatted: reinvestPrimary.formatted,
+      supportingNumbers: reinvestSupportingNumbers,
+      reasoning: reinvestReasoning,
+      risks: reinvestRisks,
+      recommendedAction: reinvestRecommendedAction,
+      mode: "reinvestment_decision",
+    })
     return {
       answerType,
-      executiveSummary: exactValuesAllowed
-        ? `Reinvestimento seguro auditado: ${brl(safeReinvestment)}.`
-        : audit?.recommendedCapitalAction === "small_reinvestment"
-          ? "A margem segura para reinvestimento é pequena; trate como compra controlada, não como capital livre amplo."
-          : "A margem segura para reinvestimento ainda está baixa ou sem confiança suficiente para valor exato.",
-      operationalReasoning,
+      executiveSummary: reinvestDecision === "not_recommended"
+        ? "Margem para reinvestimento insuficiente no cenário atual."
+        : `Limite de reinvestimento auditado: ${brlExact(safeReinvestment)}.`,
+      operationalReasoning: reinvestReasoning,
       risks,
-      recommendations: [
-        safeReinvestment > 0 && exactValuesAllowed
-          ? "Reinvista apenas dentro do limite auditado e preserve caixa para obrigações próximas."
-          : "Mantenha liquidez e revise capital protegido antes de nova compra.",
-      ],
+      recommendations: [reinvestRecommendedAction],
       confidence,
       safeWithdrawalAmount: exactValuesAllowed ? withdrawal.prudentLimit : undefined,
       safeReinvestmentAmount: exactValuesAllowed ? safeReinvestment : undefined,
+      executiveContext: reinvestContext,
     }
   }
 

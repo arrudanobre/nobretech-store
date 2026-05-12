@@ -6,6 +6,7 @@ export type FinancialTraceabilityKind =
   | "owner_movements"
   | "cash_origin"
   | "realized_profit"
+  | "reinvestment_audit"
   | "generic"
   | null
 
@@ -51,6 +52,8 @@ const traceabilityActionTokens = [
   "veio",
   "numero",
   "valor",
+  "calculo",
+  "calculos",
   "movimentos",
   "lancamentos",
 ]
@@ -69,6 +72,10 @@ const financialSubjectTokens = [
   "reembolso",
   "reembolsos",
   "retorno",
+  "reinvestimento",
+  "reinvestir",
+  "recompra",
+  "estoque",
   "dono",
   "proprietario",
   "owner",
@@ -101,6 +108,7 @@ export function selectFinancialTraceabilityKind(question: string): FinancialTrac
   const tokens = tokenize(question)
   if (!isFinancialTraceabilityRequest(question)) return null
   if (hasAny(tokens, ["ambiguo", "ambiguos", "revisao"])) return "ambiguous"
+  if (hasAny(tokens, ["reinvestir", "reinvestimento", "recompra", "recomprar"])) return "reinvestment_audit"
   if (hasAny(tokens, ["caixa"]) && hasAny(tokens, ["origem", "onde", "veio", "composicao", "compoe"])) return "cash_origin"
   if (hasAny(tokens, ["devolucao", "devolucoes", "reembolso", "reembolsos", "retorno"])) return "capital_returns"
   if (hasAny(tokens, ["aporte", "aportes", "contribuicao", "contribuicoes"])) return "contributions"

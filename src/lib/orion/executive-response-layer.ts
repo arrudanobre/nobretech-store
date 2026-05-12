@@ -1,5 +1,8 @@
+import type { ReinvestmentDecision } from "./reinvestment-intelligence-engine"
+
 export type OrionExecutiveResponseMode =
   | "financial_decision"
+  | "reinvestment_decision"
   | "financial_traceability"
   | "inventory_analysis"
   | "sales_strategy"
@@ -68,6 +71,7 @@ export type OrionExecutiveDecisionContext = {
       formatted: string
     }>
   }
+  reinvestmentDecision?: ReinvestmentDecision
 }
 
 const C_LEVEL_SYSTEM_INSTRUCTIONS = [
@@ -158,6 +162,83 @@ function supportingNumber(context: OrionExecutiveDecisionContext, label: string)
   return context.baseDecision?.supportingNumbers?.find((item) => item.label === label)
 }
 
+function brl(value: number) {
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value)
+}
+
+function pluralLead(count: number) {
+  return count === 1 ? "lead" : "leads"
+}
+
+function pluralOpportunity(count: number) {
+  return count === 1 ? "oportunidade ativa" : "oportunidades ativas"
+}
+
+function renderNaturalReinvestmentDecision(decision: ReinvestmentDecision) {
+  const mainProduct = decision.recommendedProducts[0]
+  const mainCategory = decision.recommendedCategories[0]
+  const recommended = decision.recommendedReinvestmentAmount
+  const cap = decision.safeReinvestmentCap
+
+  // Paragraph 1: decisão direta
+  const decisionLine = decision.decision === "reinvest_recommended"
+    ? "Vinícius, eu recompraria, mas ainda de forma seletiva."
+    : decision.decision === "reinvest_with_cap"
+      ? "Vinícius, eu recompraria com teto, não de forma agressiva."
+      : decision.capitalStatus === "demand_without_safe_capital"
+        ? "Vinícius, existe demanda, mas eu não compraria o SKU ideal agora."
+        : "Vinícius, eu não recompraria estoque agora."
+
+  // Paragraph 2: reserva mínima + contas próximas + recompra recomendada + teto teórico
+  const reserveSentence = `Eu preservaria ${brl(decision.operationalReserve)} como reserva mínima operacional`
+  const payablesSentence = decision.upcomingPayables > 0
+    ? ` e manteria atenção às contas próximas de ${brl(decision.upcomingPayables)}.`
+    : "."
+  const reserveAndPayables = `${reserveSentence}${payablesSentence}`
+  const recompraSentence = recommended > 0
+    ? `Para recompra agora, eu trabalharia com até ${brl(recommended)}.`
+    : cap > 0
+      ? "Para recompra agora, eu não definiria valor porque ainda não há SKU recomendado dentro do teto teórico."
+      : "Para recompra agora, eu não definiria valor porque o teto teórico está zerado."
+  const tetoSentence = cap > 0
+    ? recommended > 0 && recommended < cap
+      ? ` O teto teórico é ${brl(cap)}, mas eu não usaria esse limite cheio porque ainda preciso preservar flexibilidade.`
+      : ` O teto teórico é ${brl(cap)}, vindo do caixa atual após reserva mínima.`
+    : ""
+  const capLine = `${reserveAndPayables} ${recompraSentence}${tetoSentence}`.trim()
+
+  // Paragraph 3: prioridade de recompra (com base/período explícito)
+  const baseLabel = mainProduct?.periodLabel || decision.analysisWindow?.label || null
+  const baseSuffix = baseLabel ? `Na base analisada de ${baseLabel.toLowerCase()}, ` : ""
+  const productLine = mainProduct
+    ? `A prioridade seria ${mainProduct.label}. ${baseSuffix}${mainProduct.reason}. ${mainProduct.sampleWarning === "small_sample" || mainProduct.sampleSize <= 1 ? "Como é amostra pequena, eu trataria isso como sinal comercial, não como certeza estatística." : "É onde a relação entre margem, giro e demanda parece melhor no histórico recente."}`
+    : mainCategory
+      ? `${mainCategory.reason} Eu usaria isso como diagnóstico de demanda, mas não como autorização para travar caixa no produto errado.`
+      : "Sem produto com margem, giro e capital suficiente ao mesmo tempo, a melhor decisão é segurar a recompra e melhorar a entrada de caixa."
+
+  // Paragraph 4: item/categoria a evitar
+  const avoid = decision.avoid[0]
+  const avoidLine = avoid
+    ? `Eu evitaria ${avoid.label}: ${avoid.reason}`
+    : "Eu não colocaria capital principal em item de lucro baixo; isso pode ocupar caixa sem mudar o resultado do mês."
+
+  // Paragraph 5 (optional): leads como diagnóstico
+  const lostLeads = decision.leadContext.lostLeads
+  const activeOpps = decision.leadContext.activeOpportunities
+  const leadLine = lostLeads > 0 && !decision.leadContext.shouldFollowUpLostLeads
+    ? `Os ${lostLeads} ${pluralLead(lostLeads)} perdidos servem como sinal de demanda/conversão, não como ação principal de follow-up. Use esse aprendizado para ajustar oferta e recompra, não para insistir em quem já saiu do funil.`
+    : activeOpps > 0
+      ? `Há ${activeOpps} ${pluralOpportunity(activeOpps)} no funil; follow-up vale nelas, não em lead perdido.`
+      : decision.leadContext.note
+
+  // Paragraph 6 (optional): cautela
+  const precision = decision.precisionWarnings[0]
+    ? `Ponto de cautela: ${decision.precisionWarnings[0]}`
+    : null
+
+  return [decisionLine, capLine, productLine, avoidLine, leadLine, precision].filter(Boolean).join("\n\n")
+}
+
 export function renderExecutiveResponseFallback(input: OrionExecutiveDecisionContext) {
   const context = buildExecutiveResponseContext(input)
 
@@ -170,6 +251,31 @@ export function renderExecutiveResponseFallback(input: OrionExecutiveDecisionCon
       return [table, observation].filter(Boolean).join("\n")
     }
     return context.baseDecision?.recommendedAction || "Não encontrei movimentos detalhados no período selecionado."
+  }
+
+  if (context.mode === "reinvestment_decision") {
+    if (context.reinvestmentDecision) {
+      return renderNaturalReinvestmentDecision(context.reinvestmentDecision)
+    }
+    const decision = context.baseDecision
+    if (!decision) return "Não encontrei dados suficientes para avaliar reinvestimento com segurança."
+    const numberLine = supportingNumbersLine(context)
+    const primary = decision.primaryNumber ? `${decision.primaryNumber.label}: ${decision.primaryNumber.formatted}` : ""
+    const reading = decision.decision === "not_recommended"
+      ? `Vinícius, eu não recomendo reinvestir em estoque agora. ${primary}`.trim()
+      : decision.decision === "allowed"
+        ? `Vinícius, há margem para reinvestimento. ${primary}`.trim()
+        : `Vinícius, a margem para reinvestimento ainda precisa de confirmação. ${primary}`.trim()
+    const calculation = [numberLine || decision.reasoning[0] || "Usei a decisão estruturada disponível.", decision.reasoning[1]]
+      .filter(Boolean).join(". ")
+    const action = decision.recommendedAction || decision.reasoning[1] || "Preserve liquidez antes de transformar caixa em estoque."
+    const observation = [...decision.risks, ...(context.dataQuality?.warnings || [])][0] || "Sem alerta adicional relevante."
+    return [
+      `Leitura: ${reading}`,
+      `Cálculo: ${calculation}`,
+      `Decisão: ${action}`,
+      `Observação: ${observation}`,
+    ].join("\n")
   }
 
   const decision = context.baseDecision

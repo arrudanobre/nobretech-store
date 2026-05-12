@@ -2,6 +2,7 @@ import "server-only"
 
 import type { OrionIntentRouteSummary, OrionOperationalGoal, OrionReasoningMode } from "./types"
 import { canUseCommercialExecution, isFinancialReasoningMode } from "./execution-guardrails"
+import { isFinancialReinvestmentDecisionRequest } from "./financial-traceability-router"
 
 const executionModes = new Set<OrionReasoningMode>(["campaign_generation", "marketing_execution", "content_generation"])
 
@@ -16,6 +17,7 @@ export function isBlockedFinancialReasoningMode(mode?: OrionReasoningMode | null
 export function selectReasoningMode(input: {
   goal?: OrionOperationalGoal | null
   intentRoute?: OrionIntentRouteSummary | null
+  userQuestion?: string | null
 }): OrionReasoningMode {
   const goal = input.goal
   const intent = input.intentRoute?.intent
@@ -26,6 +28,7 @@ export function selectReasoningMode(input: {
   if (intent === "financial_analysis" || intent === "global_business_question") {
     if (goal?.targetProfit) return "withdrawal_safety"
     if (goal?.optimization === "liquidity") return "working_capital_analysis"
+    if (input.userQuestion && isFinancialReinvestmentDecisionRequest(input.userQuestion)) return "reinvestment_decision"
     return "financial_health_analysis"
   }
   if (goal?.directQuestion || goal?.goalType === "pricing_validation") return "financial_decision"

@@ -28,6 +28,7 @@ import { filterOperationalStock } from "@/lib/orion/inventory-filter"
 import { classifyLead, isActionableLead } from "@/lib/orion/lead-classification"
 import { enrichAnalysisWithConfidence } from "@/lib/orion/confidence-engine"
 import { deduplicateAnalysis } from "@/lib/orion/insight-deduplication"
+import { composeProductLabel } from "@/lib/orion/product-label"
 import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
 import { calculateOperationalHealth } from "./operational-health-engine"
 import type { OperationalHealthScore } from "./operational-health-engine"
@@ -193,6 +194,20 @@ function daysBetweenDates(from: string | null | undefined, to = new Date()) {
 function safeName(parts: Array<string | null | undefined>) {
   const label = parts.map((part) => String(part || "").trim()).filter(Boolean).join(" ")
   return label || "Produto sem nome"
+}
+
+export { composeProductLabel }
+
+function normalizeBusinessKey(value: string | null | undefined) {
+  const normalized = String(value || "").toLowerCase().normalize("NFD")
+  const chars = Array.from(normalized).map((char) => {
+    const code = char.charCodeAt(0)
+    if (code >= 768 && code <= 879) return ""
+    if (char >= "a" && char <= "z") return char
+    if (char >= "0" && char <= "9") return char
+    return " "
+  })
+  return chars.join("").split(" ").filter(Boolean).join(" ")
 }
 
 function startOfWeek(date: Date) {
@@ -845,7 +860,7 @@ export async function collectOrionSnapshot(
         LEFT JOIN trade_ins ti ON ti.id = s.trade_in_id
         WHERE s.company_id = $1::uuid
           AND s.sale_date >= $2::date
-          AND COALESCE(s.sale_status, 'completed') <> 'cancelled'
+          AND LOWER(COALESCE(s.sale_status, 'completed')) NOT IN ('cancelled', 'canceled', 'refunded', 'estornado', 'void')
         ORDER BY s.sale_date ASC
       `,
       [companyId, financialFetchStart]
@@ -858,7 +873,7 @@ export async function collectOrionSnapshot(
         LEFT JOIN inventory i ON i.id = ai.product_id
         WHERE ai.company_id = $1::uuid
           AND s.sale_date >= $2::date
-          AND COALESCE(s.sale_status, 'completed') <> 'cancelled'
+          AND LOWER(COALESCE(s.sale_status, 'completed')) NOT IN ('cancelled', 'canceled', 'refunded', 'estornado', 'void')
       `,
       [companyId, financialFetchStart]
     ),
@@ -869,7 +884,7 @@ export async function collectOrionSnapshot(
         JOIN sales s ON s.id = sp.sale_id
         WHERE sp.company_id = $1::uuid
           AND s.sale_date >= $2::date
-          AND COALESCE(s.sale_status, 'completed') <> 'cancelled'
+          AND LOWER(COALESCE(s.sale_status, 'completed')) NOT IN ('cancelled', 'canceled', 'refunded', 'estornado', 'void')
       `,
       [companyId, financialFetchStart]
     ),
@@ -1009,6 +1024,74 @@ export async function collectOrionSnapshot(
     }
   })
 
+  const commercialIncludedSaleStatuses = ["completed", "sold", "paid"]
+  const commercialExcludedSaleStatuses = ["reserved", "cancelled", "canceled", "refunded", "estornado", "void"]
+  const periodSource = selectedFinancialPeriod.preset === "current_month"
+    ? "current_month" as const
+    : selectedFinancialPeriod.preset === "last_30_days"
+      ? "last_30_days" as const
+      : selectedFinancialPeriod.preset === "all_time"
+        ? "all_loaded" as const
+        : selectedFinancialPeriod.preset === "custom" || selectedFinancialPeriod.preset === "today" || selectedFinancialPeriod.preset === "last_7_days" || selectedFinancialPeriod.preset === "year_to_date"
+          ? "selected_period" as const
+          : "unknown" as const
+  const selectedPeriodCommercialSales = saleFacts.filter((sale) => {
+    const saleDate = dateKeyFromValue(sale.sale_date)
+    if (!saleDate) return false
+    const status = String(sale.sale_status || "completed").toLowerCase()
+    return saleDate >= selectedFinancialPeriod.startDate
+      && saleDate <= selectedFinancialPeriod.endDate
+      && commercialIncludedSaleStatuses.includes(status)
+  })
+  const selectedPeriodSaleDates = selectedPeriodCommercialSales
+    .map((sale) => dateKeyFromValue(sale.sale_date))
+    .filter(Boolean)
+    .sort()
+  const periodProductMap = new Map<string, {
+    salesCount: number
+    revenue: number
+    profit: number
+  }>()
+  for (const sale of selectedPeriodCommercialSales) {
+    const label = safeName([sale.product_category, sale.product_name]) || "Produto não informado"
+    const entry = periodProductMap.get(label) || { salesCount: 0, revenue: 0, profit: 0 }
+    entry.salesCount += 1
+    entry.revenue += sale.revenue
+    entry.profit += sale.profit
+    periodProductMap.set(label, entry)
+  }
+  const selectedPeriodRevenue = selectedPeriodCommercialSales.reduce((sum, sale) => sum + sale.revenue, 0)
+  const selectedPeriodNetRevenue = selectedPeriodCommercialSales.reduce((sum, sale) => sum + sale.netRevenue, 0)
+  const selectedPeriodProfit = selectedPeriodCommercialSales.reduce((sum, sale) => sum + sale.profit, 0)
+  const periodPerformance = {
+    period: {
+      label: selectedFinancialPeriod.label,
+      startDate: selectedFinancialPeriod.startDate,
+      endDate: selectedFinancialPeriod.endDate,
+      source: periodSource,
+    },
+    salesCount: selectedPeriodCommercialSales.length,
+    revenue: round(selectedPeriodRevenue),
+    netRevenue: round(selectedPeriodNetRevenue),
+    profit: selectedPeriodCommercialSales.length ? round(selectedPeriodProfit) : null,
+    marginPct: selectedPeriodRevenue > 0 && selectedPeriodCommercialSales.length
+      ? round((selectedPeriodProfit / selectedPeriodRevenue) * 100, 1)
+      : null,
+    includedStatuses: Array.from(new Set(selectedPeriodCommercialSales.map((sale) => String(sale.sale_status || "completed").toLowerCase()))).sort(),
+    excludedStatuses: commercialExcludedSaleStatuses,
+    firstSaleDate: selectedPeriodSaleDates[0] || null,
+    lastSaleDate: selectedPeriodSaleDates.at(-1) || null,
+    topProducts: Array.from(periodProductMap, ([label, value]) => ({
+      label,
+      salesCount: value.salesCount,
+      revenue: round(value.revenue),
+      profit: round(value.profit),
+      marginPct: value.revenue > 0 ? round((value.profit / value.revenue) * 100, 1) : null,
+    }))
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 6),
+  }
+
   const sales30 = saleFacts.filter((sale) => String(sale.sale_date) >= start30)
   const salesPrevious30 = saleFacts.filter((sale) => String(sale.sale_date) >= previousStart && String(sale.sale_date) <= previousEnd)
   const revenue30d = sales30.reduce((sum, sale) => sum + sale.revenue, 0)
@@ -1087,30 +1170,41 @@ export async function collectOrionSnapshot(
 
   const campaignMap = new Map(campaignsResult.rows.map((campaign) => [campaign.id, campaign]))
   const leadsByCampaign = new Map<string, number>()
+  // lead.id → campaign_id reverse map, used to attribute sales via marketing_lead_id.
+  // Mirrors the marketing ROI page which checks both sale.marketing_lead_id and lead.sale_id.
+  const leadCampaignMap = new Map<string, string>()
   for (const lead of leadsResult.rows) {
     if (!lead.campaign_id) continue
     leadsByCampaign.set(lead.campaign_id, (leadsByCampaign.get(lead.campaign_id) || 0) + 1)
+    leadCampaignMap.set(lead.id, lead.campaign_id)
   }
   const campaignSales = new Map<string, { revenue: number; sales: number }>()
+  const countedCampaignSaleIds = new Set<string>()
   for (const sale of sales30) {
-    if (!sale.marketing_campaign_id) continue
-    const entry = campaignSales.get(sale.marketing_campaign_id) || { revenue: 0, sales: 0 }
+    const campaignId = sale.marketing_campaign_id
+      || (sale.marketing_lead_id ? leadCampaignMap.get(sale.marketing_lead_id) : undefined)
+      || null
+    if (!campaignId || countedCampaignSaleIds.has(sale.id)) continue
+    countedCampaignSaleIds.add(sale.id)
+    const entry = campaignSales.get(campaignId) || { revenue: 0, sales: 0 }
     entry.revenue += sale.revenue
     entry.sales += 1
-    campaignSales.set(sale.marketing_campaign_id, entry)
+    campaignSales.set(campaignId, entry)
   }
   const campaigns = Array.from(campaignMap.values()).map((campaign) => {
-    const sales = campaignSales.get(campaign.id) || { revenue: 0, sales: 0 }
+    const salesData = campaignSales.get(campaign.id) || { revenue: 0, sales: 0 }
     const spend = number(campaign.actual_spend || campaign.budget_amount)
+    const leadsCount = leadsByCampaign.get(campaign.id) || 0
     return {
       id: campaign.id,
       name: campaign.name,
       channel: campaign.channel,
       spend,
-      revenue: round(sales.revenue),
-      leads: leadsByCampaign.get(campaign.id) || 0,
-      sales: sales.sales,
-      roi: spend > 0 ? round(sales.revenue / spend, 2) : sales.revenue > 0 ? 99 : 0,
+      revenue: round(salesData.revenue),
+      leads: leadsCount,
+      sales: salesData.sales,
+      roi: spend > 0 ? round(salesData.revenue / spend, 2) : salesData.revenue > 0 ? 99 : 0,
+      lostLeads: Math.max(0, leadsCount - salesData.sales),
     }
   })
 
@@ -1143,6 +1237,112 @@ export async function collectOrionSnapshot(
     })
     .sort((a, b) => b.daysWithoutAction - a.daysWithoutAction)
     .slice(0, 20)
+
+  const campaignLeadStatusByCampaign = new Map<string, { active: number; lost: number }>()
+  for (const lead of leadsResult.rows) {
+    if (!lead.campaign_id) continue
+    const entry = campaignLeadStatusByCampaign.get(lead.campaign_id) || { active: 0, lost: 0 }
+    const classification = classifyLead(lead.status, daysBetweenDates(lead.created_at))
+    if (classification === "lost") entry.lost += 1
+    else if (isActionableLead(lead.status)) entry.active += 1
+    campaignLeadStatusByCampaign.set(lead.campaign_id, entry)
+  }
+
+  const activeStockByKey = new Map<string, typeof activeStock>()
+  for (const item of activeStock) {
+    const key = `${normalizeBusinessKey(item.category)}|${normalizeBusinessKey(item.name)}`
+    const byCategoryKey = `${normalizeBusinessKey(item.category)}|`
+    activeStockByKey.set(key, [...(activeStockByKey.get(key) || []), item])
+    activeStockByKey.set(byCategoryKey, [...(activeStockByKey.get(byCategoryKey) || []), item])
+  }
+
+  const reinvestmentCandidateMap = new Map<string, {
+    label: string
+    category: string
+    productType: string | null
+    model: string | null
+    sales: typeof saleFacts
+    campaignDemandLeads: number
+    campaignLostLeads: number
+    activeLeadSignals: number
+    lostLeadSignals: number
+  }>()
+  const reinvestmentWindowSales = saleFacts.filter((sale) => String(sale.sale_date) >= start90)
+  const reinvestmentAnalysisWindow = {
+    label: "Últimos 90 dias",
+    startDate: start90,
+    endDate: dateKey(today),
+    salesCount: reinvestmentWindowSales.length,
+    source: "last_90_days" as const,
+  }
+  for (const sale of reinvestmentWindowSales) {
+    const category = String(sale.product_category || "Outros")
+    const model = sale.product_name ? String(sale.product_name) : null
+    const key = `${normalizeBusinessKey(category)}|${normalizeBusinessKey(model || category)}`
+    const existing = reinvestmentCandidateMap.get(key) || {
+      label: composeProductLabel(category, model),
+      category,
+      productType: category || null,
+      model,
+      sales: [],
+      campaignDemandLeads: 0,
+      campaignLostLeads: 0,
+      activeLeadSignals: 0,
+      lostLeadSignals: 0,
+    }
+    existing.sales.push(sale)
+    const campaignId = sale.marketing_campaign_id
+      || (sale.marketing_lead_id ? leadCampaignMap.get(sale.marketing_lead_id) : undefined)
+      || null
+    if (campaignId) {
+      const leadSignals = campaignLeadStatusByCampaign.get(campaignId)
+      existing.campaignDemandLeads += leadsByCampaign.get(campaignId) || 0
+      existing.campaignLostLeads += Math.max(0, (leadsByCampaign.get(campaignId) || 0) - (campaignSales.get(campaignId)?.sales || 0))
+      existing.activeLeadSignals += leadSignals?.active || 0
+      existing.lostLeadSignals += leadSignals?.lost || 0
+    }
+    reinvestmentCandidateMap.set(key, existing)
+  }
+
+  const reinvestmentCandidates = Array.from(reinvestmentCandidateMap.values()).map((candidate) => {
+    const sales = candidate.sales
+    const totalRevenue = sales.reduce((sum, sale) => sum + sale.revenue, 0)
+    const totalProfit = sales.reduce((sum, sale) => sum + sale.profit, 0)
+    const costs = sales
+      .map((sale) => number(sale.supplier_cost ?? sale.purchase_price))
+      .filter((cost) => cost > 0)
+    const daysToSale = sales
+      .map((sale) => sale.purchase_date ? daysBetweenDates(String(sale.purchase_date), new Date(String(sale.sale_date))) : null)
+      .filter((days): days is number => days !== null)
+    const stockKey = `${normalizeBusinessKey(candidate.category)}|${normalizeBusinessKey(candidate.model || candidate.category)}`
+    const categoryStockKey = `${normalizeBusinessKey(candidate.category)}|`
+    const matchingStock = activeStockByKey.get(stockKey) || activeStockByKey.get(categoryStockKey) || []
+    const sampleSize = sales.length
+    return {
+      label: candidate.label,
+      category: candidate.category,
+      productType: candidate.productType,
+      model: candidate.model,
+      recentSalesCount: sampleSize,
+      sampleSize,
+      totalRevenue: round(totalRevenue),
+      totalProfit: round(totalProfit),
+      averageTicket: round(totalRevenue / Math.max(1, sampleSize)),
+      averageProfit: round(totalProfit / Math.max(1, sampleSize)),
+      averageMarginPct: round(sales.reduce((sum, sale) => sum + sale.marginPct, 0) / Math.max(1, sampleSize), 1),
+      averageDaysInStock: daysToSale.length ? round(daysToSale.reduce((sum, days) => sum + days, 0) / daysToSale.length, 1) : null,
+      probableUnitCost: costs.length ? round(costs.reduce((sum, cost) => sum + cost, 0) / costs.length) : null,
+      minRecentCost: costs.length ? round(Math.min(...costs)) : null,
+      currentStockCount: matchingStock.reduce((sum, item) => sum + item.quantity, 0),
+      currentStockValue: round(matchingStock.reduce((sum, item) => sum + item.purchasePrice * item.quantity, 0)),
+      stuckStockCount: matchingStock.filter((item) => item.daysInStock >= 30).length,
+      campaignDemandLeads: candidate.campaignDemandLeads,
+      campaignLostLeads: candidate.campaignLostLeads,
+      activeLeadSignals: candidate.activeLeadSignals,
+      lostLeadSignals: candidate.lostLeadSignals,
+      confidence: sampleSize >= 3 ? "high" as const : sampleSize === 2 ? "medium" as const : "low" as const,
+    }
+  }).sort((a, b) => b.totalProfit - a.totalProfit).slice(0, 12)
 
   const transactionRows = transactionsResult.rows.map((row) => ({
     id: String(row.id),
@@ -1655,6 +1855,9 @@ export async function collectOrionSnapshot(
       topProducts: groupSales("product_name").slice(0, 6),
       lowProducts: groupSales("product_name").filter((item) => item.secondary && item.secondary <= 1).slice(-6).reverse(),
       paymentMix: groupSales("payment_method").slice(0, 6),
+      periodPerformance,
+      reinvestmentAnalysisWindow,
+      reinvestmentCandidates,
     },
     marketing: {
       campaigns,
