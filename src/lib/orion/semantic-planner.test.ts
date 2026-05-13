@@ -182,94 +182,73 @@ import { buildSemanticPlan, buildSemanticPlanWithAI, parseTimeframe } from "./se
 }
 
 async function runAsyncPlannerTests() {
-  const aiPlan = await buildSemanticPlanWithAI({
+  // Fast path: decision memory review — AI never called.
+  let fetcherCalls = 0
+  const failingFetcher = async () => {
+    fetcherCalls++
+    return new Response("should not be called", { status: 500 })
+  }
+
+  const memoryReviewPlan = await buildSemanticPlanWithAI({
     userQuestion: "E aquelas ações que você tinha sugerido, tem algo em aberto?",
-  }, {
-    apiKey: "test-key",
-    fetcher: async () => new Response(JSON.stringify({
-      output_text: JSON.stringify({
-        primaryGoal: "decision_memory_review",
-        secondaryGoals: ["open_recommendations", "pending_actions"],
-        toolsNeeded: [],
-        timeframe: { type: "all_available", days: null, startDate: null, endDate: null, label: "histórico disponível" },
-        budgetAmount: null,
-        budgetCurrency: null,
-        entities: [{ type: "decision", label: "ações sugeridas" }],
-        comparisonTargets: [],
-        responseMode: "memory_review",
-        confidence: "high",
-        needsClarification: false,
-        clarificationQuestion: null,
-        reasoningHints: ["Usuário pediu revisão semântica de recomendações anteriores."],
-      }),
-    }), { status: 200 }),
-  })
-  assert.equal(aiPlan.primaryGoal, "decision_memory_review")
-  assert.equal(aiPlan.responseMode, "memory_review")
-  assert.equal(aiPlan.plannerMode, "ai_semantic_plan")
-  assert.equal(aiPlan.entities[0]?.type, "decision")
+  }, { apiKey: "test-key", fetcher: failingFetcher })
+  assert.equal(memoryReviewPlan.primaryGoal, "decision_memory_review")
+  assert.equal(memoryReviewPlan.plannerMode, "deterministic_fast_path")
+  assert.equal(fetcherCalls, 0, "fast path must not call AI fetcher")
 
-  const fallbackPlan = await buildSemanticPlanWithAI({
+  // Fast path: budgeted capital allocation — AI never called.
+  const capitalAllocationPlan = await buildSemanticPlanWithAI({
     userQuestion: "Se eu tivesse uns 4 mil pra mexer em estoque, onde você colocaria?",
-  }, {
-    apiKey: "test-key",
-    fetcher: async () => new Response(JSON.stringify({ error: "boom" }), { status: 500 }),
-  })
-  assert.equal(fallbackPlan.primaryGoal, "capital_allocation")
-  assert.equal(fallbackPlan.budgetAmount, 4000)
-  assert.equal(fallbackPlan.plannerMode, "deterministic_fallback")
+  }, { apiKey: "test-key", fetcher: failingFetcher })
+  assert.equal(capitalAllocationPlan.primaryGoal, "capital_allocation")
+  assert.equal(capitalAllocationPlan.budgetAmount, 4000)
+  assert.equal(capitalAllocationPlan.budgetCurrency, "BRL")
+  assert.equal(capitalAllocationPlan.plannerMode, "deterministic_fast_path")
+  assert.equal(fetcherCalls, 0, "fast path must not call AI fetcher")
 
-  const naturalBudgetAiPlan = await buildSemanticPlanWithAI({
-    userQuestion: "Se eu tivesse uns 4 mil pra mexer em estoque, onde você colocaria?",
+  // Fast path: audit traceability — AI never called.
+  const auditPlan = await buildSemanticPlanWithAI({
+    userQuestion: "Abre pra mim o raciocínio do reinvestimento.",
+  }, { apiKey: "test-key", fetcher: failingFetcher })
+  assert.equal(auditPlan.primaryGoal, "audit_traceability")
+  assert.equal(auditPlan.responseMode, "audit_traceability")
+  assert.equal(auditPlan.plannerMode, "deterministic_fast_path")
+  assert.equal(fetcherCalls, 0, "fast path must not call AI fetcher")
+
+  // Ambiguous question — AI is called (and used when confidence is high).
+  const ambiguousPlan = await buildSemanticPlanWithAI({
+    userQuestion: "Me dá uma visão sincera do negócio",
   }, {
     apiKey: "test-key",
     fetcher: async () => new Response(JSON.stringify({
       output_text: JSON.stringify({
-        primaryGoal: "capital_allocation",
-        secondaryGoals: ["reinvestment", "inventory", "recommended_products"],
-        toolsNeeded: ["finance.cashPosition", "reinvestment.decision", "sales.marginByProduct", "inventory.availableStock"],
-        timeframe: { type: "current_period", days: null, startDate: null, endDate: null, label: "período atual" },
-        budgetAmount: 4000,
-        budgetCurrency: "BRL",
-        entities: [{ type: "inventory", label: "estoque" }],
-        comparisonTargets: [],
-        responseMode: "decision",
-        confidence: "high",
-        needsClarification: false,
-        clarificationQuestion: null,
-        reasoningHints: ["Orçamento natural para alocação em estoque."],
-      }),
-    }), { status: 200 }),
-  })
-  assert.equal(naturalBudgetAiPlan.primaryGoal, "capital_allocation")
-  assert.equal(naturalBudgetAiPlan.budgetAmount, 4000)
-  assert.equal(naturalBudgetAiPlan.plannerMode, "ai_semantic_plan")
-
-  const guardedAudit = await buildSemanticPlanWithAI({
-    userQuestion: "Abra o cálculo do reinvestimento",
-  }, {
-    apiKey: "test-key",
-    fetcher: async () => new Response(JSON.stringify({
-      output_text: JSON.stringify({
-        primaryGoal: "reinvestment_decision",
-        secondaryGoals: ["reinvestment"],
-        toolsNeeded: ["reinvestment.decision"],
+        primaryGoal: "business_review",
+        secondaryGoals: ["recommendations"],
+        toolsNeeded: ["sales.performance"],
         timeframe: { type: "current_period", days: null, startDate: null, endDate: null, label: "período atual" },
         budgetAmount: null,
         budgetCurrency: null,
-        entities: [{ type: "decision", label: "reinvestimento" }],
+        entities: [],
         comparisonTargets: [],
-        responseMode: "operational_plan",
-        confidence: "medium",
+        responseMode: "executive_summary",
+        confidence: "high",
         needsClarification: false,
         clarificationQuestion: null,
         reasoningHints: [],
       }),
     }), { status: 200 }),
   })
-  assert.equal(guardedAudit.primaryGoal, "audit_traceability")
-  assert.equal(guardedAudit.responseMode, "audit_traceability")
-  assert.equal(guardedAudit.plannerMode, "deterministic_fallback")
+  assert.equal(ambiguousPlan.plannerMode, "ai_semantic_plan")
+  assert.equal(ambiguousPlan.primaryGoal, "business_review")
+
+  // Ambiguous question with AI failure falls back deterministically (no crash).
+  const ambiguousFallback = await buildSemanticPlanWithAI({
+    userQuestion: "Me dá uma visão sincera do negócio",
+  }, {
+    apiKey: "test-key",
+    fetcher: async () => new Response(JSON.stringify({ error: "boom" }), { status: 500 }),
+  })
+  assert.equal(ambiguousFallback.plannerMode, "deterministic_fallback")
 }
 
 runAsyncPlannerTests()

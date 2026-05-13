@@ -61,7 +61,7 @@ export type OrionSemanticEntity = {
   label: string
 }
 
-export type OrionSemanticPlannerMode = "ai_semantic_plan" | "deterministic_fallback"
+export type OrionSemanticPlannerMode = "ai_semantic_plan" | "deterministic_fallback" | "deterministic_fast_path"
 
 export type OrionSemanticPlan = {
   primaryGoal: OrionSemanticPrimaryGoal
@@ -707,7 +707,8 @@ async function runAiSemanticPlanner(
   const fetcher = options?.fetcher || fetch
   const model = options?.model || process.env.ORION_SEMANTIC_PLANNER_MODEL || process.env.ORION_OPENAI_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini"
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 30000)
+  const timeoutMs = Number(process.env.ORION_SEMANTIC_PLANNER_TIMEOUT_MS) || 3000
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
   const response = await fetcher("https://api.openai.com/v1/responses", {
     method: "POST",
     signal: controller.signal,
@@ -765,10 +766,35 @@ export function buildSemanticPlan(input: OrionSemanticPlannerInput): OrionSemant
   return buildDeterministicSemanticPlan(input)
 }
 
+// Fast intent gate: resolve obvious intentions deterministically so the AI call is skipped.
+// Returns null when the question is ambiguous and the AI planner should run.
+export function buildFastSemanticPlan(input: OrionSemanticPlannerInput): OrionSemanticPlan | null {
+  const deterministic = buildDeterministicSemanticPlan(input)
+  const goal = deterministic.primaryGoal
+  const obvious =
+    goal === "decision_memory_review" ||
+    goal === "audit_traceability" ||
+    (goal === "capital_allocation" && deterministic.budgetAmount !== null) ||
+    goal === "reinvestment_decision" ||
+    goal === "withdrawal_decision" ||
+    goal === "purchase_capacity"
+  if (!obvious) return null
+  return {
+    ...deterministic,
+    confidence: "high",
+    needsClarification: false,
+    clarificationQuestion: null,
+    reasoningHints: [...deterministic.reasoningHints, "Intenção óbvia — fast path determinístico, IA não chamada."],
+    plannerMode: "deterministic_fast_path",
+  }
+}
+
 export async function buildSemanticPlanWithAI(
   input: OrionSemanticPlannerInput,
   options?: BuildSemanticPlanWithAIOptions
 ): Promise<OrionSemanticPlan> {
+  const fast = buildFastSemanticPlan(input)
+  if (fast) return fast
   const fallback = buildDeterministicSemanticPlan(input)
   try {
     const aiPlan = await runAiSemanticPlanner(input, fallback, options)
@@ -780,10 +806,17 @@ export async function buildSemanticPlanWithAI(
       reasoningHints: [...fallback.reasoningHints, "Planner IA indisponível ou confiança baixa; usando fallback determinístico."],
       plannerMode: "deterministic_fallback",
     }
-  } catch {
+  } catch (error) {
+    const aborted = error instanceof Error && (error.name === "AbortError" || /abort/i.test(error.message))
+    if (aborted) console.warn("[ORION_PERF] plannerTimeout=true")
     return {
       ...fallback,
-      reasoningHints: [...fallback.reasoningHints, "Planner IA falhou; usando fallback determinístico."],
+      reasoningHints: [
+        ...fallback.reasoningHints,
+        aborted
+          ? "Planner IA estourou timeout; usando fallback determinístico."
+          : "Planner IA falhou; usando fallback determinístico.",
+      ],
       plannerMode: "deterministic_fallback",
     }
   }
