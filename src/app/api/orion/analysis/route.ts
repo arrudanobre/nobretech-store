@@ -35,6 +35,7 @@ import { buildDecisionReflections } from "@/lib/orion/orion-reflection-loop"
 import { buildOrionProactiveAlerts, filterStaleOrionMemoryItems, type OrionProactiveAlert } from "@/lib/orion/orion-proactive-alerts"
 import { buildOrionResponse } from "@/lib/orion/orion-response-orchestrator"
 import { buildReinvestmentDecision } from "@/lib/orion/reinvestment-intelligence-engine"
+import { buildSemanticPlanWithAI, type OrionSemanticPlan } from "@/lib/orion/semantic-planner"
 import { buildOperationalPlan } from "@/lib/orion/operational-planning-engine"
 import { buildExecutionGuardrails } from "@/lib/orion/execution-guardrails"
 import { resolveProfitAvailabilityPeriod, type ResolveProfitAvailabilityPeriodInput } from "@/lib/financial/profit-availability-engine"
@@ -257,7 +258,8 @@ async function buildPayload(
   operationalContext?: OrionOperationalContext | null,
   strategicQuestion?: string | null,
   strategicAnswerOverride?: string | null,
-  previousConversationState?: OrionOperationalConversationState | null
+  previousConversationState?: OrionOperationalConversationState | null,
+  semanticPlanOverride?: OrionSemanticPlan | null
 ): Promise<OrionApiPayload> {
   const health = calculateOperationalHealth(snapshot)
   const fallback = buildLocalOrionAnalysis(snapshot, null, null, health)
@@ -281,11 +283,13 @@ async function buildPayload(
     metrics: fallback.metrics,
     charts: fallback.charts,
   }
+  const semanticPlan = semanticPlanOverride || (strategicQuestion ? await buildSemanticPlanWithAI({ userQuestion: strategicQuestion }) : null)
+  const isDecisionMemoryReview = semanticPlan?.primaryGoal === "decision_memory_review"
 
   // Apply operational memory + deduplication pipeline
-  const recentInsights = await getRecentInsights(companyId)
-  const withMemory = applyOperationalMemory(safeAnalysis, recentInsights)
-  const deduplicated = deduplicateAnalysis(withMemory, snapshot, health)
+  const recentInsights = isDecisionMemoryReview ? [] : await getRecentInsights(companyId)
+  const withMemory = isDecisionMemoryReview ? safeAnalysis : applyOperationalMemory(safeAnalysis, recentInsights)
+  const deduplicated = isDecisionMemoryReview ? withMemory : deduplicateAnalysis(withMemory, snapshot, health)
   const executiveAnalysis = translateOrionAnalysisForExecutive(deduplicated)
   const execution = buildOrionExecutionPayload(snapshot, executiveAnalysis, operationalContext)
   let operationalConversationState = buildOperationalConversationState({
@@ -301,14 +305,16 @@ async function buildPayload(
     executionGuardrails: operationalContext?.executionGuardrails,
     operationalPlan: operationalContext?.operationalPlan,
   })
-  const operationalMemoryContext = applyMemoryToOrionContext({
-    companyId,
-    snapshot,
-    operationalContext,
-    conversationState: operationalConversationState,
-    execution,
-    now: snapshot.generatedAt,
-  })
+  const operationalMemoryContext = isDecisionMemoryReview
+    ? null
+    : applyMemoryToOrionContext({
+        companyId,
+        snapshot,
+        operationalContext,
+        conversationState: operationalConversationState,
+        execution,
+        now: snapshot.generatedAt,
+      })
   if (operationalContext) {
     operationalContext.operationalMemoryContext = operationalMemoryContext
   }
@@ -361,6 +367,7 @@ async function buildPayload(
   const decisionMemoryContext = buildDecisionMemoryContext(openDecisionMemories, recentDecisionMemories)
   const orionResponse = strategicQuestion
     ? buildOrionResponse({
+        semanticPlan,
         snapshot,
         userQuestion: strategicQuestion,
         memoryContext: operationalMemoryContext,
@@ -381,12 +388,13 @@ async function buildPayload(
     ? orionResponse.text
     : null
   const planAnswer = strategicQuestion
+    && !isDecisionMemoryReview
     && operationalContext?.operationalPlan
     && operationalConversationState.activeReasoningMode
     && !isExecutionReasoningMode(operationalConversationState.activeReasoningMode)
     ? operationalContext.operationalPlan.response
     : null
-  const operationalExecutionAnswer = !planAnswer && strategicQuestion && shouldUseOperationalExecutionAnswer(operationalConversationState)
+  const operationalExecutionAnswer = !planAnswer && strategicQuestion && !isDecisionMemoryReview && shouldUseOperationalExecutionAnswer(operationalConversationState)
     ? buildOperationalExecutionAnswer({
         question: strategicQuestion,
         snapshot,
@@ -395,6 +403,7 @@ async function buildPayload(
       })
     : null
   const deterministicFinancialAnswer = strategicQuestion
+    && !isDecisionMemoryReview
     && operationalContext?.answer
     && (
       operationalContext.intentRoute?.intent === "financial_traceability"
@@ -404,7 +413,7 @@ async function buildPayload(
     ? operationalContext.answer
     : null
   let strategicCopilotAnswer = orchestratedAnswer || planAnswer || operationalExecutionAnswer || deterministicFinancialAnswer || strategicAnswerOverride || undefined
-  if (!strategicCopilotAnswer && strategicQuestion && shouldUseStrategicCopilotByRoute(operationalContext)) {
+  if (!strategicCopilotAnswer && strategicQuestion && !isDecisionMemoryReview && shouldUseStrategicCopilotByRoute(operationalContext)) {
     strategicCopilotAnswer = await buildStrategicCopilotAnswer({
       question: strategicQuestion,
       snapshot,
@@ -440,7 +449,7 @@ async function buildPayload(
     operationalContext: sanitizeOperationalContextForClient(operationalContext),
     operationalConversationState,
     activeMissionContext: operationalConversationState.activeMissionContext || undefined,
-    decisionMemory: decisionMemoryTableReady ? { open: openDecisionMemories, recent: recentDecisionMemories } : undefined,
+    decisionMemory: decisionMemoryTableReady ? { open: decisionMemoryContext.openDecisions, recent: decisionMemoryContext.recentDecisions } : undefined,
     history,
     usage,
     cached,
@@ -508,28 +517,32 @@ export async function POST(request: NextRequest) {
   const mode = body.mode === "chat" ? "chat" : "executive"
   const force = Boolean(body.force)
   const question = mode === "chat" ? sanitizeQuestion(body.message) : null
+  const semanticPlanForQuestion = question ? await buildSemanticPlanWithAI({ userQuestion: question }) : null
+  const isDecisionMemoryReviewQuestion = semanticPlanForQuestion?.primaryGoal === "decision_memory_review"
   const previousConversationState = mode === "chat"
     ? coerceOperationalConversationState(body.operationalConversationState || body.conversationState)
     : null
   const snapshot = await collectOrionSnapshot(companyId, companyName, selectedFinancialPeriod)
-  const persistentMemory = await enrichSnapshotWithPersistentOrionMemory(companyId, snapshot, false)
-  const commercialSubject = mode === "chat" && question
+  const persistentMemory = isDecisionMemoryReviewQuestion
+    ? { memoryTableReady: false, memoryItems: [], proactiveAlerts: [] as OrionProactiveAlert[] }
+    : await enrichSnapshotWithPersistentOrionMemory(companyId, snapshot, false)
+  const commercialSubject = mode === "chat" && question && !isDecisionMemoryReviewQuestion
     ? await resolveCommercialSubject(companyId, question)
     : null
-  const intentRoute = mode === "chat" && question
+  const intentRoute = mode === "chat" && question && !isDecisionMemoryReviewQuestion
     ? await routeOrionIntent({ message: question, previousState: previousConversationState, commercialSubject })
     : null
   const commercialSubjectSummary = summarizeCommercialSubjectResolution(commercialSubject)
-  const operationalContext = mode === "chat" && question
+  const operationalContext = mode === "chat" && question && !isDecisionMemoryReviewQuestion
     ? await buildOrionBusinessContext(companyId, question, snapshot, intentRoute, commercialSubject)
     : null
-  const operationalGoal = mode === "chat" && question
+  const operationalGoal = mode === "chat" && question && !isDecisionMemoryReviewQuestion
     ? extractOperationalGoal({ message: question, previousState: previousConversationState, intentRoute })
     : null
-  const reasoningMode = mode === "chat" && question && operationalGoal
+  const reasoningMode = mode === "chat" && question && !isDecisionMemoryReviewQuestion && operationalGoal
     ? selectReasoningMode({ goal: operationalGoal, intentRoute, userQuestion: question })
     : null
-  const executionGuardrails = mode === "chat" && question && reasoningMode
+  const executionGuardrails = mode === "chat" && question && !isDecisionMemoryReviewQuestion && reasoningMode
     ? buildExecutionGuardrails({ reasoningMode, goal: operationalGoal, intentRoute, previousState: previousConversationState })
     : null
   const preliminaryConversationState = buildOperationalConversationState({
@@ -543,7 +556,7 @@ export async function POST(request: NextRequest) {
     reasoningMode,
     executionGuardrails,
   })
-  const preliminaryMemoryContext = mode === "chat" && question
+  const preliminaryMemoryContext = mode === "chat" && question && !isDecisionMemoryReviewQuestion
     ? applyMemoryToOrionContext({
         companyId,
         snapshot,
@@ -556,7 +569,7 @@ export async function POST(request: NextRequest) {
   if (operationalContext) {
     operationalContext.operationalMemoryContext = preliminaryMemoryContext
   }
-  const shouldBuildPlan = mode === "chat" && question && reasoningMode && shouldBuildGoalDrivenPlan({
+  const shouldBuildPlan = mode === "chat" && question && !isDecisionMemoryReviewQuestion && reasoningMode && shouldBuildGoalDrivenPlan({
     goal: operationalGoal,
     intentRoute,
     commercialSubject: commercialSubjectSummary,
@@ -605,6 +618,12 @@ export async function POST(request: NextRequest) {
         commercial_subject: commercialSubjectSummary,
         operational_goal: operationalGoal,
         reasoning_mode: reasoningMode,
+        semantic_plan: semanticPlanForQuestion ? {
+          primaryGoal: semanticPlanForQuestion.primaryGoal,
+          responseMode: semanticPlanForQuestion.responseMode,
+          plannerMode: semanticPlanForQuestion.plannerMode,
+          confidence: semanticPlanForQuestion.confidence,
+        } : null,
         execution_guardrails: executionGuardrails,
         operational_plan: operationalPlan ? {
           directAnswer: operationalPlan.directAnswer,
@@ -612,6 +631,15 @@ export async function POST(request: NextRequest) {
           productMix: operationalPlan.productMix.slice(0, 5),
           executionAllowed: operationalPlan.executionAllowed,
         } : null,
+      }
+    : semanticPlanForQuestion ? {
+        snapshot,
+        semantic_plan: {
+          primaryGoal: semanticPlanForQuestion.primaryGoal,
+          responseMode: semanticPlanForQuestion.responseMode,
+          plannerMode: semanticPlanForQuestion.plannerMode,
+          confidence: semanticPlanForQuestion.confidence,
+        },
       }
     : snapshot
   const promptHash = hashOrionPrompt({
@@ -624,6 +652,12 @@ export async function POST(request: NextRequest) {
     commercialSubject: commercialSubjectSummary,
     operationalGoal,
     reasoningMode,
+    semanticPlan: semanticPlanForQuestion ? {
+      primaryGoal: semanticPlanForQuestion.primaryGoal,
+      responseMode: semanticPlanForQuestion.responseMode,
+      plannerMode: semanticPlanForQuestion.plannerMode,
+      confidence: semanticPlanForQuestion.confidence,
+    } : null,
     model: getOrionModel(),
   })
 
@@ -631,10 +665,27 @@ export async function POST(request: NextRequest) {
     const cached = await getCachedOrionAnalysis(companyId, mode, promptHash)
     if (cached) {
       return NextResponse.json({
-        data: await buildPayload(companyId, companyName, cached.response_json, snapshot, true, operationalContext, question, null, previousConversationState),
+        data: await buildPayload(companyId, companyName, cached.response_json, snapshot, true, operationalContext, question, null, previousConversationState, semanticPlanForQuestion),
         error: null,
       })
     }
+  }
+
+  if (mode === "chat" && question && isDecisionMemoryReviewQuestion) {
+    const localAnalysis = buildLocalOrionAnalysis(snapshot, question, null)
+    const payload = await buildPayload(companyId, companyName, localAnalysis, snapshot, false, null, question, null, previousConversationState, semanticPlanForQuestion)
+    await saveOrionAnalysisLog({
+      companyId,
+      userId: appUserId,
+      analysisType: mode,
+      question,
+      promptHash,
+      model: semanticPlanForQuestion?.plannerMode || "semantic-planner",
+      status: "local",
+      responseJson: localAnalysis,
+      snapshot: dataSnapshot,
+    })
+    return NextResponse.json({ data: payload, error: null })
   }
 
   const usage = await getOrionUsage(companyId)
@@ -646,7 +697,7 @@ export async function POST(request: NextRequest) {
       ? fallbackStrategicCopilotAnswer()
       : null
     const localAnalysis = buildLocalOrionAnalysis(snapshot, question, operationalContext)
-    const payload = await buildPayload(companyId, companyName, localAnalysis, snapshot, false, operationalContext, question, strategicAnswerOverride, previousConversationState)
+    const payload = await buildPayload(companyId, companyName, localAnalysis, snapshot, false, operationalContext, question, strategicAnswerOverride, previousConversationState, semanticPlanForQuestion)
     const usedFallback = payload.strategicCopilotAnswer === fallbackStrategicCopilotAnswer()
     await saveOrionAnalysisLog({
       companyId,
@@ -694,7 +745,7 @@ export async function POST(request: NextRequest) {
       errorMessage: "Limite mensal da ORION AI atingido; resposta gerada sem chamada externa.",
     })
     return NextResponse.json({
-      data: await buildPayload(companyId, companyName, localAnalysis, snapshot, false, operationalContext, question, null, previousConversationState),
+      data: await buildPayload(companyId, companyName, localAnalysis, snapshot, false, operationalContext, question, null, previousConversationState, semanticPlanForQuestion),
       error: null,
     })
   }
@@ -714,7 +765,7 @@ export async function POST(request: NextRequest) {
       errorMessage: "OPENAI_API_KEY não configurada no backend.",
     })
     return NextResponse.json({
-      data: await buildPayload(companyId, companyName, localAnalysis, snapshot, false, operationalContext, question, null, previousConversationState),
+      data: await buildPayload(companyId, companyName, localAnalysis, snapshot, false, operationalContext, question, null, previousConversationState, semanticPlanForQuestion),
       error: null,
     })
   }
@@ -737,7 +788,7 @@ export async function POST(request: NextRequest) {
       totalTokens: result.totalTokens,
       estimatedCostUsd,
     })
-    const payload = await buildPayload(companyId, companyName, result.analysis, snapshot, false, operationalContext, question, null, previousConversationState)
+    const payload = await buildPayload(companyId, companyName, result.analysis, snapshot, false, operationalContext, question, null, previousConversationState, semanticPlanForQuestion)
     void persistUsefulOperationalMemories({
       companyId,
       memoryTableReady: persistentMemory.memoryTableReady,
@@ -773,7 +824,7 @@ export async function POST(request: NextRequest) {
     })
 
     return NextResponse.json({
-      data: await buildPayload(companyId, companyName, localAnalysis, snapshot, false, operationalContext, question, null, previousConversationState),
+      data: await buildPayload(companyId, companyName, localAnalysis, snapshot, false, operationalContext, question, null, previousConversationState, semanticPlanForQuestion),
       error: { message: "A chamada externa falhou; a ORION retornou uma análise local baseada nos dados internos." },
     })
   }

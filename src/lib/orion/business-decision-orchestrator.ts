@@ -1020,6 +1020,7 @@ export function buildOrionBusinessDecision(input: BuildOrionBusinessDecisionInpu
   }
   if (
     input.semanticPlan.primaryGoal === "business_strategy"
+    || input.semanticPlan.primaryGoal === "operational_action"
     || input.semanticPlan.primaryGoal === "marketing_strategy"
     || input.semanticPlan.primaryGoal === "campaign_review"
     || input.semanticPlan.primaryGoal === "inventory_priority"

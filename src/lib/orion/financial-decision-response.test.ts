@@ -486,7 +486,7 @@ const financialContext: OrionFinancialOperationalContext = {
     analysisWindow: { label: "Últimos 90 dias", startDate: null, endDate: null, salesCount: 6, source: "last_90_days" as const },
   }
   const breakdown = buildReinvestmentAuditBreakdown(fakeDecision)
-  assert.ok(breakdown.startsWith("Cálculo da recompra"))
+  assert.ok(breakdown.startsWith("Rastreabilidade da recompra"))
   assert.ok(breakdown.includes("Teto teórico"))
   assert.ok(breakdown.includes("Teto após contas"))
   assert.ok(breakdown.includes("Recompra recomendada agora"))
@@ -496,11 +496,12 @@ const financialContext: OrionFinancialOperationalContext = {
   assert.ok(breakdown.includes("iPad (11ª geração)"))
   assert.equal(breakdown.includes("iPad iPad"), false, "label must not duplicate")
   assert.equal(breakdown.includes("Composição do lucro realizado"), false)
+  assert.ok(breakdown.includes("Observação sobre leads:\n"), "leads block title must be on its own line for structured render")
 
   // Routed via buildFinancialTraceabilityResponse
   const routed = buildFinancialTraceabilityResponse(financialContext, "Abra o cálculo do reinvestimento", fakeDecision)
   assert.ok(routed)
-  assert.ok(routed!.startsWith("Cálculo da recompra"))
+  assert.ok(routed!.startsWith("Rastreabilidade da recompra"))
 }
 
 // Reinvestment executive context: primary number uses recommendedReinvestmentAmount before safeReinvestmentCap
@@ -547,6 +548,82 @@ const financialContext: OrionFinancialOperationalContext = {
   const text = formatFinancialDecisionResponse(response)
   assert.ok(text.indexOf("Para recompra agora") >= 0 || text.indexOf("recompra recomendada") >= 0)
   assert.equal(text.indexOf("iPad iPad"), -1, "rendered text must not duplicate iPad iPad")
+}
+
+// buildReinvestmentAuditBreakdown: candidato plural (no "(s)") and no dot-decimal percent
+{
+  const smallSampleDecision = {
+    decision: "reinvest_with_cap" as const,
+    confidence: "low" as const,
+    capitalStatus: "sku_slack" as const,
+    safeReinvestmentCap: 5000,
+    theoreticalCap: 5000,
+    capAfterPayables: 5000,
+    recommendedReinvestmentAmount: 3000,
+    preserveCashAmount: 2000,
+    currentCash: 7000,
+    nearTermReceivables: 0,
+    shortTermReceivables: 0,
+    futureReceivables: 0,
+    undatedReceivables: 1500,
+    receivablesDetailAvailable: false,
+    upcomingPayables: 500,
+    operationalReserve: 1750,
+    rationale: [],
+    precisionWarnings: [],
+    recommendedAction: "Recomprar com cautela.",
+    recommendedCategories: [],
+    recommendedProducts: [
+      { label: "iPad (11ª geração)", productType: "iPad", model: "iPad", reason: "1 venda recente; 20,7% de margem média; amostra pequena", historicalMargin: 20.7, averageDaysInStock: 8, recentSalesCount: 1, priority: "high" as const, probableUnitCost: 2600, sampleSize: 1, sampleWarning: "small_sample" as const, periodLabel: "Últimos 90 dias", confidence: "low" as const },
+      { label: "iPhone 13", productType: "iPhone", model: "iPhone 13", reason: "1 venda recente; 37,5% de margem média; amostra pequena", historicalMargin: 37.5, averageDaysInStock: 12, recentSalesCount: 1, priority: "medium" as const, probableUnitCost: 1800, sampleSize: 1, sampleWarning: "small_sample" as const, periodLabel: "Últimos 90 dias", confidence: "low" as const },
+    ],
+    avoid: [],
+    leadContext: { activeOpportunities: 0, lostLeads: 3, shouldFollowUpLostLeads: false, note: "Leads perdidos como sinal." },
+    analysisWindow: { label: "Últimos 90 dias", startDate: "2026-02-12", endDate: "2026-05-12", salesCount: 2, source: "last_90_days" as const },
+  }
+  const breakdown = buildReinvestmentAuditBreakdown(smallSampleDecision)
+  assert.equal(breakdown.includes("candidato(s)"), false, "must not contain candidato(s)")
+  assert.ok(breakdown.includes("candidatos"), "plural: 2 candidatos")
+  assert.equal(/\d+\.\d+%/.test(breakdown), false, "must not contain dot-decimal percent")
+  assert.ok(breakdown.includes("Base analisada"), "must have Base analisada block")
+  assert.ok(breakdown.includes("Caixa e recebíveis"), "must have Caixa e recebíveis block")
+  assert.ok(breakdown.includes("Recompra"), "must have Recompra block")
+}
+
+// buildReinvestmentAuditBreakdown: singular candidato when exactly 1 small-sample product
+{
+  const singleSmallDecision = {
+    decision: "reinvest_with_cap" as const,
+    confidence: "low" as const,
+    capitalStatus: "sku_slack" as const,
+    safeReinvestmentCap: 5000,
+    theoreticalCap: 5000,
+    capAfterPayables: 5000,
+    recommendedReinvestmentAmount: 3000,
+    preserveCashAmount: 2000,
+    currentCash: 7000,
+    nearTermReceivables: 0,
+    shortTermReceivables: 0,
+    futureReceivables: 0,
+    undatedReceivables: 0,
+    receivablesDetailAvailable: false,
+    upcomingPayables: 0,
+    operationalReserve: 1750,
+    rationale: [],
+    precisionWarnings: [],
+    recommendedAction: "Recomprar com cautela.",
+    recommendedCategories: [],
+    recommendedProducts: [
+      { label: "iPad", productType: "iPad", model: "iPad", reason: "1 venda; 25% margem", historicalMargin: 25, averageDaysInStock: 10, recentSalesCount: 1, priority: "high" as const, probableUnitCost: 2600, sampleSize: 1, sampleWarning: "small_sample" as const, periodLabel: "Últimos 90 dias", confidence: "low" as const },
+    ],
+    avoid: [],
+    leadContext: { activeOpportunities: 0, lostLeads: 0, shouldFollowUpLostLeads: false, note: "Sem leads." },
+    analysisWindow: { label: "Últimos 90 dias", startDate: null, endDate: null, salesCount: 1, source: "last_90_days" as const },
+  }
+  const breakdown = buildReinvestmentAuditBreakdown(singleSmallDecision)
+  assert.ok(breakdown.includes("1 candidato com amostra pequena"), "singular: 1 candidato")
+  assert.equal(breakdown.includes("candidato(s)"), false, "must not contain candidato(s)")
+  assert.equal(breakdown.includes("candidatos com amostra"), false, "must not use plural for 1")
 }
 
 console.log("financial-decision-response tests passed")

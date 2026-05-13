@@ -180,6 +180,54 @@ export function decisionKeyFromPayload(decisionType: OrionDecisionType, payload?
   return null
 }
 
+function slug(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+}
+
+function semanticDecisionKey(item: OrionDecisionMemoryItem) {
+  const payload = item.decisionPayload || {}
+  const decisionKeySegments = typeof payload.decisionKey === "string"
+    ? payload.decisionKey.trim().toLowerCase().split(":")
+    : []
+  const subtype = typeof payload.subtype === "string"
+    ? payload.subtype.trim().toLowerCase()
+    : decisionKeySegments.length > 0
+      ? decisionKeySegments[decisionKeySegments.length - 1] || ""
+      : ""
+  const entityLabel = typeof payload.entityLabel === "string" ? payload.entityLabel.trim() : ""
+  if (item.decisionType === "business_strategy" && subtype === "anchor-product") {
+    if (entityLabel) {
+      return `${item.decisionType}:anchor-product:${slug(entityLabel)}`
+    }
+    // No entityLabel: fingerprint by recommendation to dedupe same-anchor different-timeframe plans
+    const recFingerprint = slug(item.recommendation.slice(0, 80))
+    if (recFingerprint) return `${item.decisionType}:anchor-product:rec:${recFingerprint}`
+  }
+  return decisionKeyFromPayload(item.decisionType, payload) || `${item.decisionType}:id:${item.id}`
+}
+
+function updatedTime(item: OrionDecisionMemoryItem) {
+  const parsed = new Date(item.updatedAt || item.createdAt || 0).getTime()
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+export function dedupeDecisionMemories(items: OrionDecisionMemoryItem[]): OrionDecisionMemoryItem[] {
+  const byKey = new Map<string, OrionDecisionMemoryItem>()
+  for (const item of items) {
+    const key = `${semanticDecisionKey(item)}:${item.status}`
+    const current = byKey.get(key)
+    if (!current || updatedTime(item) >= updatedTime(current)) {
+      byKey.set(key, item)
+    }
+  }
+  return Array.from(byKey.values()).sort((a, b) => updatedTime(b) - updatedTime(a))
+}
+
 export async function hasOrionDecisionMemoryTable(options?: DecisionStoreOptions): Promise<boolean> {
   try {
     const result = await adapterFromOptions(options).query<{ table_exists: string | null }>(
@@ -429,5 +477,8 @@ export function buildDecisionMemoryContext(
   openDecisions: OrionDecisionMemoryItem[],
   recentDecisions: OrionDecisionMemoryItem[]
 ): OrionDecisionMemoryContext {
-  return { openDecisions, recentDecisions }
+  return {
+    openDecisions: dedupeDecisionMemories(openDecisions),
+    recentDecisions: dedupeDecisionMemories(recentDecisions),
+  }
 }

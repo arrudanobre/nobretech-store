@@ -45,6 +45,11 @@ const traceabilityActionTokens = [
   "explicar",
   "quais",
   "qual",
+  "por",
+  "porque",
+  "raciocinio",
+  "logica",
+  "chegou",
   "composicao",
   "compoe",
   "origem",
@@ -54,6 +59,7 @@ const traceabilityActionTokens = [
   "valor",
   "calculo",
   "calculos",
+  "conta",
   "movimentos",
   "lancamentos",
 ]
@@ -81,6 +87,12 @@ const financialSubjectTokens = [
   "owner",
   "movimentos",
   "lancamentos",
+  "valor",
+  "numero",
+  "teto",
+  "recomendou",
+  "recomendado",
+  "recomendada",
 ]
 
 export function isFinancialTraceabilityRequest(question: string) {
@@ -108,6 +120,7 @@ export function selectFinancialTraceabilityKind(question: string): FinancialTrac
   const tokens = tokenize(question)
   if (!isFinancialTraceabilityRequest(question)) return null
   if (hasAny(tokens, ["ambiguo", "ambiguos", "revisao"])) return "ambiguous"
+  if (hasAny(tokens, ["recomendou", "recomendado", "recomendada", "teto"])) return "reinvestment_audit"
   if (hasAny(tokens, ["reinvestir", "reinvestimento", "recompra", "recomprar"])) return "reinvestment_audit"
   if (hasAny(tokens, ["caixa"]) && hasAny(tokens, ["origem", "onde", "veio", "composicao", "compoe"])) return "cash_origin"
   if (hasAny(tokens, ["devolucao", "devolucoes", "reembolso", "reembolsos", "retorno"])) return "capital_returns"

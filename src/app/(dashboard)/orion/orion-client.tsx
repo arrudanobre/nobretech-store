@@ -404,6 +404,136 @@ function CashHealthMessage({ summary, fallback }: {
   )
 }
 
+function decisionTypeLabel(type: string) {
+  switch (type) {
+    case "capital_allocation": return "Capital"
+    case "business_strategy": return "Estratégia"
+    case "marketing_strategy": return "Tráfego"
+    case "inventory_priority": return "Estoque"
+    case "cash_health": return "Caixa"
+    case "sales_performance": return "Vendas"
+    case "operational_action": return "Ação operacional"
+    default: return "Decisão"
+  }
+}
+
+function decisionStatusLabel(status: string) {
+  switch (status) {
+    case "open": return "Aberta"
+    case "in_progress": return "Em andamento"
+    case "done": return "Concluída"
+    case "ignored": return "Ignorada"
+    case "superseded": return "Substituída"
+    default: return status
+  }
+}
+
+function resultStatusLabel(status: string) {
+  switch (status) {
+    case "successful": return "Bem-sucedida"
+    case "failed": return "Falhou"
+    case "mixed": return "Mista"
+    case "inconclusive": return "Inconclusiva"
+    case "pending": return "Pendente"
+    default: return status
+  }
+}
+
+function priorityLabelStr(priority: string) {
+  switch (priority) {
+    case "critical": return "Crítica"
+    case "high": return "Alta"
+    case "medium": return "Média"
+    case "low": return "Baixa"
+    default: return priority
+  }
+}
+
+function confidenceLabelStr(confidence: string) {
+  switch (confidence) {
+    case "high": return "Alta"
+    case "medium": return "Média"
+    case "low": return "Baixa"
+    default: return confidence
+  }
+}
+
+function reviewDateLabel(value: string | null) {
+  if (!value) return "Sem data"
+  const parsed = new Date(value)
+  if (!Number.isFinite(parsed.getTime())) return "Sem data"
+  return parsed.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })
+}
+
+function decisionMemoryDedupeKey(decision: NonNullable<OrionApiPayload["decisionMemory"]>["open"][number]) {
+  const rawKey = typeof decision.decisionPayload?.decisionKey === "string" && decision.decisionPayload.decisionKey.trim()
+    ? decision.decisionPayload.decisionKey.trim().toLowerCase()
+    : decision.id
+  return `${decision.decisionType}:${rawKey}:${decision.status}`
+}
+
+function dedupeDecisionMemoryItems(items: NonNullable<OrionApiPayload["decisionMemory"]>["open"]) {
+  const byKey = new Map<string, NonNullable<OrionApiPayload["decisionMemory"]>["open"][number]>()
+  for (const item of items) {
+    const key = decisionMemoryDedupeKey(item)
+    const current = byKey.get(key)
+    if (!current || String(item.updatedAt || item.createdAt || "") >= String(current.updatedAt || current.createdAt || "")) {
+      byKey.set(key, item)
+    }
+  }
+  return Array.from(byKey.values())
+}
+
+function DecisionMemoryReviewMessage({ review, fallback }: {
+  review: NonNullable<NonNullable<OrionApiPayload["orionResponse"]>["structured"]>["decisionMemoryReview"]
+  fallback: string
+}) {
+  if (!review) return <MessageParagraphs content={fallback} />
+  const decisions = review.openDecisions.slice(0, 5)
+  if (!decisions.length) {
+    return (
+      <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+        <p className="text-sm leading-6 text-slate-200">Não tenho decisões abertas em acompanhamento agora.</p>
+      </div>
+    )
+  }
+  const mainDecision = decisions.find((d) => d.decisionType === "business_strategy" || d.decisionType === "capital_allocation") || decisions[0]
+  const actionDecision = decisions.find((d) => d.decisionType === "operational_action")
+  const count = decisions.length
+  const summaryParts = [
+    mainDecision !== actionDecision ? mainDecision.title : null,
+    actionDecision ? `ação: ${actionDecision.recommendation.split(".")[0].split(";")[0]}` : null,
+  ].filter(Boolean)
+  const summary = `Você tem ${count} ${count === 1 ? "decisão" : "decisões"} em acompanhamento.${summaryParts.length ? ` ${summaryParts.join(" · ")}.` : ""}`
+  return (
+    <div className="space-y-3">
+      <div className="rounded-2xl border border-cyan-300/15 bg-cyan-300/[0.06] p-4">
+        <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-cyan-200">
+          <ClipboardList className="size-4" />
+          <span>Decisões em acompanhamento</span>
+        </div>
+        <p className="text-sm leading-6 text-slate-200">{summary}</p>
+      </div>
+      {decisions.map((decision) => (
+        <div key={decision.id} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-1 text-[11px] font-semibold text-cyan-100">{decisionTypeLabel(decision.decisionType)}</span>
+            <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1 text-[11px] text-slate-300">{decisionStatusLabel(decision.status)}</span>
+            <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-1 text-[11px] text-slate-300">Prioridade: {priorityLabelStr(decision.priority)}</span>
+          </div>
+          <p className="mt-3 text-sm font-semibold leading-6 text-white">{decision.title}</p>
+          <p className="mt-1 text-sm leading-6 text-slate-200">{polishBusinessDecisionText(decision.recommendation)}</p>
+          <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-400">
+            <span className="inline-flex items-center gap-1"><Clock3 className="size-3.5" /> Revisão: {reviewDateLabel(decision.reviewAfter)}</span>
+            <span>Confiança: {confidenceLabelStr(decision.confidence)}</span>
+            <span>Resultado: {resultStatusLabel(decision.resultStatus)}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function BusinessDecisionMessage({ decision, fallback }: {
   decision: NonNullable<NonNullable<OrionApiPayload["orionResponse"]>["structured"]>["businessDecision"]
   fallback: string
@@ -482,15 +612,52 @@ function BusinessDecisionMessage({ decision, fallback }: {
   )
 }
 
+function AuditBlockItem({ item, isProduct }: { item: string; isProduct: boolean }) {
+  if (!isProduct) {
+    return <li className="text-sm leading-6 text-slate-200">{item}</li>
+  }
+  const colonIdx = item.indexOf(": ")
+  if (colonIdx === -1) return <li className="text-sm leading-6 text-slate-200">{item}</li>
+  const name = item.slice(0, colonIdx)
+  const detail = item.slice(colonIdx + 2)
+  return (
+    <li className="rounded-xl bg-white/[0.05] px-3 py-2">
+      <p className="text-sm font-semibold text-white">{name}</p>
+      <p className="mt-0.5 text-xs leading-5 text-slate-300">{detail}</p>
+    </li>
+  )
+}
+
 function AuditTraceabilityMessage({ text }: { text: string }) {
   const blocks = text.split("\n\n").map((block) => block.trim()).filter(Boolean)
   return (
     <div className="space-y-3">
-      {blocks.map((block, index) => (
-        <div key={`${index}-${block.slice(0, 16)}`} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-          <MessageParagraphs content={block} />
-        </div>
-      ))}
+      {blocks.map((block, index) => {
+        const lines = block.split("\n").map((l) => l.trim()).filter(Boolean)
+        const rawTitle = lines[0] ?? ""
+        const title = rawTitle.replace(/:$/, "")
+        const items = lines.slice(1).map((l) => l.replace(/^-\s*/, ""))
+        const isProductBlock = /produto|recomendad|evitar/i.test(title)
+        if (index === 0 && items.length === 0) {
+          return (
+            <div key="audit-header" className="rounded-2xl border border-cyan-300/20 bg-cyan-300/[0.06] p-4">
+              <p className="text-sm font-semibold text-cyan-100">{title}</p>
+            </div>
+          )
+        }
+        return (
+          <div key={`${index}-${title.slice(0, 16)}`} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">{title}</p>
+            {items.length > 0 ? (
+              <ul className={isProductBlock ? "mt-2 space-y-2" : "mt-2 space-y-1"}>
+                {items.map((item, i) => (
+                  <AuditBlockItem key={i} item={item} isProduct={isProductBlock} />
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -502,6 +669,9 @@ function OrionMessageContent({ message }: { message: ChatMessage }) {
   }
   if (response?.responseKind === "business_decision") {
     return <BusinessDecisionMessage decision={response.structured?.businessDecision} fallback={response.text || message.content} />
+  }
+  if (response?.responseKind === "decision_memory_review") {
+    return <DecisionMemoryReviewMessage review={response.structured?.decisionMemoryReview} fallback={response.text || message.content} />
   }
   if (response?.responseKind === "business_review") {
     return <BusinessReviewMessage review={response.structured?.businessReview} fallback={response.text || message.content} />
@@ -601,7 +771,7 @@ function ProactiveAlertsPanel({ payload }: { payload: OrionApiPayload }) {
 }
 
 function DecisionMemoryPanel({ payload }: { payload: OrionApiPayload }) {
-  const decisions = (payload.decisionMemory?.open || []).slice(0, 3)
+  const decisions = dedupeDecisionMemoryItems(payload.decisionMemory?.open || []).slice(0, 3)
   if (decisions.length === 0) return null
   return (
     <section className="rounded-3xl border border-emerald-300/20 bg-[#08111f] p-5 shadow-xl shadow-emerald-950/10">

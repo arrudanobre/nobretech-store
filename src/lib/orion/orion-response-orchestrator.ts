@@ -5,8 +5,9 @@ import {
   reviewHorizonDaysFor,
   type OrionBusinessDecision,
 } from "./business-decision-orchestrator"
-import { buildFinancialTraceabilityResponse } from "./financial-decision-response"
-import type { OrionDecisionMemoryContext, OrionDecisionMemoryInput } from "./orion-decision-memory-store"
+import { buildFinancialTraceabilityResponse, buildReinvestmentAuditBreakdown } from "./financial-decision-response"
+import { selectFinancialTraceabilityKind } from "./financial-traceability-router"
+import { dedupeDecisionMemories, type OrionDecisionMemoryContext, type OrionDecisionMemoryInput } from "./orion-decision-memory-store"
 import { buildReinvestmentDecision, type ReinvestmentDecision } from "./reinvestment-intelligence-engine"
 import { buildSemanticPlan, type OrionSemanticPlan } from "./semantic-planner"
 import type { OrionAppliedOperationalMemoryContext } from "./operational-memory"
@@ -15,6 +16,7 @@ import type { OrionSnapshot } from "./types"
 export type OrionResponseKind =
   | "reinvestment_decision"
   | "business_decision"
+  | "decision_memory_review"
   | "business_review"
   | "cash_health_summary"
   | "audit_traceability"
@@ -39,6 +41,25 @@ export type OrionCashHealthSummary = {
   primaryRecommendation: string
 }
 
+export type OrionDecisionMemoryReviewItem = {
+  id: string
+  decisionType: string
+  title: string
+  recommendation: string
+  status: string
+  priority: string
+  confidence: string
+  resultStatus: string
+  reviewAfter: string | null
+  decisionKey: string | null
+}
+
+export type OrionDecisionMemoryReview = {
+  openDecisions: OrionDecisionMemoryReviewItem[]
+  recentResolved?: OrionDecisionMemoryReviewItem[]
+  caveats: string[]
+}
+
 export type OrionResponsePayload = {
   responseKind: OrionResponseKind
   text: string
@@ -47,6 +68,7 @@ export type OrionResponsePayload = {
   structured?: {
     reinvestmentDecision?: ReinvestmentDecision
     businessDecision?: OrionBusinessDecision
+    decisionMemoryReview?: OrionDecisionMemoryReview
     businessReview?: OrionBusinessReview
     cashHealthSummary?: OrionCashHealthSummary
     auditBreakdown?: {
@@ -63,6 +85,57 @@ export type BuildOrionResponseInput = {
   memoryContext?: OrionAppliedOperationalMemoryContext | null
   decisionMemoryContext?: OrionDecisionMemoryContext | null
   companyId?: string | null
+}
+
+function decisionKeyFromMemoryPayload(payload: Record<string, unknown> | null | undefined) {
+  const raw = payload?.decisionKey
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null
+}
+
+function decisionMemoryReviewItem(memory: OrionDecisionMemoryContext["openDecisions"][number]): OrionDecisionMemoryReviewItem {
+  return {
+    id: memory.id,
+    decisionType: memory.decisionType,
+    title: memory.title,
+    recommendation: memory.recommendation,
+    status: memory.status,
+    priority: memory.priority,
+    confidence: memory.confidence,
+    resultStatus: memory.resultStatus,
+    reviewAfter: memory.reviewAfter,
+    decisionKey: decisionKeyFromMemoryPayload(memory.decisionPayload),
+  }
+}
+
+function buildDecisionMemoryReviewResponse(
+  plan: OrionSemanticPlan,
+  decisionMemoryContext?: OrionDecisionMemoryContext | null
+): OrionResponsePayload {
+  const openDecisions = dedupeDecisionMemories(decisionMemoryContext?.openDecisions || []).slice(0, 5).map(decisionMemoryReviewItem)
+  const recentResolved = dedupeDecisionMemories(decisionMemoryContext?.recentDecisions || [])
+    .filter((memory) => memory.status !== "open" && memory.status !== "in_progress")
+    .slice(0, 3)
+    .map(decisionMemoryReviewItem)
+  const review: OrionDecisionMemoryReview = {
+    openDecisions,
+    recentResolved,
+    caveats: openDecisions.length
+      ? ["Fonte: orion_decision_memory."]
+      : ["Sem decisões abertas na orion_decision_memory."],
+  }
+  const text = openDecisions.length
+    ? [
+        "Decisões em acompanhamento",
+        ...openDecisions.map((memory) => `${memory.title}: ${memory.recommendation}`),
+      ].join("\n")
+    : "Não tenho decisões abertas em acompanhamento agora."
+  return {
+    responseKind: "decision_memory_review",
+    renderMode: "structured_cards",
+    semanticPlan: plan,
+    structured: { decisionMemoryReview: review },
+    text,
+  }
 }
 
 function brl(value: number) {
@@ -237,8 +310,11 @@ function buildCashHealthSummary(plan: OrionSemanticPlan, snapshot: OrionSnapshot
 
 function buildAuditTraceabilityResponse(plan: OrionSemanticPlan, snapshot: OrionSnapshot, userQuestion: string): OrionResponsePayload {
   const reinvestmentDecision = buildReinvestmentDecision(snapshot)
+  const kind = selectFinancialTraceabilityKind(userQuestion)
   const auditText = snapshot.finance?.financialOperationalContext
     ? buildFinancialTraceabilityResponse(snapshot.finance.financialOperationalContext, userQuestion, reinvestmentDecision)
+    : kind === "reinvestment_audit" || plan.primaryGoal === "audit_traceability"
+      ? buildReinvestmentAuditBreakdown(reinvestmentDecision)
     : null
   const text = auditText || "Não encontrei composição financeira detalhada suficiente no snapshot atual."
   return {
@@ -254,6 +330,9 @@ export function buildOrionResponse(input: BuildOrionResponseInput): OrionRespons
   const semanticPlan = input.semanticPlan || buildSemanticPlan({ userQuestion: input.userQuestion })
 
   const companyId = input.companyId || null
+  if (semanticPlan.primaryGoal === "decision_memory_review") {
+    return buildDecisionMemoryReviewResponse(semanticPlan, input.decisionMemoryContext)
+  }
   if (semanticPlan.primaryGoal === "audit_traceability" || semanticPlan.responseMode === "audit_traceability") {
     return buildAuditTraceabilityResponse(semanticPlan, input.snapshot, input.userQuestion)
   }
@@ -263,6 +342,7 @@ export function buildOrionResponse(input: BuildOrionResponseInput): OrionRespons
   if (
     semanticPlan.primaryGoal === "capital_allocation"
     || semanticPlan.primaryGoal === "business_strategy"
+    || semanticPlan.primaryGoal === "operational_action"
     || semanticPlan.primaryGoal === "business_review"
     || semanticPlan.primaryGoal === "marketing_strategy"
     || semanticPlan.primaryGoal === "campaign_review"

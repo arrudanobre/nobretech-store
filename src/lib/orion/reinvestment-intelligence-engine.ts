@@ -145,6 +145,10 @@ function formatBrl(value: number) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 2 }).format(value)
 }
 
+function pctPt(value: number) {
+  return `${new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 }).format(value)}%`
+}
+
 function pluralPt(count: number, singular: string, plural: string) {
   return count === 1 ? singular : plural
 }
@@ -160,7 +164,7 @@ function productReason(candidate: Candidate) {
   const leads = candidate.campaignDemandLeads
   const parts = [
     `${sales} ${pluralPt(sales, "venda recente", "vendas recentes")}`,
-    `${roundCurrency(candidate.averageMarginPct)}% de margem média`,
+    `${pctPt(candidate.averageMarginPct)} de margem média`,
     candidate.averageDaysInStock !== null ? `${formatDaysPt(candidate.averageDaysInStock)} médios em estoque` : null,
     leads > 0 ? `${leads} ${pluralPt(leads, "lead", "leads")} de campanha como sinal de demanda` : null,
     candidate.sampleSize <= 1 ? "amostra pequena, tratar como sinal e não prova" : null,
@@ -222,7 +226,7 @@ export function buildReinvestmentDecision(snapshot: OrionSnapshot): Reinvestment
     ...lowProfitCandidates.slice(0, 3).map((candidate) => {
       const marginLow = candidate.averageMarginPct < 8
       const profitLow = candidate.averageProfit < 200
-      const marginText = `${roundCurrency(candidate.averageMarginPct)}% de margem percentual`
+      const marginText = `${pctPt(candidate.averageMarginPct)} de margem percentual`
       const profitText = `${formatBrl(candidate.averageProfit)} de lucro absoluto médio`
       const reason = marginLow && profitLow
         ? `Margem percentual e lucro absoluto baixos para prioridade de capital: ${marginText} e ${profitText}.`

@@ -254,16 +254,16 @@ export function buildReinvestmentAuditBreakdown(decision: ReinvestmentDecision):
     "Base analisada:",
     `- Período: ${baseWindow.label}${baseWindow.startDate && baseWindow.endDate ? ` (${baseWindow.startDate} a ${baseWindow.endDate})` : ""}`,
     `- Vendas analisadas: ${baseWindow.salesCount}`,
-    smallSamples > 0 ? `- Aviso: ${smallSamples} candidato(s) com amostra pequena` : null,
+    smallSamples > 0 ? `- Aviso: ${smallSamples} ${smallSamples === 1 ? "candidato" : "candidatos"} com amostra pequena` : null,
   ].filter(Boolean) as string[]
   const base = baseLines.join("\n")
 
   const produtos = ["Produtos/categorias recomendados:", ...products].join("\n")
   const evitar = ["Itens a evitar:", ...avoid].join("\n")
-  const leads = `Observação sobre leads: ${leadNote}`
+  const leads = `Observação sobre leads:\n${leadNote}`
 
   return [
-    "Cálculo da recompra (Reinvestment Intelligence):",
+    "Rastreabilidade da recompra:",
     base,
     caixa,
     obrigacoes,

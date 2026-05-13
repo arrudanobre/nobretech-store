@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import {
+  buildDecisionMemoryContext,
   createDecisionMemory,
+  dedupeDecisionMemories,
   hasOrionDecisionMemoryTable,
   ignoreDecisionMemory,
   loadOpenDecisionMemories,
@@ -305,6 +307,75 @@ function input(overrides: Partial<OrionDecisionMemoryInput> = {}): OrionDecision
   const reviewAt = "2026-05-19T00:00:00.000Z"
   const created = await createDecisionMemory(input({ reviewAfter: reviewAt }), { adapter })
   assert.equal(created!.reviewAfter, reviewAt)
+}
+
+// Test 10: render/context dedupe keeps latest by decisionType + decisionKey + status
+{
+  const base = {
+    id: "first-a",
+    companyId: COMPANY_A,
+    decisionType: "operational_action" as const,
+    title: "Primeiro movimento de hoje",
+    recommendation: "Cotar iPad.",
+    reason: "",
+    status: "open" as const,
+    priority: "high" as const,
+    confidence: "low" as const,
+    sourceQuestion: "",
+    decisionPayload: { decisionKey: "periodo-atual:first-move" },
+    expectedOutcome: {},
+    actualOutcome: {},
+    resultStatus: "pending" as const,
+    reflection: "",
+    createdAt: "2026-05-01T00:00:00Z",
+    updatedAt: "2026-05-01T00:00:00Z",
+    resolvedAt: null,
+    reviewAfter: null,
+  }
+  const latest = { ...base, id: "first-b", recommendation: "Validar teto seguro.", updatedAt: "2026-05-02T00:00:00Z" }
+  const deduped = dedupeDecisionMemories([base, latest])
+  assert.equal(deduped.length, 1)
+  assert.equal(deduped[0].id, "first-b")
+
+  const context = buildDecisionMemoryContext([base, latest], [base, latest])
+  assert.equal(context.openDecisions.length, 1)
+  assert.equal(context.recentDecisions.length, 1)
+}
+
+// Test 11: semantically equivalent business_strategy anchor-product dedupes by entity
+{
+  const weekly = {
+    id: "strategy-week",
+    companyId: COMPANY_A,
+    decisionType: "business_strategy" as const,
+    title: "Plano para esta semana",
+    recommendation: "Usar iPad como produto âncora.",
+    reason: "",
+    status: "open" as const,
+    priority: "high" as const,
+    confidence: "high" as const,
+    sourceQuestion: "",
+    decisionPayload: { decisionKey: "semana:anchor-product", subtype: "anchor-product", entityLabel: "iPad (11ª geração)" },
+    expectedOutcome: {},
+    actualOutcome: {},
+    resultStatus: "pending" as const,
+    reflection: "",
+    createdAt: "2026-05-01T00:00:00Z",
+    updatedAt: "2026-05-01T00:00:00Z",
+    resolvedAt: null,
+    reviewAfter: null,
+  }
+  const fortnight = {
+    ...weekly,
+    id: "strategy-15d",
+    title: "Plano para próximos 15 dias",
+    recommendation: "Manter iPad como âncora e campanha curta.",
+    decisionPayload: { decisionKey: "15-dias:anchor-product", subtype: "anchor-product", entityLabel: "iPad (11ª geração)" },
+    updatedAt: "2026-05-03T00:00:00Z",
+  }
+  const deduped = dedupeDecisionMemories([weekly, fortnight])
+  assert.equal(deduped.length, 1)
+  assert.equal(deduped[0].id, "strategy-15d")
 }
 
 console.log("orion-decision-memory-store tests passed")
