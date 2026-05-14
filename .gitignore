@@ -26,6 +26,11 @@
 # misc
 .DS_Store
 *.pem
+/db-dumps/
+/db-backups/
+*.dump
+*.sql.gz
+*.backup
 
 # debug
 npm-debug.log*

@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: nobretech-local-postgres
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: nobretech
+      POSTGRES_PASSWORD: nobretech
+      POSTGRES_DB: nobretech_local
+    volumes:
+      - nobretech_local_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nobretech -d nobretech_local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  nobretech_local_postgres_data:
