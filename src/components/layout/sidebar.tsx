@@ -107,6 +107,13 @@ function userInitials(name: string, email: string) {
   return initials?.toUpperCase() || "U"
 }
 
+function companyBrandParts(companyName: string) {
+  const normalized = companyName?.trim() || "Empresa"
+  const parts = normalized.split(/\s+/).filter(Boolean)
+  if (parts.length <= 1) return { primary: normalized, secondary: "" }
+  return { primary: parts[0], secondary: parts.slice(1).join(" ") }
+}
+
 function filterNavItems(role: UserRole): NavItem[] {
   return staticNavItems
     .filter((item) => !item.permission || canAccess(role, item.permission))
@@ -155,6 +162,7 @@ export function Sidebar({ currentUser }: { currentUser: DashboardUser }) {
     "/financeiro": pathname?.startsWith("/financeiro")
   })
   const { counts } = useBadgeCount()
+  const brand = companyBrandParts(currentUser.companyName)
 
   const toggleMenu = (href: string) => {
     setOpenMenus(prev => ({ ...prev, [href]: !prev[href] }))
@@ -185,9 +193,9 @@ export function Sidebar({ currentUser }: { currentUser: DashboardUser }) {
           {!collapsed && (
             <div className="overflow-hidden">
               <span className="font-display font-bold text-base tracking-tight block leading-tight font-syne">
-                NOBRETECH
+                {brand.primary}
               </span>
-              <span className="text-white/50 text-xs block -mt-0.5">Store</span>
+              {brand.secondary ? <span className="text-white/50 text-xs block -mt-0.5">{brand.secondary}</span> : null}
             </div>
           )}
         </Link>
@@ -314,6 +322,7 @@ export function MobileNav({ isOpen, onOpenChange, currentUser }: { isOpen: boole
   const pathname = usePathname()
   const isOrionPage = pathname?.startsWith("/orion")
   const { counts } = useBadgeCount()
+  const brand = companyBrandParts(currentUser.companyName)
 
   useEffect(() => {
     onOpenChange(false)
@@ -353,8 +362,8 @@ export function MobileNav({ isOpen, onOpenChange, currentUser }: { isOpen: boole
               <div className="flex items-center gap-3">
                 <NobretechLogoMark />
                 <div>
-                  <p className="font-display font-bold text-sm font-syne text-navy-900">NOBRETECH</p>
-                  <p className="text-xs text-gray-400">Store</p>
+                  <p className="font-display font-bold text-sm font-syne text-navy-900">{brand.primary}</p>
+                  {brand.secondary ? <p className="text-xs text-gray-400">{brand.secondary}</p> : null}
                 </div>
               </div>
               <button
@@ -594,6 +603,7 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const pathname = usePathname()
   const isOrionPage = pathname?.startsWith("/orion")
+  const brand = companyBrandParts(currentUser.companyName)
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), [])
 
@@ -654,7 +664,7 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
         <Sidebar currentUser={currentUser} />
         <MobileNav isOpen={mobileMenuOpen} onOpenChange={setMobileMenuOpen} currentUser={currentUser} />
         {/* Main content */}
-        <main className={cn("md:ml-64 pb-20 md:pb-0 min-h-screen", isOrionPage ? "bg-[#05070d]" : "")}>
+        <main className={cn("md:ml-64 pb-20 md:pb-0 min-h-screen min-w-0 overflow-x-hidden", isOrionPage ? "bg-[#05070d]" : "")}>
           {/* Top bar */}
           <header className={cn(
             "sticky top-0 z-30 backdrop-blur-xl border-b",
@@ -675,8 +685,8 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
                 </button>
                 <NobretechLogoMark />
                 <div className="leading-tight">
-                  <span className={cn("block font-display font-bold text-sm font-syne", isOrionPage ? "text-white" : "text-navy-900")}>NOBRETECH</span>
-                  <span className={cn("block text-[10px]", isOrionPage ? "text-white/40" : "text-gray-400")}>Store</span>
+                  <span className={cn("block font-display font-bold text-sm font-syne", isOrionPage ? "text-white" : "text-navy-900")}>{brand.primary}</span>
+                  {brand.secondary ? <span className={cn("block text-[10px]", isOrionPage ? "text-white/40" : "text-gray-400")}>{brand.secondary}</span> : null}
                 </div>
               </div>
               <h1 className={cn("hidden md:block font-display font-semibold font-syne", isOrionPage ? "text-white" : "text-navy-900")}>
@@ -687,7 +697,7 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
               </div>
             </div>
           </header>
-          <div className={cn(isOrionPage ? "max-w-none p-0" : "p-4 sm:p-6 max-w-7xl mx-auto")}>
+          <div className={cn(isOrionPage ? "max-w-none p-0" : "mx-auto w-full min-w-0 max-w-7xl overflow-x-hidden p-4 sm:p-6")}>
             {children}
           </div>
         </main>

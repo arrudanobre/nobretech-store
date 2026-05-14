@@ -113,7 +113,7 @@ export default function RootLayout({
         lang="pt-BR"
         className={`${inter.variable} ${syne.variable} ${dmMono.variable} antialiased`}
       >
-        <body className="min-h-screen bg-surface">
+        <body className="min-h-screen overflow-x-hidden bg-surface">
           <Providers>{children}</Providers>
         </body>
       </html>

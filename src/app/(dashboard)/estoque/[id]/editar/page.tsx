@@ -14,6 +14,7 @@ import { GRADES } from "@/lib/constants"
 import {
   buildLegacyCatalogConfig,
   createOrLinkModelColor,
+  DEFAULT_COLOR_SUGGESTIONS,
   getCatalogCategory,
   getCategoryOptions,
   isAccessoryProduct,
@@ -23,6 +24,7 @@ import {
   type CatalogConfig,
 } from "@/lib/catalog-config"
 import { fetchProductImageMap, type ProductImageRecord } from "@/lib/product-images"
+import { SupplierCombobox } from "@/components/products/supplier-combobox"
 import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 import {
   ArrowLeft,
@@ -32,18 +34,29 @@ import {
   CheckCircle2,
   FileText,
   Hash,
+  Layers,
   Loader2,
   PackageCheck,
   Percent,
+  Plus,
   Save,
   ShieldCheck,
   Smartphone,
   Store,
+  Trash2,
   TrendingUp,
   UserRound,
   WalletCards,
+  X,
 } from "lucide-react"
 import { formatBRL, getComputedInventoryStatus, getProductName, mapLifecycleToLegacyCompatibleStatus, normalizeInventoryStatus } from "@/lib/helpers"
+
+const HEX_RE = /^#[0-9a-f]{6}$/i
+
+function normalizeHexInput(value: string) {
+  const clean = value.trim().replace(/^#/, "").replace(/[^0-9a-fA-F]/g, "").slice(0, 6).toUpperCase()
+  return clean ? `#${clean}` : "#"
+}
 
 const STATUS_OPTIONS = [
   { value: "active", label: "Ativo" },
@@ -68,6 +81,7 @@ type LinkedPurchaseInfo = {
   id: string
   purchase_date: string
   transaction_id?: string | null
+  supplier_id?: string | null
   supplier_name?: string | null
 }
 
@@ -79,6 +93,16 @@ type SourceSaleInfo = {
   customer?: {
     full_name?: string | null
   } | null
+}
+
+type VariantRow = {
+  id: string
+  catalogColorId: string | null
+  colorName: string
+  colorHex: string
+  quantity: string
+  unitCost: string
+  suggestedPrice: string
 }
 
 type SectionCardProps = {
@@ -143,6 +167,14 @@ export default function EditProductPage() {
   const [saleDate, setSaleDate] = useState("")
   const [adjustFinancialDate, setAdjustFinancialDate] = useState(false)
   const [notes, setNotes] = useState("")
+  const [variants, setVariants] = useState<VariantRow[]>([])
+  const [showCatalogColorModal, setShowCatalogColorModal] = useState(false)
+  const [showFreeColorModal, setShowFreeColorModal] = useState(false)
+  const [modalColorName, setModalColorName] = useState("")
+  const [modalColorHex, setModalColorHex] = useState("#111827")
+  const [modalAddingColor, setModalAddingColor] = useState(false)
+  const [freeColorName, setFreeColorName] = useState("")
+  const [freeColorHex, setFreeColorHex] = useState("#111827")
   const [category, setCategory] = useState("iphone")
   const [modelIdx, setModelIdx] = useState(0)
   const [formData, setFormData] = useState({
@@ -162,6 +194,7 @@ export default function EditProductPage() {
     condition_notes: "",
     quantity: "1",
     type: "own",
+    supplier_id: "",
     supplier_name: "",
   })
   const models = useMemo(() => {
@@ -252,6 +285,24 @@ export default function EditProductPage() {
       setSaleDate("")
       setAdjustFinancialDate(false)
 
+      const varRes = await fetch(`/api/inventory/${productId}/variants`).catch(() => null)
+      const varPayload = varRes ? await varRes.json().catch(() => null) : null
+      if (varPayload?.data?.variants) {
+        setVariants(
+          (varPayload.data.variants as Array<any>).map((v) => ({
+            id: v.id || crypto.randomUUID(),
+            catalogColorId: v.catalog_color_id || null,
+            colorName: v.color_name,
+            colorHex: v.color_hex || "",
+            quantity: String(v.quantity),
+            unitCost: v.unit_cost != null ? String(v.unit_cost) : "",
+            suggestedPrice: v.suggested_price != null ? String(v.suggested_price) : "",
+          }))
+        )
+      } else {
+        setVariants([])
+      }
+
       setFormData({
         storage: "",
         color: "",
@@ -271,6 +322,7 @@ export default function EditProductPage() {
         condition_notes: item.condition_notes || "",
         quantity: item.quantity?.toString() || "1",
         type: item.origin === "trade_in" ? "own" : item.type || "own",
+        supplier_id: item.origin === "trade_in" ? "" : item.supplier_id || "",
         supplier_name: item.origin === "trade_in" ? "" : item.supplier_name || "",
       })
 
@@ -374,7 +426,7 @@ export default function EditProductPage() {
       const purchaseId = purchaseItems?.[0]?.purchase_id
       if (purchaseId) {
         const { data: purchases, error: purchaseError } = await (supabase.from("inventory_purchases") as any)
-          .select("id, purchase_date, transaction_id, supplier_name")
+          .select("id, purchase_date, transaction_id, supplier_id, supplier_name")
           .eq("id", purchaseId)
           .limit(1)
         if (purchaseError) throw purchaseError
@@ -383,6 +435,7 @@ export default function EditProductPage() {
           setFormData((prev) => ({
             ...prev,
             purchase_date: toDateInputValue(purchases[0].purchase_date) || prev.purchase_date,
+            supplier_id: prev.supplier_id || purchases[0].supplier_id || "",
             supplier_name: prev.supplier_name || purchases[0].supplier_name || "",
           }))
         }
@@ -470,6 +523,88 @@ export default function EditProductPage() {
     return created?.id || null
   }
 
+  const handleAddCatalogColor = async () => {
+    if (!modalColorName.trim()) return
+    const nameNorm = normalizeCatalogName(modalColorName.trim())
+    if (variants.some((v) => normalizeCatalogName(v.colorName) === nameNorm)) {
+      toast({ title: "Esta cor já foi adicionada como variação.", type: "error" })
+      return
+    }
+    const hexToUse = HEX_RE.test(modalColorHex) ? modalColorHex : "#888888"
+    setModalAddingColor(true)
+    try {
+      const current = getCatalogCategory(catalogConfig, category)
+      const existing = colorOptions.find((c) => normalizeCatalogName(c.name) === nameNorm)
+      let linkedColor: CatalogColor
+      if (existing) {
+        linkedColor = existing
+      } else {
+        linkedColor = await createOrLinkModelColor({
+          categoryId: current?.id,
+          subcategoryId: (selectedModel as any)?.subcategoryId,
+          color: { name: modalColorName.trim(), hex: hexToUse },
+          existingColors: colorOptions,
+        })
+        setCatalogConfig((config) => ({
+          categories: config.categories.map((cat) =>
+            cat.value === category
+              ? {
+                  ...cat,
+                  models: cat.models.map((model, index) =>
+                    index === modelIdx
+                      ? { ...model, colors: [...(model.colors || []), linkedColor] }
+                      : model
+                  ),
+                }
+              : cat
+          ),
+        }))
+      }
+      setVariants((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          catalogColorId: linkedColor.id || null,
+          colorName: linkedColor.name,
+          colorHex: linkedColor.hex,
+          quantity: "1",
+          unitCost: formData.purchase_price || "",
+          suggestedPrice: formData.suggested_price || "",
+        },
+      ])
+      setShowCatalogColorModal(false)
+      setModalColorName("")
+      setModalColorHex("#111827")
+    } catch (err: any) {
+      toast({ title: "Erro ao criar cor", description: err?.message, type: "error" })
+    } finally {
+      setModalAddingColor(false)
+    }
+  }
+
+  const handleAddFreeColor = () => {
+    if (!freeColorName.trim()) return
+    if (variants.some((v) => normalizeCatalogName(v.colorName) === normalizeCatalogName(freeColorName.trim()))) {
+      toast({ title: "Esta cor já foi adicionada como variação.", type: "error" })
+      return
+    }
+    setVariants((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        catalogColorId: null,
+        colorName: freeColorName.trim(),
+        colorHex: HEX_RE.test(freeColorHex) ? freeColorHex : "",
+        quantity: "1",
+        unitCost: formData.purchase_price || "",
+        suggestedPrice: formData.suggested_price || "",
+      },
+    ])
+    setShowFreeColorModal(false)
+    setFreeColorName("")
+    setFreeColorHex("#111827")
+  }
+
   const handleSave = async () => {
     setSaving(true)
     try {
@@ -495,6 +630,18 @@ export default function EditProductPage() {
         ? "trade_in_received"
         : mapLifecycleToLegacyCompatibleStatus(computedLifecycleStatus)
 
+      const allowsVariants = isAccessory && !formData.accessory_has_serial
+      const activeVariants = allowsVariants
+        ? variants.filter((v) => v.colorName.trim() && parseInt(v.quantity) > 0)
+        : []
+      const variantsTotal = activeVariants.reduce((sum, v) => sum + (parseInt(v.quantity) || 0), 0)
+      const resolvedQuantity =
+        resolvedType === "own"
+          ? activeVariants.length > 0
+            ? variantsTotal
+            : Math.max(1, parseInt(formData.quantity) || 1)
+          : 1
+
       const updateData: Record<string, any> = {
         catalog_id: nextCatalogId,
         imei: isAccessory ? null : formData.imei || null,
@@ -507,8 +654,9 @@ export default function EditProductPage() {
         battery_health: isAccessory ? null : isSealed ? 100 : formData.battery_health ? parseInt(formData.battery_health) : null,
         ios_version: isAccessory ? null : formData.ios_version || null,
         condition_notes: formData.condition_notes || null,
-        quantity: resolvedType === "own" ? Math.max(1, parseInt(formData.quantity) || 1) : 1,
+        quantity: resolvedQuantity,
         type: resolvedType,
+        supplier_id: isTradeInItem ? null : (formData.supplier_id || null),
         supplier_name: isTradeInItem ? null : (formData.supplier_name || null),
         notes: mode === "manual" ? (trimmedProductName || null) : (customCatalogName ? `Nome: ${customCatalogName}` : null),
         product_type: resolvedProductType,
@@ -523,6 +671,26 @@ export default function EditProductPage() {
         .eq("id", productId)
 
       if (error) throw error
+
+      if (allowsVariants) {
+        const variantPayload = activeVariants.map((v) => ({
+          catalog_color_id: v.catalogColorId || null,
+          color_name: v.colorName.trim(),
+          color_hex: v.colorHex || null,
+          quantity: parseInt(v.quantity) || 0,
+          unit_cost: v.unitCost ? parseFloat(v.unitCost) : null,
+          suggested_price: v.suggestedPrice ? parseFloat(v.suggestedPrice) : null,
+        }))
+        const vRes = await fetch(`/api/inventory/${productId}/variants`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ variants: variantPayload }),
+        })
+        if (!vRes.ok) {
+          const vPayload = await vRes.json().catch(() => null)
+          throw new Error(vPayload?.error?.message || "Erro ao salvar variações")
+        }
+      }
 
       if (linkedPurchase?.id && formData.purchase_date && formData.purchase_date !== toDateInputValue(linkedPurchase.purchase_date)) {
         const { error: purchaseError } = await (supabase.from("inventory_purchases") as any)
@@ -852,12 +1020,29 @@ export default function EditProductPage() {
                       { label: "Fornecedor", value: "supplier" },
                     ]}
                   />
-                  <Input
-                    label="Fornecedor da compra"
-                    placeholder="Opcional"
-                    value={formData.supplier_name}
-                    onChange={(e) => updateField("supplier_name", e.target.value)}
-                  />
+                  {linkedPurchase ? (
+                    <div className="w-full">
+                      <label className="block text-sm font-medium mb-1.5 text-navy-900">Fornecedor da compra</label>
+                      <div className="h-11 rounded-xl border border-gray-200 bg-gray-50 px-3 flex items-center text-sm text-gray-500">
+                        {formData.supplier_name || "—"}
+                      </div>
+                      <div className="mt-1 flex items-center gap-2">
+                        <p className="text-xs text-gray-400">Vinculado ao Pedido #{linkedPurchase.id.slice(0, 4).toUpperCase()}</p>
+                        <a
+                          href={`/estoque/compras/${linkedPurchase.id}`}
+                          className="text-xs font-semibold text-royal-600 hover:underline"
+                        >
+                          Abrir compra →
+                        </a>
+                      </div>
+                    </div>
+                  ) : (
+                    <SupplierCombobox
+                      supplierId={formData.supplier_id || null}
+                      supplierName={formData.supplier_name}
+                      onChange={(id, name) => setFormData((prev) => ({ ...prev, supplier_id: id || "", supplier_name: name }))}
+                    />
+                  )}
                   <Input
                     label="Quantidade em estoque"
                     type="number"
@@ -1005,6 +1190,339 @@ export default function EditProductPage() {
               onChange={(e) => updateField("condition_notes", e.target.value)}
             />
           </SectionCard>
+
+          {isAccessory && !formData.accessory_has_serial ? (
+            <SectionCard
+              title="Variações e quantidade"
+              description="Controle cores/modelos deste acessório. A quantidade total será a soma das variações."
+              icon={Layers}
+            >
+              {/* Existing variants table */}
+              {variants.length > 0 ? (
+                <div className="mb-5 space-y-2">
+                  <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Variações cadastradas</p>
+                  <div className="hidden grid-cols-[1.4fr_90px_140px_140px_44px] gap-3 px-3 sm:grid">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Cor / Variação</span>
+                    <span className="text-center text-[10px] font-bold uppercase tracking-wider text-gray-400">Qtd</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Custo (R$)</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Sugerido (R$)</span>
+                    <span />
+                  </div>
+                  {variants.map((v) => (
+                    <div
+                      key={v.id}
+                      className="grid grid-cols-[1.4fr_90px_140px_140px_44px] items-center gap-3 rounded-xl border border-gray-100 bg-white px-3 py-2.5 shadow-sm"
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        {v.colorHex ? (
+                          <span
+                            className="h-4 w-4 shrink-0 rounded-full border border-gray-200 shadow-sm"
+                            style={{ background: v.colorHex }}
+                          />
+                        ) : (
+                          <span className="h-4 w-4 shrink-0 rounded-full border border-dashed border-gray-300" />
+                        )}
+                        <span className="min-w-0 truncate text-sm font-medium text-navy-900">{v.colorName}</span>
+                      </div>
+                      <input
+                        type="number"
+                        min="0"
+                        aria-label="Quantidade"
+                        className="w-full rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-center text-sm font-semibold text-navy-900 focus:border-royal-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-royal-500/20"
+                        value={v.quantity}
+                        onChange={(e) =>
+                          setVariants((prev) =>
+                            prev.map((item) => item.id === v.id ? { ...item, quantity: e.target.value } : item)
+                          )
+                        }
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        aria-label="Custo unitário"
+                        className="w-full rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-sm text-navy-900 focus:border-royal-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-royal-500/20"
+                        placeholder="0,00"
+                        value={v.unitCost}
+                        onChange={(e) =>
+                          setVariants((prev) =>
+                            prev.map((item) => item.id === v.id ? { ...item, unitCost: e.target.value } : item)
+                          )
+                        }
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        aria-label="Preço sugerido"
+                        className="w-full rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-sm text-navy-900 focus:border-royal-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-royal-500/20"
+                        placeholder="0,00"
+                        value={v.suggestedPrice}
+                        onChange={(e) =>
+                          setVariants((prev) =>
+                            prev.map((item) => item.id === v.id ? { ...item, suggestedPrice: e.target.value } : item)
+                          )
+                        }
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setVariants((prev) => prev.filter((item) => item.id !== v.id))}
+                        className="flex h-9 w-9 items-center justify-center rounded-xl text-gray-400 transition hover:bg-red-50 hover:text-red-500"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between rounded-xl border border-royal-100 bg-royal-50/60 px-4 py-2.5">
+                    <span className="text-sm font-bold text-navy-900">
+                      Quantidade total: {variants.filter((v) => v.colorName.trim()).reduce((sum, v) => sum + (parseInt(v.quantity) || 0), 0)} unidades
+                    </span>
+                    {variants.filter((v) => v.colorName.trim()).reduce((sum, v) => sum + (parseInt(v.quantity) || 0), 0) !==
+                      (parseInt(formData.quantity) || 1) ? (
+                      <span className="text-xs text-amber-600">A quantidade geral será ajustada ao salvar.</span>
+                    ) : null}
+                  </div>
+                </div>
+              ) : (
+                <div className="mb-5 rounded-xl border border-dashed border-gray-200 bg-gray-50 p-4 text-sm text-gray-500">
+                  Nenhuma variação cadastrada. Adicione cores abaixo.
+                </div>
+              )}
+
+              {/* Add variation section */}
+              <div className={variants.length > 0 ? "border-t border-gray-100 pt-5" : ""}>
+                <p className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-400">Adicionar variação</p>
+
+                {colorOptions.filter((c) =>
+                  !variants.find((v) =>
+                    v.catalogColorId ? v.catalogColorId === c.id : normalizeCatalogName(v.colorName) === normalizeCatalogName(c.name)
+                  )
+                ).length > 0 ? (
+                  <div className="mb-4">
+                    <p className="mb-2 text-xs font-medium text-gray-500">Cores do catálogo</p>
+                    <div className="flex flex-wrap gap-2">
+                      {colorOptions
+                        .filter((c) =>
+                          !variants.find((v) =>
+                            v.catalogColorId ? v.catalogColorId === c.id : normalizeCatalogName(v.colorName) === normalizeCatalogName(c.name)
+                          )
+                        )
+                        .map((color) => (
+                          <button
+                            key={color.id || color.name}
+                            type="button"
+                            onClick={() => {
+                              setVariants((prev) => [
+                                ...prev,
+                                {
+                                  id: crypto.randomUUID(),
+                                  catalogColorId: color.id || null,
+                                  colorName: color.name,
+                                  colorHex: color.hex,
+                                  quantity: "1",
+                                  unitCost: formData.purchase_price || "",
+                                  suggestedPrice: formData.suggested_price || "",
+                                },
+                              ])
+                            }}
+                            className="flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-navy-900 shadow-sm transition hover:border-royal-400 hover:bg-royal-50"
+                          >
+                            <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: color.hex }} />
+                            {color.name}
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalColorName("")
+                      setModalColorHex("#111827")
+                      setShowCatalogColorModal(true)
+                    }}
+                    className="flex items-center gap-1.5 rounded-xl border border-royal-200 bg-royal-50 px-4 py-2 text-sm font-semibold text-royal-700 transition hover:bg-royal-100"
+                  >
+                    <Plus className="h-4 w-4" /> Nova cor no modelo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFreeColorName("")
+                      setFreeColorHex("#111827")
+                      setShowFreeColorModal(true)
+                    }}
+                    className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-600 transition hover:border-gray-300 hover:bg-gray-50"
+                  >
+                    <Plus className="h-4 w-4" /> Cor fora do catálogo
+                  </button>
+                </div>
+              </div>
+
+              {/* Modal: Nova cor no modelo */}
+              {showCatalogColorModal ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                  <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl">
+                    <div className="mb-5 flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-base font-bold text-navy-900">Nova cor no modelo</h3>
+                        <p className="mt-0.5 text-sm text-gray-500">Salva no catálogo e adiciona como variação.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowCatalogColorModal(false)}
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="mb-1.5 block text-sm font-semibold text-navy-900">Nome da cor</label>
+                        <input
+                          className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-navy-900 focus:border-royal-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-royal-500/20"
+                          placeholder="Ex: Azul Marinho"
+                          value={modalColorName}
+                          onChange={(e) => setModalColorName(e.target.value)}
+                          autoFocus
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-sm font-semibold text-navy-900">Cor</label>
+                        <div className="grid grid-cols-[44px_1fr] items-end gap-2">
+                          <div>
+                            <input
+                              type="color"
+                              value={HEX_RE.test(modalColorHex) ? modalColorHex : "#111827"}
+                              onChange={(e) => setModalColorHex(e.target.value.toUpperCase())}
+                              className="h-11 w-full rounded-xl border border-gray-200 bg-white p-1"
+                            />
+                          </div>
+                          <input
+                            className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 font-mono text-sm text-navy-900 focus:border-royal-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-royal-500/20"
+                            placeholder="#111827"
+                            value={modalColorHex}
+                            onChange={(e) => setModalColorHex(normalizeHexInput(e.target.value))}
+                          />
+                        </div>
+                        {modalColorHex && modalColorHex !== "#" && !HEX_RE.test(modalColorHex) ? (
+                          <p className="mt-1 text-xs text-red-500">HEX inválido. Use formato #RRGGBB.</p>
+                        ) : null}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {DEFAULT_COLOR_SUGGESTIONS.map((s) => (
+                          <button
+                            key={s.name}
+                            type="button"
+                            onClick={() => { setModalColorName(s.name); setModalColorHex(s.hex.toUpperCase()) }}
+                            className="flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-navy-900 transition hover:border-royal-200 hover:text-royal-700"
+                          >
+                            <span className="h-3 w-3 rounded-full border border-gray-300" style={{ backgroundColor: s.hex }} />
+                            {s.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="mt-6 flex gap-3">
+                      <Button
+                        variant="outline"
+                        className="flex-1"
+                        onClick={() => setShowCatalogColorModal(false)}
+                        disabled={modalAddingColor}
+                      >
+                        Cancelar
+                      </Button>
+                      <Button
+                        variant="primary"
+                        className="flex-1"
+                        onClick={handleAddCatalogColor}
+                        isLoading={modalAddingColor}
+                        disabled={!modalColorName.trim() || (modalColorHex.length > 1 && !HEX_RE.test(modalColorHex))}
+                      >
+                        Salvar e adicionar
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Modal: Cor fora do catálogo */}
+              {showFreeColorModal ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                  <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl">
+                    <div className="mb-5 flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-base font-bold text-navy-900">Cor fora do catálogo</h3>
+                        <p className="mt-0.5 text-sm text-gray-500">Sem vínculo com o catálogo. Apenas para esta variação.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowFreeColorModal(false)}
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="mb-1.5 block text-sm font-semibold text-navy-900">Nome da variação / cor</label>
+                        <input
+                          className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-navy-900 focus:border-royal-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-royal-500/20"
+                          placeholder="Ex: Dourado especial, Edição limitada…"
+                          value={freeColorName}
+                          onChange={(e) => setFreeColorName(e.target.value)}
+                          autoFocus
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-sm font-semibold text-navy-900">
+                          Cor <span className="font-normal text-gray-400">(opcional)</span>
+                        </label>
+                        <div className="grid grid-cols-[44px_1fr] items-end gap-2">
+                          <div>
+                            <input
+                              type="color"
+                              value={HEX_RE.test(freeColorHex) ? freeColorHex : "#111827"}
+                              onChange={(e) => setFreeColorHex(e.target.value.toUpperCase())}
+                              className="h-11 w-full rounded-xl border border-gray-200 bg-white p-1"
+                            />
+                          </div>
+                          <input
+                            className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 font-mono text-sm text-navy-900 focus:border-royal-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-royal-500/20"
+                            placeholder="#RRGGBB"
+                            value={freeColorHex}
+                            onChange={(e) => setFreeColorHex(normalizeHexInput(e.target.value))}
+                          />
+                        </div>
+                        {freeColorHex && freeColorHex !== "#" && !HEX_RE.test(freeColorHex) ? (
+                          <p className="mt-1 text-xs text-red-500">HEX inválido. Use formato #RRGGBB.</p>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="mt-6 flex gap-3">
+                      <Button
+                        variant="outline"
+                        className="flex-1"
+                        onClick={() => setShowFreeColorModal(false)}
+                      >
+                        Cancelar
+                      </Button>
+                      <Button
+                        variant="primary"
+                        className="flex-1"
+                        onClick={handleAddFreeColor}
+                        disabled={!freeColorName.trim() || (freeColorHex.length > 1 && !HEX_RE.test(freeColorHex))}
+                      >
+                        Adicionar variação
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </SectionCard>
+          ) : null}
         </div>
 
         <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">

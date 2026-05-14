@@ -25,6 +25,8 @@
 body {
   background: var(--color-surface);
   color: #1a202c;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 /* ── Scrollbar ─────────────────────────────────────────── */

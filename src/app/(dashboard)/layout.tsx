@@ -6,7 +6,7 @@ export default async function Layout({ children }: { children: React.ReactNode }
 
   return (
     <DashboardLayout
-      title="NOBRETECH"
+      title={context.companyName}
       currentUser={{
         name: context.fullName || context.email,
         email: context.email,

@@ -327,7 +327,7 @@ export async function createOrLinkModelColor(input: {
     const { data: categoryColors, error: findError } = await (supabase.from("product_colors") as any)
       .select("*")
       .eq("category_id", input.categoryId)
-      .limit(500)
+      .limit(200)
 
     if (findError) throw findError
     const match = (categoryColors || []).find((color: CatalogColorRow) => normalizeCatalogName(color.name) === normalizeCatalogName(nextName))
@@ -402,7 +402,7 @@ export async function createOrReuseCatalogColor(input: {
 
   const query = (supabase.from("product_colors") as any)
     .select("*")
-    .limit(500)
+    .limit(200)
 
   if (input.categoryId) {
     query.eq("category_id", input.categoryId)

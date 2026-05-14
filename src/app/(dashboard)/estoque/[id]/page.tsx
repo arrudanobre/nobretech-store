@@ -24,6 +24,7 @@ import {
   Edit3,
   FileText,
   Hash,
+  Layers,
   Loader2,
   MinusCircle,
   ShieldCheck,
@@ -35,6 +36,12 @@ import {
   XCircle,
   type LucideIcon,
 } from "lucide-react"
+
+type VariantSummary = {
+  color_name: string
+  color_hex: string | null
+  quantity: number
+}
 
 interface ChecklistItem {
   id: string
@@ -59,6 +66,7 @@ export default function ProductDetailPage() {
   const [saleData, setSaleData] = useState<any>(null)
   const [showAllPayments, setShowAllPayments] = useState(false)
   const [isStockLabelOpen, setIsStockLabelOpen] = useState(false)
+  const [variants, setVariants] = useState<VariantSummary[]>([])
 
   const fetchProduct = useCallback(async () => {
     if (!productId) return
@@ -83,6 +91,18 @@ export default function ProductDetailPage() {
       const imageMap: Record<string, ProductImageRecord | null> = await fetchProductImageMap([p.id]).catch(() => ({}))
       p.productImage = imageMap[p.id] || null
       setProduct(p)
+
+      if (!p.imei && !p.serial_number && p.product_type !== "device") {
+        const varRes = await fetch(`/api/inventory/${p.id}/variants`).catch(() => null)
+        const varPayload = varRes?.ok ? await varRes.json().catch(() => null) : null
+        if (varPayload?.data?.allowsVariants && Array.isArray(varPayload.data.variants)) {
+          setVariants(
+            varPayload.data.variants
+              .filter((v: any) => v.quantity > 0)
+              .map((v: any) => ({ color_name: v.color_name, color_hex: v.color_hex || null, quantity: Number(v.quantity) }))
+          )
+        }
+      }
 
       if (p.catalog_id) {
         const { data: catalogData } = await (supabase.from("product_catalog") as any)
@@ -453,6 +473,59 @@ export default function ProductDetailPage() {
           </div>
         </div>
       </div>
+
+      {variants.length > 0 ? (
+        <div className="bg-card rounded-2xl border border-gray-100 p-4 shadow-sm sm:p-5">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-royal-500/10 text-royal-600">
+                <Layers className="h-4 w-4" />
+              </div>
+              <div>
+                <h3 className="font-display font-bold text-navy-900 font-syne">Variações e quantidade</h3>
+                <p className="mt-0.5 text-xs text-gray-500">Distribuição disponível por cor/modelo.</p>
+              </div>
+            </div>
+            <Link
+              href={`/estoque/${productId}/editar`}
+              className="text-xs font-semibold text-royal-600 hover:text-royal-800"
+            >
+              Editar variações →
+            </Link>
+          </div>
+          <div className="rounded-2xl bg-gray-50 p-4">
+            <div className="mb-3 flex items-center justify-between text-sm">
+              <span className="text-gray-500">Total disponível</span>
+              <strong className="text-navy-900">
+                {variants.reduce((s, v) => s + v.quantity, 0)}{" "}
+                {variants.reduce((s, v) => s + v.quantity, 0) === 1 ? "unidade" : "unidades"}{" "}
+                · {variants.length} {variants.length === 1 ? "variação" : "variações"}
+              </strong>
+            </div>
+            <div className="space-y-2">
+              {variants.map((v, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-center justify-between rounded-xl border border-gray-100 bg-white px-3 py-2.5"
+                >
+                  <div className="flex items-center gap-2.5">
+                    {v.color_hex ? (
+                      <span
+                        className="h-4 w-4 shrink-0 rounded-full border border-gray-200 shadow-sm"
+                        style={{ background: v.color_hex }}
+                      />
+                    ) : (
+                      <span className="h-4 w-4 shrink-0 rounded-full border border-dashed border-gray-300" />
+                    )}
+                    <span className="text-sm font-medium text-navy-900">{v.color_name}</span>
+                  </div>
+                  <span className="text-sm font-bold text-navy-900">{v.quantity} un.</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
         <div className="bg-card rounded-2xl border border-gray-100 p-4 shadow-sm sm:p-5">

@@ -33,6 +33,23 @@ import {
 import { cn } from "@/lib/utils"
 
 type ProductMode = "catalog" | "manual"
+type BatchArrivalMode = "with_me" | "in_transit"
+type BatchReleaseMode = "available" | "pending_review"
+
+type SupplierOption = {
+  id: string
+  name: string
+  city: string | null
+}
+
+type VariantFormInput = {
+  id: string
+  colorName: string
+  colorHex: string
+  quantity: string
+  unitCost: string
+  suggestedPrice: string
+}
 
 type PurchaseLine = {
   id: string
@@ -40,6 +57,7 @@ type PurchaseLine = {
   category: string
   modelIdx: number
   manualName: string
+  commercialName: string
   storage: string
   color: string
   colorHex: string
@@ -52,9 +70,11 @@ type PurchaseLine = {
   imeis: string
   serials: string
   accessoryHasSerial: boolean
+  useVariantPricing: boolean
   notes: string
   imageFile: File | null
   imagePreviewUrl: string
+  variants: VariantFormInput[]
 }
 
 const gradeOptions = GRADES.map((grade) => ({ label: grade.label, value: grade.value }))
@@ -65,6 +85,12 @@ const paymentOptions = [
   { label: "Cartao de credito", value: "credit_card" },
   { label: "Boleto", value: "boleto" },
   { label: "Transferencia", value: "transfer" },
+]
+
+const sourceTypeOptions = [
+  { label: "Fornecedor externo", value: "external_supplier" },
+  { label: "Fornecedor local", value: "local_supplier" },
+  { label: "Outro", value: "other" },
 ]
 
 const accessorySuggestions = [
@@ -84,6 +110,7 @@ function newLine(overrides: Partial<PurchaseLine> = {}): PurchaseLine {
     category: "iphone",
     modelIdx: 0,
     manualName: "",
+    commercialName: "",
     storage: "",
     color: "",
     colorHex: "",
@@ -96,23 +123,102 @@ function newLine(overrides: Partial<PurchaseLine> = {}): PurchaseLine {
     imeis: "",
     serials: "",
     accessoryHasSerial: false,
+    useVariantPricing: false,
     notes: "",
     imageFile: null,
     imagePreviewUrl: "",
+    variants: [],
     ...overrides,
   }
 }
 
+function lineEffectiveQuantity(line: PurchaseLine): number {
+  if (!line.accessoryHasSerial && line.variants.length > 0) {
+    const sum = line.variants.reduce((s, v) => s + Math.max(0, parseInt(v.quantity) || 0), 0)
+    return Math.max(1, sum)
+  }
+  return Math.max(1, Math.floor(toNumber(line.quantity)))
+}
+
+function variantPricingStats(line: PurchaseLine) {
+  const totalQty = line.variants.reduce((s, v) => s + Math.max(0, parseInt(v.quantity) || 0), 0)
+  const totalCost = line.variants.reduce((s, v) => s + Math.max(0, parseInt(v.quantity) || 0) * toNumber(v.unitCost), 0)
+  const totalSuggested = line.variants.reduce((s, v) => s + Math.max(0, parseInt(v.quantity) || 0) * toNumber(v.suggestedPrice), 0)
+  const avgCost = totalQty > 0 ? totalCost / totalQty : 0
+  const avgSuggested = totalQty > 0 ? totalSuggested / totalQty : 0
+  return { totalQty, totalCost, totalSuggested, avgCost, avgSuggested }
+}
+
+function lineEffectiveUnitCost(line: PurchaseLine): number {
+  const useVariants = line.useVariantPricing && line.variants.length > 0
+  if (!useVariants) return toNumber(line.unitCost)
+  const { totalQty, totalCost } = variantPricingStats(line)
+  if (totalQty === 0 || totalCost === 0) return toNumber(line.unitCost)
+  return totalCost / totalQty
+}
+
+function lineEffectiveSuggestedPrice(line: PurchaseLine, landedUnitCost: number): number {
+  const useVariants = line.useVariantPricing && line.variants.length > 0
+  if (!useVariants) return toNumber(line.suggestedPrice) || Math.ceil(landedUnitCost * (1 + toNumber(line.marginPct) / 100))
+  const { totalQty, totalSuggested } = variantPricingStats(line)
+  if (totalQty === 0 || totalSuggested === 0) return toNumber(line.suggestedPrice) || Math.ceil(landedUnitCost * (1 + toNumber(line.marginPct) / 100))
+  return totalSuggested / totalQty
+}
+
 function toNumber(value: string | number | null | undefined) {
+  return parseBRLInput(value)
+}
+
+function parseBRLInput(value: string | number | null | undefined): number {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0
   if (!value) return 0
-  const normalized = String(value).replace(/\./g, "").replace(",", ".")
+  const cleaned = String(value)
+    .replace(/[R$\s]/g, "")
+    .replace(/[^\d,.-]/g, "")
+    .trim()
+
+  if (!cleaned) return 0
+
+  const sign = cleaned.startsWith("-") ? -1 : 1
+  const unsigned = cleaned.replace(/-/g, "")
+  const lastComma = unsigned.lastIndexOf(",")
+  const lastDot = unsigned.lastIndexOf(".")
+  const decimalSeparator = lastComma > lastDot ? "," : lastDot > -1 ? "." : lastComma > -1 ? "," : null
+
+  let normalized = unsigned
+  if (decimalSeparator) {
+    const decimalIndex = decimalSeparator === "," ? lastComma : lastDot
+    const integerPart = unsigned.slice(0, decimalIndex).replace(/[.,]/g, "")
+    const decimalPart = unsigned.slice(decimalIndex + 1).replace(/[.,]/g, "")
+    normalized = decimalPart.length > 0 && decimalPart.length <= 2
+      ? `${integerPart || "0"}.${decimalPart}`
+      : unsigned.replace(/[.,]/g, "")
+  }
+
   const parsed = Number(normalized)
-  return Number.isFinite(parsed) ? parsed : 0
+  return Number.isFinite(parsed) ? sign * parsed : 0
+}
+
+function formatBRLInput(value: string | number | null | undefined) {
+  const amount = parseBRLInput(value)
+  if (!amount) return ""
+  return amount.toLocaleString("pt-BR", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
 }
 
 function roundMoney(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100
+}
+
+function normalizeSupplierName(name: string) {
+  return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase()
 }
 
 function splitValues(value: string) {
@@ -126,10 +232,15 @@ function selectedModelFor(line: PurchaseLine, catalogConfig: CatalogConfig) {
   return getCatalogCategory(catalogConfig, line.category)?.models?.[line.modelIdx] as any
 }
 
+function catalogGeneratedName(line: PurchaseLine, catalogConfig: CatalogConfig) {
+  const model = selectedModelFor(line, catalogConfig)
+  return [model?.name, isLineAccessory(line, catalogConfig) ? null : line.storage, line.color].filter(Boolean).join(" ").trim() || "Produto do catálogo"
+}
+
 function lineProductName(line: PurchaseLine, catalogConfig: CatalogConfig) {
   if (line.mode === "manual") return line.manualName.trim() || "Produto manual"
-  const model = selectedModelFor(line, catalogConfig)
-  return [model?.name, isLineAccessory(line, catalogConfig) ? null : line.storage, line.color].filter(Boolean).join(" ").trim() || "Produto do catalogo"
+  if (line.commercialName.trim() && isLineAccessory(line, catalogConfig)) return line.commercialName.trim()
+  return catalogGeneratedName(line, catalogConfig)
 }
 
 function isLineAccessory(line: PurchaseLine, catalogConfig: CatalogConfig) {
@@ -182,13 +293,18 @@ export default function NewInventoryPurchasePage() {
   const router = useRouter()
   const { toast } = useToast()
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [suppliers, setSuppliers] = useState<Array<{ label: string; value: string }>>([])
+  const [suppliers, setSuppliers] = useState<SupplierOption[]>([])
+  const [supplierQuery, setSupplierQuery] = useState("")
   const [accounts, setAccounts] = useState<Array<{ label: string; value: string }>>([])
   const [catalogConfig, setCatalogConfig] = useState<CatalogConfig>(() => buildLegacyCatalogConfig())
   const [purchase, setPurchase] = useState({
     supplier_id: "",
     supplier_name: "",
     purchase_date: new Date().toISOString().split("T")[0],
+    arrival_mode: "with_me" as BatchArrivalMode,
+    release_mode: "available" as BatchReleaseMode,
+    source_type: "external_supplier",
+    expected_arrival_date: "",
     payment_method: "pix",
     account_id: "",
     due_date: new Date().toISOString().split("T")[0],
@@ -210,14 +326,18 @@ export default function NewInventoryPurchasePage() {
 
   useEffect(() => {
     async function loadOptions() {
-      const [{ data: supplierData }, { data: accountData }] = await Promise.all([
-        (supabase.from("suppliers") as any).select("id, name, city").order("name", { ascending: true }),
+      const [supplierResponse, { data: accountData }] = await Promise.all([
+        fetch("/api/suppliers/traceability").then((response) => response.json()).catch(() => null),
         (supabase.from("finance_accounts") as any).select("id, name, bank_name, is_active").order("name", { ascending: true }),
       ])
 
-      setSuppliers((supplierData || []).map((supplier: any) => ({
-        label: `${supplier.name}${supplier.city ? ` - ${supplier.city}` : ""}`,
-        value: supplier.id,
+      const supplierData = supplierResponse?.data?.suppliers
+        ?.map((item: any) => item.supplier)
+        .filter(Boolean) || []
+      setSuppliers(supplierData.map((supplier: any) => ({
+        id: supplier.id,
+        name: supplier.name,
+        city: supplier.city || null,
       })))
       setAccounts((accountData || []).filter((account: any) => account.is_active !== false).map((account: any) => ({
         label: `${account.name}${account.bank_name ? ` - ${account.bank_name}` : ""}`,
@@ -229,8 +349,8 @@ export default function NewInventoryPurchasePage() {
   }, [])
 
   const totals = useMemo(() => {
-    const totalQty = lines.reduce((sum, line) => sum + Math.max(1, Math.floor(toNumber(line.quantity))), 0)
-    const productsAmount = lines.reduce((sum, line) => sum + toNumber(line.unitCost) * Math.max(1, Math.floor(toNumber(line.quantity))), 0)
+    const totalQty = lines.reduce((sum, line) => sum + lineEffectiveQuantity(line), 0)
+    const productsAmount = lines.reduce((sum, line) => sum + lineEffectiveUnitCost(line) * lineEffectiveQuantity(line), 0)
     const freight = toNumber(purchase.freight_amount)
     const other = toNumber(purchase.other_costs_amount)
     const freightPerUnit = totalQty > 0 ? freight / totalQty : 0
@@ -246,17 +366,43 @@ export default function NewInventoryPurchasePage() {
     }
   }, [lines, purchase.freight_amount, purchase.other_costs_amount])
 
-  const canSave = totals.totalQty > 0 && totals.productsAmount > 0 && lines.every((line) => {
-    if (toNumber(line.unitCost) <= 0 || Math.max(1, Math.floor(toNumber(line.quantity))) <= 0) return false
+  const selectedSupplier = useMemo(() => suppliers.find((supplier) => supplier.id === purchase.supplier_id) || null, [purchase.supplier_id, suppliers])
+  const filteredSuppliers = useMemo(() => {
+    const query = normalizeSupplierName(supplierQuery || purchase.supplier_name)
+    if (!query) return suppliers.slice(0, 6)
+    return suppliers.filter((supplier) => normalizeSupplierName(`${supplier.name} ${supplier.city || ""}`).includes(query)).slice(0, 6)
+  }, [purchase.supplier_name, supplierQuery, suppliers])
+  const supplierExactMatch = useMemo(() => {
+    const query = normalizeSupplierName(supplierQuery || purchase.supplier_name)
+    return query ? suppliers.find((supplier) => normalizeSupplierName(supplier.name) === query) || null : null
+  }, [purchase.supplier_name, supplierQuery, suppliers])
+
+  const canSave = Boolean(purchase.supplier_id || purchase.supplier_name.trim()) && totals.totalQty > 0 && totals.productsAmount > 0 && (purchase.arrival_mode === "with_me" || Boolean(purchase.expected_arrival_date)) && lines.every((line) => {
+    if (lineEffectiveUnitCost(line) <= 0) return false
     if (line.mode === "manual") return line.manualName.trim().length > 0
     const model = selectedModelFor(line, catalogConfig)
-    const colorOptions = (model?.colors || []) as CatalogColor[]
-    const colorOk = Boolean(line.color) || (isLineAccessory(line, catalogConfig) && colorOptions.length === 0)
-    return Boolean(model && (isLineAccessory(line, catalogConfig) || line.storage || !(model.storage || model.sizes)) && colorOk)
+    const accessoryLine = isLineAccessory(line, catalogConfig)
+    const hasVariants = accessoryLine && !line.accessoryHasSerial && line.variants.length > 0
+    if (hasVariants) {
+      return Boolean(model) && line.variants.every((v) => v.colorName.trim() && parseInt(v.quantity) > 0)
+    }
+    const modelColorOptions = (model?.colors || []) as CatalogColor[]
+    const colorOk = Boolean(line.color) || (accessoryLine && modelColorOptions.length === 0)
+    return Boolean(model && (accessoryLine || line.storage || !(model.storage || model.sizes)) && colorOk)
   })
 
   const updatePurchase = (field: string, value: string) => {
     setPurchase((prev) => ({ ...prev, [field]: value }))
+  }
+
+  const selectSupplier = (supplier: SupplierOption) => {
+    setPurchase((prev) => ({ ...prev, supplier_id: supplier.id, supplier_name: supplier.name }))
+    setSupplierQuery(supplier.name)
+  }
+
+  const updateSupplierQuery = (value: string) => {
+    setSupplierQuery(value)
+    setPurchase((prev) => ({ ...prev, supplier_id: "", supplier_name: value }))
   }
 
   const updateLine = (id: string, field: keyof PurchaseLine, value: string | number) => {
@@ -455,8 +601,34 @@ export default function NewInventoryPurchasePage() {
     if (!canSave || isSubmitting) return
     setIsSubmitting(true)
     try {
-      const supplier = suppliers.find((item) => item.value === purchase.supplier_id)
-      const supplierName = purchase.supplier_name || supplier?.label || null
+      let resolvedSupplier = selectedSupplier
+      if (!resolvedSupplier) {
+        const response = await fetch("/api/suppliers/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: purchase.supplier_name }),
+        })
+        const payload = await response.json().catch(() => null)
+        if (!response.ok || !payload?.data?.supplier) {
+          throw new Error(payload?.error?.message || "Não foi possível resolver o fornecedor")
+        }
+        resolvedSupplier = {
+          id: payload.data.supplier.id,
+          name: payload.data.supplier.name,
+          city: payload.data.supplier.city || null,
+        }
+        setSuppliers((current) => current.some((supplier) => supplier.id === resolvedSupplier?.id) ? current : [...current, resolvedSupplier as SupplierOption].sort((a, b) => a.name.localeCompare(b.name)))
+      }
+
+      const supplierName = resolvedSupplier?.name || null
+      const supplierId = resolvedSupplier?.id || null
+      const batchIsInTransit = purchase.arrival_mode === "in_transit"
+      const batchNeedsReview = purchase.arrival_mode === "with_me" && purchase.release_mode === "pending_review"
+      const batchLogisticsStatus = batchIsInTransit ? "in_transit" : "received"
+      const itemLogisticsStatus = batchIsInTransit ? "in_transit" : batchNeedsReview ? "received_pending_review" : "in_stock"
+      const itemCommercialStatus = batchIsInTransit ? "reservable" : batchNeedsReview ? "blocked" : "available"
+      const itemLegacyStatus = batchIsInTransit || batchNeedsReview ? "pending" : "in_stock"
+      const receivedAt = batchIsInTransit ? null : new Date().toISOString()
       const { data: stockAccount } = await (supabase.from("finance_chart_accounts") as any)
         .select("id")
         .eq("code", "7.01")
@@ -464,16 +636,22 @@ export default function NewInventoryPurchasePage() {
 
       const { data: purchaseRow, error: purchaseError } = await (supabase.from("inventory_purchases") as any)
         .insert({
-          supplier_id: purchase.supplier_id || null,
+          supplier_id: supplierId,
           supplier_name: supplierName,
           purchase_date: purchase.purchase_date,
           payment_method: purchase.payment_method,
           account_id: purchase.account_id || null,
           chart_account_id: stockAccount?.[0]?.id || null,
           status: "received",
+          logistics_status: batchLogisticsStatus,
+          source_type: purchase.source_type,
+          ordered_at: purchase.purchase_date,
+          expected_arrival_date: purchase.expected_arrival_date || null,
+          received_at: receivedAt,
           payment_status: purchase.account_id ? "paid" : "pending",
           due_date: purchase.account_id ? purchase.purchase_date : purchase.due_date || purchase.purchase_date,
           freight_amount: totals.freight,
+          freight_cost: totals.freight,
           other_costs_amount: totals.other,
           products_amount: totals.productsAmount,
           total_amount: totals.total,
@@ -523,23 +701,27 @@ export default function NewInventoryPurchasePage() {
         catalogIds.set(line.id, await findOrCreateCatalog(line))
       }
 
-      const inventoryPayloads: any[] = []
-      const purchaseItemPayloads: any[] = []
+      const inventoryPayloads: Array<any & { __lineId: string }> = []
+      const purchaseItemPayloads: Array<any & { __lineId: string }> = []
 
       lines.forEach((line) => {
-        const quantity = Math.max(1, Math.floor(toNumber(line.quantity)))
+        const quantity = lineEffectiveQuantity(line)
         const imeis = splitValues(line.imeis)
         const serials = splitValues(line.serials)
-        const unitCost = roundMoney(toNumber(line.unitCost))
+        const unitCost = roundMoney(lineEffectiveUnitCost(line))
         const landedUnitCost = roundMoney(unitCost + totals.freightPerUnit + totals.otherPerUnit)
-        const suggestedPrice = roundMoney(toNumber(line.suggestedPrice) || Math.ceil(landedUnitCost * (1 + toNumber(line.marginPct) / 100)))
+        const suggestedPrice = roundMoney(lineEffectiveSuggestedPrice(line, landedUnitCost))
         const catalogId = catalogIds.get(line.id) || null
         const productName = lineProductName(line, catalogConfig)
         const productType = lineProductType(line, catalogConfig)
         const categoryInfo = getCatalogCategory(catalogConfig, line.category)
         const selectedModel = selectedModelFor(line, catalogConfig)
         const isAccessory = isLineAccessory(line, catalogConfig)
-        const attributeSummary = [isAccessory ? null : line.storage, line.color].filter(Boolean).join(" · ") || null
+        const hasVariants = isAccessory && !line.accessoryHasSerial && line.variants.length > 0
+        const effectiveColor = hasVariants
+          ? line.variants.length === 1 ? line.variants[0].colorName : "Múltiplas cores"
+          : line.color
+        const attributeSummary = [isAccessory ? null : line.storage, effectiveColor].filter(Boolean).join(" · ") || null
         const checklistRequired = needsChecklistLater(line, catalogConfig)
         const isSealedElectronic = !isAccessory && line.mode === "catalog" && ["iphone", "ipad", "applewatch"].includes(line.category) && line.grade === "Lacrado"
         const conditionNotes = [
@@ -563,11 +745,12 @@ export default function NewInventoryPurchasePage() {
             imei,
             serial_number: serial,
             catalog_id: catalogId,
-            notes: line.mode === "manual" ? productName : line.notes,
+            notes: line.mode === "manual" ? productName : (isAccessory && line.commercialName.trim() ? `Nome: ${line.commercialName.trim()}` : line.notes),
             condition_notes: conditionNotes,
           })
 
           inventoryPayloads.push({
+            __lineId: line.id,
             catalog_id: catalogId,
             imei,
             serial_number: serial,
@@ -576,20 +759,25 @@ export default function NewInventoryPurchasePage() {
             condition_notes: conditionNotes,
             purchase_price: landedUnitCost,
             purchase_date: purchase.purchase_date,
-            supplier_id: purchase.supplier_id || null,
+            supplier_id: supplierId,
             type: "own",
             supplier_name: supplierName,
             origin: "purchase",
             suggested_price: suggestedPrice || null,
             ios_version: null,
             battery_health: battery,
-            notes: line.mode === "manual" ? productName : line.notes || null,
+            notes: line.mode === "manual" ? productName : (isAccessory && line.commercialName.trim() ? `Nome: ${line.commercialName.trim()}` : line.notes || null),
             quantity: splitByUnit ? 1 : quantity,
-            status: mapLifecycleToLegacyCompatibleStatus(lifecycleStatus),
+            status: itemLegacyStatus || mapLifecycleToLegacyCompatibleStatus(lifecycleStatus),
+            logistics_status: itemLogisticsStatus,
+            commercial_status: itemCommercialStatus,
+            inventory_purchase_id: purchaseRow.id,
+            expected_arrival_date: purchase.expected_arrival_date || null,
+            received_at: receivedAt,
             product_type: productType,
             category_name_snapshot: categoryInfo?.label || line.category,
             subcategory_name_snapshot: line.mode === "manual" ? productName : selectedModel?.name || null,
-            color_name_snapshot: line.color || null,
+            color_name_snapshot: effectiveColor || null,
             attribute_summary_snapshot: attributeSummary,
           })
 
@@ -619,18 +807,28 @@ export default function NewInventoryPurchasePage() {
         }
       })
 
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const inventoryForInsert = inventoryPayloads.map(({ __lineId: _, ...rest }) => rest)
       const { data: createdInventory, error: inventoryError } = await (supabase.from("inventory") as any)
-        .insert(inventoryPayloads)
+        .insert(inventoryForInsert)
         .select("id")
 
       if (inventoryError) throw inventoryError
+
+      const lineIdToInventoryId = new Map<string, string>()
+      inventoryPayloads.forEach((payload, idx) => {
+        if (!lineIdToInventoryId.has(payload.__lineId) && createdInventory?.[idx]?.id) {
+          lineIdToInventoryId.set(payload.__lineId, createdInventory[idx].id)
+        }
+      })
 
       const itemsWithInventory = purchaseItemPayloads.map((item, index) => ({
         ...item,
         inventory_id: createdInventory?.[index]?.id || null,
       }))
 
-      const itemsForInsert = itemsWithInventory.map(({ __lineId, ...item }) => item)
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const itemsForInsert = itemsWithInventory.map(({ __lineId: _, ...item }) => item)
 
       const { error: itemError } = await (supabase.from("inventory_purchase_items") as any)
         .insert(itemsForInsert)
@@ -653,6 +851,29 @@ export default function NewInventoryPurchasePage() {
         }
       }
 
+      for (const line of lines) {
+        const isAccessory = isLineAccessory(line, catalogConfig)
+        if (isAccessory && !line.accessoryHasSerial && line.variants.length > 0) {
+          const inventoryId = lineIdToInventoryId.get(line.id)
+          if (inventoryId) {
+            const variantPayload = line.variants
+              .filter((v) => v.colorName.trim() && parseInt(v.quantity) > 0)
+              .map((v) => ({
+                color_name: v.colorName.trim(),
+                color_hex: v.colorHex || null,
+                quantity: parseInt(v.quantity) || 0,
+                unit_cost: line.useVariantPricing ? (toNumber(v.unitCost) || null) : null,
+                suggested_price: line.useVariantPricing ? (toNumber(v.suggestedPrice) || null) : null,
+              }))
+            await fetch(`/api/inventory/${inventoryId}/variants`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ variants: variantPayload }),
+            }).catch(() => null)
+          }
+        }
+      }
+
       if (imageUploadErrors.length > 0) {
         toast({
           title: "Compra cadastrada, mas imagem não enviada",
@@ -663,7 +884,9 @@ export default function NewInventoryPurchasePage() {
       } else {
         toast({
           title: "Compra cadastrada",
-          description: `${totals.totalQty} item(ns) entraram no estoque com custo rateado.`,
+          description: batchIsInTransit
+            ? `${totals.totalQty} item(ns) ficaram a caminho e reservaveis.`
+            : `${totals.totalQty} item(ns) entraram no estoque com custo rateado.`,
           type: "success",
         })
       }
@@ -712,14 +935,138 @@ export default function NewInventoryPurchasePage() {
             </div>
 
             <div className="grid gap-3 md:grid-cols-2">
-              <Select label="Fornecedor cadastrado" value={purchase.supplier_id} onChange={(event) => updatePurchase("supplier_id", event.target.value)} options={[{ label: "Sem fornecedor", value: "" }, ...suppliers]} />
-              <Input label="Fornecedor avulso" placeholder="Nome do fornecedor" value={purchase.supplier_name} onChange={(event) => updatePurchase("supplier_name", event.target.value)} />
+              <div className="md:col-span-2">
+                <Input
+                  label="Fornecedor"
+                  placeholder="Digite para buscar ou criar fornecedor"
+                  value={supplierQuery || purchase.supplier_name}
+                  onChange={(event) => updateSupplierQuery(event.target.value)}
+                />
+                <div className="mt-2 rounded-xl border border-gray-100 bg-white p-2 shadow-sm">
+                  {selectedSupplier ? (
+                    <div className="flex items-center justify-between gap-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                      <span className="font-semibold">Selecionado: {selectedSupplier.name}</span>
+                      <button type="button" className="text-xs font-bold text-emerald-700 hover:underline" onClick={() => updateSupplierQuery("")}>Trocar</button>
+                    </div>
+                  ) : null}
+                  {!selectedSupplier && filteredSuppliers.length > 0 ? (
+                    <div className="grid gap-1">
+                      {filteredSuppliers.map((supplier) => (
+                        <button
+                          key={supplier.id}
+                          type="button"
+                          onClick={() => selectSupplier(supplier)}
+                          className="flex items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-navy-900 hover:bg-gray-50"
+                        >
+                          <span className="font-semibold">{supplier.name}</span>
+                          <span className="text-xs text-gray-500">{supplier.city || "Fornecedor cadastrado"}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {!selectedSupplier && purchase.supplier_name.trim() && !supplierExactMatch ? (
+                    <button
+                      type="button"
+                      onClick={() => updatePurchase("supplier_name", purchase.supplier_name.trim())}
+                      className="mt-1 w-full rounded-lg border border-dashed border-royal-200 px-3 py-2 text-left text-sm font-bold text-royal-700 hover:bg-royal-50"
+                    >
+                      Criar fornecedor &quot;{purchase.supplier_name.trim()}&quot;
+                    </button>
+                  ) : null}
+                  {!selectedSupplier && !purchase.supplier_name.trim() ? (
+                    <p className="px-3 py-2 text-xs font-medium text-gray-500">Informe um fornecedor para rastrear este pedido.</p>
+                  ) : null}
+                </div>
+              </div>
               <Input label="Data da compra" type="date" value={purchase.purchase_date} onChange={(event) => updatePurchase("purchase_date", event.target.value)} />
               <Input label="Vencimento" type="date" value={purchase.due_date} onChange={(event) => updatePurchase("due_date", event.target.value)} />
               <Select label="Forma de pagamento" value={purchase.payment_method} onChange={(event) => updatePurchase("payment_method", event.target.value)} options={paymentOptions} />
               <Select label="Conta" value={purchase.account_id} onChange={(event) => updatePurchase("account_id", event.target.value)} options={[{ label: "Nao conciliar agora", value: "" }, ...accounts]} />
-              <Input label="Frete total" inputMode="decimal" placeholder="0,00" value={purchase.freight_amount} onChange={(event) => updatePurchase("freight_amount", event.target.value)} icon={<Truck className="w-4 h-4" />} />
-              <Input label="Outros custos" inputMode="decimal" placeholder="0,00" value={purchase.other_costs_amount} onChange={(event) => updatePurchase("other_costs_amount", event.target.value)} icon={<Calculator className="w-4 h-4" />} />
+              <Input
+                label="Frete total"
+                type="text"
+                inputMode="decimal"
+                placeholder="0,00"
+                value={purchase.freight_amount}
+                onChange={(event) => updatePurchase("freight_amount", event.target.value)}
+                onBlur={() => updatePurchase("freight_amount", formatBRLInput(purchase.freight_amount))}
+                icon={<Truck className="w-4 h-4" />}
+              />
+              <Input
+                label="Outros custos"
+                type="text"
+                inputMode="decimal"
+                placeholder="0,00"
+                value={purchase.other_costs_amount}
+                onChange={(event) => updatePurchase("other_costs_amount", event.target.value)}
+                onBlur={() => updatePurchase("other_costs_amount", formatBRLInput(purchase.other_costs_amount))}
+                icon={<Calculator className="w-4 h-4" />}
+              />
+            </div>
+
+            <div className="rounded-2xl border border-gray-100 bg-gray-50/70 p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <h4 className="text-sm font-bold text-navy-900">Esses produtos já estão com você?</h4>
+                  <p className="mt-1 text-xs text-gray-500">A caminho fica reservável, mas não entra como estoque físico disponível.</p>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => updatePurchase("arrival_mode", "with_me")}
+                    className={cn(
+                      "rounded-xl border px-4 py-3 text-left text-sm transition",
+                      purchase.arrival_mode === "with_me" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-gray-200 bg-white text-gray-600 hover:border-gray-300"
+                    )}
+                  >
+                    <span className="block font-bold">Sim, já estão comigo</span>
+                    <span className="text-xs opacity-75">Entrada física no estoque</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updatePurchase("arrival_mode", "in_transit")}
+                    className={cn(
+                      "rounded-xl border px-4 py-3 text-left text-sm transition",
+                      purchase.arrival_mode === "in_transit" ? "border-royal-200 bg-royal-50 text-royal-700" : "border-gray-200 bg-white text-gray-600 hover:border-gray-300"
+                    )}
+                  >
+                    <span className="block font-bold">Não, estão a caminho</span>
+                    <span className="text-xs opacity-75">Reservável, sem venda imediata</span>
+                  </button>
+                </div>
+              </div>
+
+              {purchase.arrival_mode === "with_me" ? (
+                <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => updatePurchase("release_mode", "available")}
+                    className={cn(
+                      "rounded-xl border px-4 py-3 text-left text-sm transition",
+                      purchase.release_mode === "available" ? "border-emerald-200 bg-white text-emerald-800 shadow-sm" : "border-gray-200 bg-white text-gray-600"
+                    )}
+                  >
+                    <span className="block font-bold">Liberar como em estoque</span>
+                    <span className="text-xs opacity-75">Disponível para venda</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updatePurchase("release_mode", "pending_review")}
+                    className={cn(
+                      "rounded-xl border px-4 py-3 text-left text-sm transition",
+                      purchase.release_mode === "pending_review" ? "border-purple-200 bg-white text-purple-700 shadow-sm" : "border-gray-200 bg-white text-gray-600"
+                    )}
+                  >
+                    <span className="block font-bold">Recebido, aguardando revisão</span>
+                    <span className="text-xs opacity-75">Bloqueado até laudo/conferência</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <Select label="Origem" value={purchase.source_type} onChange={(event) => updatePurchase("source_type", event.target.value)} options={sourceTypeOptions} />
+                  <Input label="Previsão de chegada" type="date" value={purchase.expected_arrival_date} onChange={(event) => updatePurchase("expected_arrival_date", event.target.value)} />
+                </div>
+              )}
             </div>
             <Textarea label="Observacoes da compra" value={purchase.notes} onChange={(event) => updatePurchase("notes", event.target.value)} placeholder="Ex: compra de lote, origem, negociacao, observacoes do fornecedor..." />
           </section>
@@ -748,9 +1095,10 @@ export default function NewInventoryPurchasePage() {
                 const colorOptions = ((model?.colors || []) as CatalogColor[])
                 const manualColorOptions = manualColorOptionsFor(line)
                 const quantity = Math.max(1, Math.floor(toNumber(line.quantity)))
-                const unitCost = toNumber(line.unitCost)
-                const landedCost = roundMoney(unitCost + totals.freightPerUnit + totals.otherPerUnit)
-                const suggested = toNumber(line.suggestedPrice) || Math.ceil(landedCost * (1 + toNumber(line.marginPct) / 100))
+                const effectiveUnitCost = lineEffectiveUnitCost(line)
+                const landedCost = roundMoney(effectiveUnitCost + totals.freightPerUnit + totals.otherPerUnit)
+                const suggested = lineEffectiveSuggestedPrice(line, landedCost)
+                const hasVariantPricing = isLineAccessory(line, catalogConfig) && !line.accessoryHasSerial && line.variants.length > 0 && line.useVariantPricing
                 const collapsed = collapsedLineIds.has(line.id)
                 const categoryInfo = getCatalogCategory(catalogConfig, line.category)
                 const canShowBattery = !accessoryLine
@@ -785,6 +1133,11 @@ export default function NewInventoryPurchasePage() {
                             {needsChecklistLater(line, catalogConfig) && <Badge variant="yellow">Checklist depois</Badge>}
                           </div>
                           <h4 className="mt-2 truncate text-lg font-bold text-navy-900">{lineProductName(line, catalogConfig)}</h4>
+                          {accessoryLine && line.mode === "catalog" && line.commercialName.trim() ? (
+                            <p className="mt-0.5 truncate text-xs text-gray-400">
+                              Catálogo: {catalogGeneratedName(line, catalogConfig)} · {lineEffectiveQuantity(line)} un.
+                            </p>
+                          ) : null}
                           <p className="mt-1 text-sm text-gray-500">
                             Custo final unitário: <strong className="text-navy-900">{formatBRL(landedCost)}</strong>
                             <span className="mx-2 text-gray-300">•</span>
@@ -815,65 +1168,328 @@ export default function NewInventoryPurchasePage() {
                         ) : null}
 
                         <BatchLineSection number={1} title={line.mode === "manual" ? "Informações do produto" : "Produto"}>
-                          <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-12">
-                            <div className="min-w-0 md:col-span-3">
-                              <Select label="Tipo" value={line.mode} onChange={(event) => updateLine(line.id, "mode", event.target.value)} options={[{ label: "Catálogo", value: "catalog" }, { label: "Manual/outro", value: "manual" }]} />
-                            </div>
-                            <div className="min-w-0 md:col-span-3">
-                              <Select label="Categoria" value={line.category} onChange={(event) => updateLine(line.id, "category", event.target.value)} options={categoryOptions} />
-                            </div>
-                            {line.mode === "catalog" ? (
-                              <>
-                                <div className="min-w-0 md:col-span-3">
-                                  <Select label="Modelo" value={String(line.modelIdx)} onChange={(event) => updateLine(line.id, "modelIdx", event.target.value)} options={(categoryInfo?.models || []).map((item: any, idx: number) => ({ label: item.name, value: String(idx) }))} />
-                                </div>
-                                {!accessoryLine ? (
-                                  <div className="min-w-0 md:col-span-3">
-                                    <Select label="Armazenamento" value={line.storage} onChange={(event) => updateLine(line.id, "storage", event.target.value)} options={[{ label: "Selecionar", value: "" }, ...storageOptions]} />
-                                  </div>
-                                ) : null}
-                              </>
-                            ) : (
-                              <div className="min-w-0 md:col-span-6">
-                                <Input label="Nome do produto" value={line.manualName} onChange={(event) => updateLine(line.id, "manualName", event.target.value)} placeholder="Ex: Capa para iPad, Cabo USB-C, Apple Pencil..." />
+                          <div className="space-y-3">
+                            <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-12">
+                              <div className="min-w-0 md:col-span-3">
+                                <Select label="Tipo" value={line.mode} onChange={(event) => updateLine(line.id, "mode", event.target.value)} options={[{ label: "Catálogo", value: "catalog" }, { label: "Manual/outro", value: "manual" }]} />
                               </div>
-                            )}
+                              <div className="min-w-0 md:col-span-3">
+                                <Select label="Categoria" value={line.category} onChange={(event) => updateLine(line.id, "category", event.target.value)} options={categoryOptions} />
+                              </div>
+                              {line.mode === "catalog" ? (
+                                <>
+                                  <div className="min-w-0 md:col-span-3">
+                                    <Select label="Modelo" value={String(line.modelIdx)} onChange={(event) => updateLine(line.id, "modelIdx", event.target.value)} options={(categoryInfo?.models || []).map((item: any, idx: number) => ({ label: item.name, value: String(idx) }))} />
+                                  </div>
+                                  {!accessoryLine ? (
+                                    <div className="min-w-0 md:col-span-3">
+                                      <Select label="Armazenamento" value={line.storage} onChange={(event) => updateLine(line.id, "storage", event.target.value)} options={[{ label: "Selecionar", value: "" }, ...storageOptions]} />
+                                    </div>
+                                  ) : null}
+                                </>
+                              ) : (
+                                <div className="min-w-0 md:col-span-6">
+                                  <Input label="Nome do produto" value={line.manualName} onChange={(event) => updateLine(line.id, "manualName", event.target.value)} placeholder="Ex: Capa para iPad, Cabo USB-C, Apple Pencil..." />
+                                </div>
+                              )}
+                            </div>
+                            {accessoryLine && line.mode === "catalog" ? (
+                              <div>
+                                <Input
+                                  label="Nome comercial do acessório"
+                                  value={line.commercialName}
+                                  onChange={(event) => updateLine(line.id, "commercialName", event.target.value)}
+                                  placeholder={catalogGeneratedName(line, catalogConfig) || "Ex: Capa Trifold para iPad A16 (11\") - Modelo Executivo"}
+                                />
+                                <p className="mt-1 text-xs text-gray-500">
+                                  Este nome aparecerá no estoque e na venda. O catálogo continua preservado para categoria, modelo e cores.
+                                </p>
+                              </div>
+                            ) : null}
                           </div>
                         </BatchLineSection>
 
-                        <BatchLineSection number={2} title="Cor" subtitle={line.mode === "manual" ? "Opcional para itens fora do catálogo." : undefined}>
-                          <ColorSwatchPicker
-                            colors={line.mode === "manual" ? manualColorOptions : colorOptions}
-                            value={line.color}
-                            subtitle={line.mode === "manual" ? "Cores globais ou livres para este item." : `Cores disponíveis para ${model?.name || "este modelo"}`}
-                            allowNoColor={line.mode === "manual"}
-                            allowOutOfCatalog={line.mode === "catalog"}
-                            noColorLabel="Sem cor"
-                            onClear={() => {
-                              updateLine(line.id, "color", "")
-                              updateLine(line.id, "colorHex", "")
-                            }}
-                            onChange={(color) => {
-                              updateLine(line.id, "color", color.name)
-                              updateLine(line.id, "colorHex", color.hex)
-                            }}
-                            onCreateColor={(color) => line.mode === "manual" ? createManualColorForLine(line, color) : createColorForLine(line, color)}
-                            createLabel={line.mode === "manual" ? "Adicionar nova cor" : "Adicionar nova cor ao modelo"}
-                            emptyMessage={line.mode === "manual" ? "Nenhuma cor global configurada. Use uma sugestão ou adicione uma nova cor." : "Nenhuma cor configurada para este modelo."}
-                          />
+                        <BatchLineSection number={2} title={accessoryLine && !line.accessoryHasSerial ? "Variações por cor" : "Cor"} subtitle={accessoryLine && !line.accessoryHasSerial ? "Informe as cores disponíveis e suas quantidades." : line.mode === "manual" ? "Opcional para itens fora do catálogo." : undefined}>
+                          {accessoryLine && !line.accessoryHasSerial ? (
+                            <div className="space-y-3">
+                              {line.variants.length > 0 ? (
+                                <div className="space-y-3">
+                                  <div className={cn(
+                                    "hidden px-4 text-[11px] font-semibold uppercase tracking-wide text-slate-400 sm:grid sm:items-center sm:gap-3",
+                                    line.useVariantPricing ? "sm:grid-cols-[1.5fr_90px_140px_140px_40px]" : "sm:grid-cols-[1.5fr_90px_40px]"
+                                  )}>
+                                    <span>Cor/Variação</span>
+                                    <span>Qtd</span>
+                                    {line.useVariantPricing ? (
+                                      <>
+                                        <span>Custo unit.</span>
+                                        <span>Preço sugerido</span>
+                                      </>
+                                    ) : null}
+                                    <span />
+                                  </div>
+                                  {line.variants.map((v) => (
+                                    <div
+                                      key={v.id}
+                                      className={cn(
+                                        "grid items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3",
+                                        line.useVariantPricing
+                                          ? "grid-cols-1 sm:grid-cols-[1.5fr_90px_140px_140px_40px]"
+                                          : "grid-cols-1 sm:grid-cols-[1.5fr_90px_40px]"
+                                      )}
+                                    >
+                                      <div className="flex min-w-0 items-center gap-2">
+                                        <span className="h-3 w-3 shrink-0 rounded-full border border-slate-200" style={{ backgroundColor: v.colorHex || "#e5e7eb" }} />
+                                        <span className="truncate font-medium text-slate-900">{v.colorName}</span>
+                                      </div>
+                                      <div className="min-w-0">
+                                        <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-400 sm:hidden">Qtd</span>
+                                        <input
+                                          type="number"
+                                          min="1"
+                                          className="h-10 w-20 rounded-xl border border-slate-200 bg-white px-2 text-center text-sm font-medium text-navy-900 focus:outline-none focus:ring-2 focus:ring-royal-500"
+                                          value={v.quantity}
+                                          onChange={(e) =>
+                                            setLines((prev) => prev.map((l) =>
+                                              l.id !== line.id ? l : {
+                                                ...l,
+                                                variants: l.variants.map((item) =>
+                                                  item.id === v.id ? { ...item, quantity: e.target.value } : item
+                                                ),
+                                              }
+                                            ))
+                                          }
+                                        />
+                                      </div>
+                                      {line.useVariantPricing ? (
+                                        <>
+                                          <div className="min-w-0">
+                                            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-400 sm:hidden">Custo unit.</span>
+                                            <input
+                                              type="text"
+                                              inputMode="decimal"
+                                              placeholder="0,00"
+                                              className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-navy-900 placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-royal-500"
+                                              value={v.unitCost}
+                                              onChange={(e) =>
+                                                setLines((prev) => prev.map((l) =>
+                                                  l.id !== line.id ? l : {
+                                                    ...l,
+                                                    variants: l.variants.map((item) =>
+                                                      item.id === v.id ? { ...item, unitCost: e.target.value } : item
+                                                    ),
+                                                  }
+                                                ))
+                                              }
+                                            />
+                                          </div>
+                                          <div className="min-w-0">
+                                            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-400 sm:hidden">Preço sugerido</span>
+                                            <input
+                                              type="text"
+                                              inputMode="decimal"
+                                              placeholder="0,00"
+                                              className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-navy-900 placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-royal-500"
+                                              value={v.suggestedPrice}
+                                              onChange={(e) =>
+                                                setLines((prev) => prev.map((l) =>
+                                                  l.id !== line.id ? l : {
+                                                    ...l,
+                                                    variants: l.variants.map((item) =>
+                                                      item.id === v.id ? { ...item, suggestedPrice: e.target.value } : item
+                                                    ),
+                                                  }
+                                                ))
+                                              }
+                                            />
+                                          </div>
+                                        </>
+                                      ) : null}
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setLines((prev) => prev.map((l) =>
+                                            l.id !== line.id ? l : { ...l, variants: l.variants.filter((item) => item.id !== v.id) }
+                                          ))
+                                        }
+                                        className="flex h-10 w-10 items-center justify-center rounded-xl text-gray-400 hover:bg-red-50 hover:text-red-500"
+                                        aria-label={`Remover variação ${v.colorName}`}
+                                      >
+                                        <X className="h-4 w-4" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                  {(() => {
+                                    const stats = variantPricingStats(line)
+                                    const estimatedCost = stats.totalQty * toNumber(line.unitCost)
+                                    return (
+                                      <div className="grid grid-cols-2 gap-2 rounded-2xl bg-slate-50 p-3 md:grid-cols-5">
+                                        <div className="rounded-xl bg-white px-3 py-2">
+                                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Total</p>
+                                          <p className="mt-1 text-sm font-bold text-navy-900">{stats.totalQty} unidades</p>
+                                        </div>
+                                        <div className="rounded-xl bg-white px-3 py-2">
+                                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Custo total</p>
+                                          <p className="mt-1 text-sm font-bold text-navy-900">
+                                            {line.useVariantPricing ? formatBRL(stats.totalCost) : estimatedCost > 0 ? formatBRL(estimatedCost) : "—"}
+                                          </p>
+                                        </div>
+                                        <div className="rounded-xl bg-white px-3 py-2">
+                                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Custo médio</p>
+                                          <p className="mt-1 text-sm font-bold text-navy-900">{line.useVariantPricing && stats.avgCost > 0 ? formatBRL(stats.avgCost) : "—"}</p>
+                                        </div>
+                                        <div className="rounded-xl bg-white px-3 py-2">
+                                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Preço médio</p>
+                                          <p className="mt-1 text-sm font-bold text-navy-900">{line.useVariantPricing && stats.avgSuggested > 0 ? formatBRL(stats.avgSuggested) : "—"}</p>
+                                        </div>
+                                        <div className="rounded-xl bg-white px-3 py-2">
+                                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Receita sugerida</p>
+                                          <p className="mt-1 text-sm font-bold text-navy-900">{line.useVariantPricing && stats.totalSuggested > 0 ? formatBRL(stats.totalSuggested) : "—"}</p>
+                                        </div>
+                                      </div>
+                                    )
+                                  })()}
+                                  <label className="flex cursor-pointer flex-col gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 sm:flex-row sm:items-center">
+                                    <input
+                                      type="checkbox"
+                                      className="h-4 w-4 rounded border-gray-300 accent-royal-600"
+                                      checked={line.useVariantPricing}
+                                      onChange={(e) =>
+                                        setLines((prev) => prev.map((l) =>
+                                          l.id !== line.id ? l : { ...l, useVariantPricing: e.target.checked }
+                                        ))
+                                      }
+                                    />
+                                    <span className="text-sm font-semibold text-navy-900">Definir custo/preço por variação</span>
+                                    <span className="text-xs text-gray-400">Use apenas se alguma cor teve custo ou preço diferente.</span>
+                                  </label>
+                                </div>
+                              ) : (
+                                <p className="rounded-xl border border-dashed border-gray-200 p-3 text-xs text-gray-500">
+                                  Selecione as cores abaixo para adicionar variações.
+                                </p>
+                              )}
+                              <div className="space-y-2 pt-1">
+                                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Adicionar cor</p>
+                                <div className="flex flex-wrap gap-2">
+                                  {(line.mode === "manual" ? manualColorOptions : colorOptions)
+                                    .filter((c) => !line.variants.find((v) => v.colorName.toLowerCase() === c.name.toLowerCase()))
+                                    .map((color) => (
+                                      <button
+                                        key={color.name}
+                                        type="button"
+                                        onClick={() =>
+                                          setLines((prev) => prev.map((l) =>
+                                            l.id !== line.id ? l : {
+                                              ...l,
+                                              variants: [
+                                                ...l.variants,
+                                                { id: crypto.randomUUID(), colorName: color.name, colorHex: color.hex, quantity: "1", unitCost: "", suggestedPrice: "" },
+                                              ],
+                                            }
+                                          ))
+                                        }
+                                        className="flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-navy-900 transition hover:border-royal-300 hover:bg-royal-50"
+                                      >
+                                        <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: color.hex }} />
+                                        {color.name}
+                                      </button>
+                                    ))}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const name = window.prompt("Nome da nova cor/variação:")
+                                      if (!name?.trim()) return
+                                      setLines((prev) => prev.map((l) =>
+                                        l.id !== line.id ? l : {
+                                          ...l,
+                                          variants: [
+                                            ...l.variants,
+                                            { id: crypto.randomUUID(), colorName: name.trim(), colorHex: "", quantity: "1", unitCost: "", suggestedPrice: "" },
+                                          ],
+                                        }
+                                      ))
+                                    }}
+                                    className="rounded-full border border-dashed border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-500 transition hover:border-royal-300 hover:text-royal-600"
+                                  >
+                                    + Nova cor/variação
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <ColorSwatchPicker
+                              colors={line.mode === "manual" ? manualColorOptions : colorOptions}
+                              value={line.color}
+                              subtitle={line.mode === "manual" ? "Cores globais ou livres para este item." : `Cores disponíveis para ${model?.name || "este modelo"}`}
+                              allowNoColor={line.mode === "manual"}
+                              allowOutOfCatalog={line.mode === "catalog"}
+                              noColorLabel="Sem cor"
+                              onClear={() => {
+                                updateLine(line.id, "color", "")
+                                updateLine(line.id, "colorHex", "")
+                              }}
+                              onChange={(color) => {
+                                updateLine(line.id, "color", color.name)
+                                updateLine(line.id, "colorHex", color.hex)
+                              }}
+                              onCreateColor={(color) => line.mode === "manual" ? createManualColorForLine(line, color) : createColorForLine(line, color)}
+                              createLabel={line.mode === "manual" ? "Adicionar nova cor" : "Adicionar nova cor ao modelo"}
+                              emptyMessage={line.mode === "manual" ? "Nenhuma cor global configurada. Use uma sugestão ou adicione uma nova cor." : "Nenhuma cor configurada para este modelo."}
+                            />
+                          )}
                         </BatchLineSection>
 
                         <BatchLineSection number={3} title="Detalhes comerciais">
-                          <div className={cn("grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2", canShowBattery ? "lg:grid-cols-6" : "lg:grid-cols-5")}>
-                            <Select label="Condição" value={line.grade} onChange={(event) => updateLine(line.id, "grade", event.target.value)} options={gradeOptions} />
-                            <Input label="Quantidade" type="number" min="1" value={line.quantity} onChange={(event) => updateLine(line.id, "quantity", event.target.value)} />
-                            <Input label="Custo unitário" inputMode="decimal" value={line.unitCost} onChange={(event) => updateLine(line.id, "unitCost", event.target.value)} placeholder="0,00" />
-                            <Input label="Margem %" inputMode="decimal" value={line.marginPct} onChange={(event) => updateLine(line.id, "marginPct", event.target.value)} />
-                            <Input label="Preço sugerido" inputMode="decimal" value={line.suggestedPrice} onChange={(event) => updateLine(line.id, "suggestedPrice", event.target.value)} placeholder={String(suggested || "")} />
-                            {canShowBattery ? (
-                              <Input label="Bateria %" type="number" min="0" max="100" disabled={line.grade === "Lacrado"} value={batteryValue} onChange={(event) => updateLine(line.id, "batteryHealth", event.target.value)} />
-                            ) : null}
-                          </div>
+                          {hasVariantPricing ? (
+                            <div className="space-y-3">
+                              <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                                <Select label="Condição" value={line.grade} onChange={(event) => updateLine(line.id, "grade", event.target.value)} options={gradeOptions} />
+                                {(() => {
+                                  const stats = variantPricingStats(line)
+                                  return (
+                                    <>
+                                      <div className="rounded-xl border border-gray-100 bg-gray-50 p-3">
+                                        <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Quantidade</p>
+                                        <p className="mt-1 text-lg font-semibold text-navy-900">{stats.totalQty}</p>
+                                        <p className="text-[10px] text-gray-400">Soma das variações</p>
+                                      </div>
+                                      <div className="rounded-xl border border-gray-100 bg-gray-50 p-3">
+                                        <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Custo médio</p>
+                                        <p className="mt-1 text-lg font-semibold text-navy-900">{stats.avgCost > 0 ? formatBRL(stats.avgCost) : "—"}</p>
+                                        <p className="text-[10px] text-gray-400">Calculado das variações</p>
+                                      </div>
+                                      <div className="rounded-xl border border-gray-100 bg-gray-50 p-3">
+                                        <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Preço médio</p>
+                                        <p className="mt-1 text-lg font-semibold text-navy-900">{stats.avgSuggested > 0 ? formatBRL(stats.avgSuggested) : "—"}</p>
+                                        <p className="text-[10px] text-gray-400">Calculado das variações</p>
+                                      </div>
+                                    </>
+                                  )
+                                })()}
+                              </div>
+                              <p className="text-xs text-gray-400">Valores calculados pelas variações. Para custo/preço geral, desmarque &ldquo;Definir custo/preço por variação&rdquo;.</p>
+                            </div>
+                          ) : (
+                            <div className={cn("grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2", canShowBattery ? "lg:grid-cols-6" : "lg:grid-cols-5")}>
+                              <Select label="Condição" value={line.grade} onChange={(event) => updateLine(line.id, "grade", event.target.value)} options={gradeOptions} />
+                              {accessoryLine && !line.accessoryHasSerial && line.variants.length > 0 ? (
+                                <div className="rounded-xl border border-gray-100 bg-gray-50 p-3">
+                                  <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Quantidade</p>
+                                  <p className="mt-1 text-lg font-semibold text-navy-900">{lineEffectiveQuantity(line)}</p>
+                                  <p className="text-[10px] text-gray-400">Calculada das variações</p>
+                                </div>
+                              ) : (
+                                <Input label="Quantidade" type="number" min="1" value={line.quantity} onChange={(event) => updateLine(line.id, "quantity", event.target.value)} />
+                              )}
+                              <Input label="Custo unitário" inputMode="decimal" value={line.unitCost} onChange={(event) => updateLine(line.id, "unitCost", event.target.value)} placeholder="0,00" />
+                              <Input label="Margem %" inputMode="decimal" value={line.marginPct} onChange={(event) => updateLine(line.id, "marginPct", event.target.value)} />
+                              <Input label="Preço sugerido" inputMode="decimal" value={line.suggestedPrice} onChange={(event) => updateLine(line.id, "suggestedPrice", event.target.value)} placeholder={String(suggested || "")} />
+                              {canShowBattery ? (
+                                <Input label="Bateria %" type="number" min="0" max="100" disabled={line.grade === "Lacrado"} value={batteryValue} onChange={(event) => updateLine(line.id, "batteryHealth", event.target.value)} />
+                              ) : null}
+                            </div>
+                          )}
                         </BatchLineSection>
 
                         <BatchLineSection number={4} title="Identificação">
