@@ -188,6 +188,15 @@ async function runAsyncPlannerTests() {
     fetcherCalls++
     return new Response("should not be called", { status: 500 })
   }
+  const mockRoute = (route: Record<string, unknown>) => async (_url: string | URL | Request, init?: RequestInit) => {
+    fetcherCalls++
+    const body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>
+    const input = JSON.parse(String(body.input || "{}")) as Record<string, unknown>
+    assert.ok(!("snapshot" in input), "semantic router must not receive snapshot")
+    assert.ok(!("cards" in input), "semantic router must not receive cards")
+    assert.ok(!("financialPayload" in input), "semantic router must not receive financial payload")
+    return new Response(JSON.stringify({ output_text: JSON.stringify(route) }), { status: 200 })
+  }
 
   const memoryReviewPlan = await buildSemanticPlanWithAI({
     userQuestion: "E aquelas ações que você tinha sugerido, tem algo em aberto?",
@@ -215,40 +224,164 @@ async function runAsyncPlannerTests() {
   assert.equal(auditPlan.plannerMode, "deterministic_fast_path")
   assert.equal(fetcherCalls, 0, "fast path must not call AI fetcher")
 
-  // Ambiguous question — AI is called (and used when confidence is high).
-  const ambiguousPlan = await buildSemanticPlanWithAI({
-    userQuestion: "Me dá uma visão sincera do negócio",
+  // Clear macro-domain questions use the local semantic route; AI fetcher is not called.
+  fetcherCalls = 0
+  let routerSource: string | null = null
+  const todayPlan = await buildSemanticPlanWithAI({
+    userQuestion: "Oi. O que devemos fazer hoje?",
   }, {
     apiKey: "test-key",
-    fetcher: async () => new Response(JSON.stringify({
-      output_text: JSON.stringify({
-        primaryGoal: "business_review",
-        secondaryGoals: ["recommendations"],
-        toolsNeeded: ["sales.performance"],
-        timeframe: { type: "current_period", days: null, startDate: null, endDate: null, label: "período atual" },
-        budgetAmount: null,
-        budgetCurrency: null,
-        entities: [],
-        comparisonTargets: [],
-        responseMode: "executive_summary",
+    fetcher: failingFetcher,
+    onSemanticRouter: (meta) => { routerSource = meta.source },
+  })
+  assert.equal(todayPlan.primaryGoal, "operational_action")
+  assert.equal(todayPlan.plannerMode, "local_semantic_route")
+  assert.equal(todayPlan.responseMode, "operational_plan")
+  assert.equal(todayPlan.timeframe.type, "today")
+  assert.equal(fetcherCalls, 0)
+  assert.equal(routerSource, "local")
+
+  fetcherCalls = 0
+  const lostPlan = await buildSemanticPlanWithAI({
+    userQuestion: "Estou meio perdido hoje",
+  }, {
+    apiKey: "test-key",
+    fetcher: failingFetcher,
+  })
+  assert.equal(lostPlan.primaryGoal, "operational_action")
+  assert.equal(lostPlan.plannerMode, "local_semantic_route")
+  assert.equal(fetcherCalls, 0)
+
+  fetcherCalls = 0
+  const ownerPlan = await buildSemanticPlanWithAI({
+    userQuestion: "O que você faria se estivesse no meu lugar?",
+  }, {
+    apiKey: "test-key",
+    fetcher: failingFetcher,
+  })
+  assert.equal(ownerPlan.primaryGoal, "business_strategy")
+  assert.equal(ownerPlan.plannerMode, "local_semantic_route")
+  assert.notEqual(ownerPlan.timeframe.type, "today")
+  assert.equal(fetcherCalls, 0)
+
+  fetcherCalls = 0
+  const blindSpotPlan = await buildSemanticPlanWithAI({
+    userQuestion: "Tem algo que eu não estou vendo?",
+  }, {
+    apiKey: "test-key",
+    fetcher: failingFetcher,
+  })
+  assert.equal(blindSpotPlan.primaryGoal, "business_strategy")
+  assert.equal(blindSpotPlan.plannerMode, "local_semantic_route")
+  assert.equal(fetcherCalls, 0)
+
+  fetcherCalls = 0
+  const companyHealthPlan = await buildSemanticPlanWithAI({
+    userQuestion: "A Nobretech está indo bem?",
+  }, {
+    apiKey: "test-key",
+    fetcher: failingFetcher,
+  })
+  assert.equal(companyHealthPlan.primaryGoal, "business_review")
+  assert.equal(companyHealthPlan.plannerMode, "local_semantic_route")
+  assert.equal(fetcherCalls, 0)
+
+  // Weekly strategy question uses local macro routing now, not the remote semantic router.
+  fetcherCalls = 0
+  const weeklyStrategyPlan = await buildSemanticPlanWithAI({
+    userQuestion: "Me dá uma visão sincera do que eu deveria fazer essa semana.",
+  }, {
+    apiKey: "test-key",
+    fetcher: failingFetcher,
+  })
+  assert.equal(weeklyStrategyPlan.primaryGoal, "business_strategy")
+  assert.equal(weeklyStrategyPlan.plannerMode, "local_semantic_route")
+  assert.equal(weeklyStrategyPlan.timeframe.type, "next_n_days")
+  assert.equal(weeklyStrategyPlan.timeframe.days, 7)
+  assert.match(weeklyStrategyPlan.timeframe.label, /semana/i)
+  assert.equal(fetcherCalls, 0, "weekly strategy should not call remote semantic router")
+
+  // Forward plan question also uses local macro routing.
+  fetcherCalls = 0
+  const forwardPlan = await buildSemanticPlanWithAI({
+    userQuestion: "Qual meu plano para os próximos dias?",
+  }, {
+    apiKey: "test-key",
+    fetcher: failingFetcher,
+  })
+  assert.equal(forwardPlan.primaryGoal, "business_strategy")
+  assert.equal(forwardPlan.plannerMode, "local_semantic_route")
+  assert.equal(fetcherCalls, 0, "forward plan should not call remote semantic router")
+
+  // Ambiguous question — AI is called (and used when confidence is high).
+  fetcherCalls = 0
+  const ambiguousPlan = await buildSemanticPlanWithAI({
+    userQuestion: "Me dá uma leitura sincera do cenário",
+  }, {
+    apiKey: "test-key",
+    fetcher: mockRoute({
+        intent: "business_review",
         confidence: "high",
-        needsClarification: false,
-        clarificationQuestion: null,
-        reasoningHints: [],
+        timeframe: { type: "unknown", days: null, label: null },
+        budgetAmount: null,
+        entities: [],
+        toolsNeeded: ["sales.performance"],
+        reasoning: "Pergunta pede leitura ampla do negócio.",
       }),
-    }), { status: 200 }),
   })
   assert.equal(ambiguousPlan.plannerMode, "ai_semantic_plan")
   assert.equal(ambiguousPlan.primaryGoal, "business_review")
 
-  // Ambiguous question with AI failure falls back deterministically (no crash).
+  // Natural management question with clear macro intent stays local and does not call failed router.
+  fetcherCalls = 0
   const ambiguousFallback = await buildSemanticPlanWithAI({
-    userQuestion: "Me dá uma visão sincera do negócio",
+    userQuestion: "Qual é o movimento mais inteligente agora?",
   }, {
     apiKey: "test-key",
     fetcher: async () => new Response(JSON.stringify({ error: "boom" }), { status: 500 }),
   })
-  assert.equal(ambiguousFallback.plannerMode, "deterministic_fallback")
+  assert.equal(ambiguousFallback.plannerMode, "local_semantic_route")
+  assert.notEqual(ambiguousFallback.primaryGoal, "unknown")
+  assert.ok(ambiguousFallback.primaryGoal === "operational_action" || ambiguousFallback.primaryGoal === "business_strategy")
+  assert.equal(fetcherCalls, 0)
+
+  const businessHealthFallback = await buildSemanticPlanWithAI({
+    userQuestion: "A Nobretech está indo bem?",
+  }, {
+    apiKey: "test-key",
+    fetcher: async () => new Response(JSON.stringify({ error: "boom" }), { status: 500 }),
+  })
+  assert.equal(businessHealthFallback.plannerMode, "local_semantic_route")
+  assert.equal(businessHealthFallback.primaryGoal, "business_review")
+
+  const previousRouterTimeout = process.env.ORION_SEMANTIC_ROUTER_TIMEOUT_MS
+  process.env.ORION_SEMANTIC_ROUTER_TIMEOUT_MS = "30"
+  try {
+    const timeoutFallback = await buildSemanticPlanWithAI({
+      userQuestion: "Qual é a leitura do cenário da Nobretech?",
+    }, {
+      apiKey: "test-key",
+      fetcher: async (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = (init as RequestInit | undefined)?.signal
+          signal?.addEventListener("abort", () => {
+            const err = new Error("aborted")
+            err.name = "AbortError"
+            reject(err)
+          })
+        }),
+      onSemanticRouter: (meta) => {
+        assert.equal(meta.source, "ai")
+        assert.equal(meta.timeout, true)
+        assert.equal(meta.fallback, true)
+      },
+    })
+    assert.equal(timeoutFallback.plannerMode, "deterministic_fallback")
+    assert.equal(timeoutFallback.primaryGoal, "business_strategy")
+  } finally {
+    if (previousRouterTimeout === undefined) delete process.env.ORION_SEMANTIC_ROUTER_TIMEOUT_MS
+    else process.env.ORION_SEMANTIC_ROUTER_TIMEOUT_MS = previousRouterTimeout
+  }
 }
 
 runAsyncPlannerTests()

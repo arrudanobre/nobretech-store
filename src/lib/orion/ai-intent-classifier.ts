@@ -170,7 +170,8 @@ export async function classifyIntentWithAI(input: {
   if (!apiKey) throw new Error("OPENAI_API_KEY não configurada no backend.")
 
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 25000)
+  const timeoutMs = Number(process.env.ORION_INTENT_CLASSIFIER_TIMEOUT_MS) || 3000
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     signal: controller.signal,

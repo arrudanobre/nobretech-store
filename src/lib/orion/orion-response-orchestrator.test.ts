@@ -1,5 +1,11 @@
 import assert from "node:assert/strict"
 import { buildOrionResponse } from "./orion-response-orchestrator"
+import {
+  buildStructuredIntentRoute,
+  responseKindForStructuredChat,
+  shouldBlockStrategicCopilotForStructuredGoal,
+  shouldUseLegacyIntentRoute,
+} from "./orion-route-policy"
 import { buildSemanticPlan } from "./semantic-planner"
 import type { OrionSnapshot } from "./types"
 
@@ -91,6 +97,36 @@ function snapshot(): OrionSnapshot {
       forgottenLeads: [],
     },
   } as unknown as OrionSnapshot
+}
+
+{
+  const basePlan = buildSemanticPlan({ userQuestion: "Se eu tivesse uns 4 mil pra mexer em estoque, onde você colocaria?" })
+  for (const primaryGoal of ["operational_action", "business_strategy", "business_review"] as const) {
+    const plan = {
+      ...basePlan,
+      primaryGoal,
+      responseMode: primaryGoal === "operational_action" ? "operational_plan" as const : "executive_summary" as const,
+    }
+    const route = buildStructuredIntentRoute(plan)
+    assert.equal(shouldUseLegacyIntentRoute(plan), false, `structured goal must skip legacy route: ${primaryGoal}`)
+    assert.ok(route, `structured route expected: ${primaryGoal}`)
+    assert.equal(route!.ignoreMissionContext, true)
+  }
+}
+
+{
+  const basePlan = buildSemanticPlan({ userQuestion: "Se eu tivesse uns 4 mil pra mexer em estoque, onde você colocaria?" })
+  for (const primaryGoal of ["operational_action", "business_strategy", "business_review", "capital_allocation", "marketing_strategy"] as const) {
+    const plan = { ...basePlan, primaryGoal }
+    assert.equal(shouldBlockStrategicCopilotForStructuredGoal(plan), true)
+    const kind = responseKindForStructuredChat({
+      shouldUsePlanAnswer: false,
+      shouldUseOperationalAnswer: false,
+      routeWantsStrategicCopilot: true,
+      semanticPlan: plan,
+    })
+    assert.equal(kind, "business_decision", `${primaryGoal} must not return strategic_copilot`)
+  }
 }
 
 {
@@ -565,6 +601,51 @@ function snapshot(): OrionSnapshot {
   assert.equal(response.responseKind, "decision_memory_review")
   assert.equal(response.text, "Não tenho decisões abertas em acompanhamento agora.")
   assert.equal(response.text.split("\n").length, 1)
+}
+
+// Executive Voice never uses memory finding labels as recommended product.
+{
+  const response = buildOrionResponse({
+    semanticPlan: buildSemanticPlan({ userQuestion: "Se eu tivesse uns 4 mil pra mexer em estoque, onde você colocaria?" }),
+    snapshot: snapshot(),
+    userQuestion: "Se eu tivesse uns 4 mil pra mexer em estoque, onde você colocaria?",
+    companyId: "co-1",
+  })
+  const voice = response.executiveVoice
+  assert.ok(voice, "voice expected")
+  if (voice) {
+    assert.ok(
+      !/Decis[aã]o estrat[eé]gica pendente|A[cç][aã]o operacional pendente|Decis[aã]o de capital pendente/i.test(voice.headline + " " + voice.subline),
+      `voice must not use memory finding label as product: ${voice.headline} | ${voice.subline}`
+    )
+    assert.ok(
+      !/ no undefined| no null/i.test(voice.headline),
+      "voice must not leak missing product placeholder"
+    )
+  }
+}
+
+// Structured goals route to business_decision / structured responseKinds, not openai_main.
+{
+  const cases: Array<{ question: string; expected: string }> = [
+    { question: "Me dá uma visão sincera do que eu deveria fazer essa semana.", expected: "business_decision" },
+    { question: "Se eu tivesse uns 4 mil pra mexer em estoque, onde você colocaria?", expected: "business_decision" },
+    { question: "Vale rodar tráfego agora?", expected: "business_decision" },
+    { question: "Que decisões estão abertas?", expected: "decision_memory_review" },
+    { question: "Abre pra mim o raciocínio do reinvestimento.", expected: "audit_traceability" },
+  ]
+  for (const c of cases) {
+    const plan = buildSemanticPlan({ userQuestion: c.question })
+    const response = buildOrionResponse({
+      semanticPlan: plan,
+      snapshot: snapshot(),
+      userQuestion: c.question,
+      companyId: "co-1",
+      decisionMemoryContext: { openDecisions: [], recentDecisions: [] },
+    })
+    assert.notEqual(response.responseKind, "generic_executive", `structured goal must not be generic_executive: ${c.question}`)
+    assert.equal(response.responseKind, c.expected, `${c.question} → expected ${c.expected}, got ${response.responseKind}`)
+  }
 }
 
 console.log("orion-response-orchestrator tests passed")

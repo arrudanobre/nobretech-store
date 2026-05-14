@@ -814,7 +814,8 @@ export async function buildStrategicCopilotAnswer(input: {
   if (supportsTemperature(ORION_STRATEGIC_MODEL)) requestBody.temperature = 0.45
 
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 35000)
+  const timeoutMs = Number(process.env.ORION_STRATEGIC_COPILOT_TIMEOUT_MS) || 10000
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     signal: controller.signal,

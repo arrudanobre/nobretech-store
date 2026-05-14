@@ -34,8 +34,16 @@ import {
 import { buildDecisionReflections } from "@/lib/orion/orion-reflection-loop"
 import { buildOrionProactiveAlerts, filterStaleOrionMemoryItems, type OrionProactiveAlert } from "@/lib/orion/orion-proactive-alerts"
 import { buildOrionResponse } from "@/lib/orion/orion-response-orchestrator"
+import {
+  buildStructuredIntentRoute,
+  isStructuredOrionGoal,
+  responseKindForStructuredChat,
+  shouldBlockStrategicCopilotForStructuredGoal,
+  shouldUseLegacyIntentRoute,
+} from "@/lib/orion/orion-route-policy"
 import { buildReinvestmentDecision } from "@/lib/orion/reinvestment-intelligence-engine"
 import { createOrionPerfTimer, type OrionPerfTimer } from "@/lib/orion/orion-performance-timer"
+import { buildExecutiveConversation, buildAllowedFactsFromStructured } from "@/lib/orion/orion-executive-conversation-layer"
 import { buildSemanticPlanWithAI, type OrionSemanticPlan } from "@/lib/orion/semantic-planner"
 import { buildOperationalPlan } from "@/lib/orion/operational-planning-engine"
 import { buildExecutionGuardrails } from "@/lib/orion/execution-guardrails"
@@ -212,6 +220,32 @@ function sanitizeOperationalContextForClient(operationalContext?: OrionOperation
       response: humanizeOrionText(operationalContext.operationalPlan.response),
     } : undefined,
     contexts: {},
+  }
+}
+
+async function attachExecutiveConversation(
+  payload: OrionApiPayload,
+  question: string | null,
+  semanticPlan: OrionSemanticPlan | null,
+  timer: OrionPerfTimer
+): Promise<OrionApiPayload> {
+  if (!question || !semanticPlan) return payload
+  const response = payload.orionResponse
+  if (!response || response.responseKind === "generic_executive") return payload
+  const allowedFacts = buildAllowedFactsFromStructured(response)
+  const conversation = await timer.mark("executiveConversation", () => buildExecutiveConversation({
+    userQuestion: question,
+    semanticPlan,
+    structuredResponse: response,
+    businessDecision: response.structured?.businessDecision || null,
+    reinvestmentDecision: response.structured?.reinvestmentDecision || null,
+    decisionMemoryReview: response.structured?.decisionMemoryReview || null,
+    allowedFacts,
+  }))
+  timer.meta("conversationFallback", conversation.fallbackApplied ? "true" : "false")
+  return {
+    ...payload,
+    orionResponse: { ...response, executiveConversation: conversation },
   }
 }
 
@@ -413,8 +447,10 @@ async function buildPayload(
     )
     ? operationalContext.answer
     : null
+  const routeWantsStrategicCopilot = shouldUseStrategicCopilotByRoute(operationalContext)
+  const structuredGoalBlocksStrategicCopilot = shouldBlockStrategicCopilotForStructuredGoal(semanticPlan)
   let strategicCopilotAnswer = orchestratedAnswer || planAnswer || operationalExecutionAnswer || deterministicFinancialAnswer || strategicAnswerOverride || undefined
-  if (!strategicCopilotAnswer && strategicQuestion && !isDecisionMemoryReview && shouldUseStrategicCopilotByRoute(operationalContext)) {
+  if (!strategicCopilotAnswer && strategicQuestion && !isDecisionMemoryReview && routeWantsStrategicCopilot && !structuredGoalBlocksStrategicCopilot) {
     strategicCopilotAnswer = await buildStrategicCopilotAnswer({
       question: strategicQuestion,
       snapshot,
@@ -522,13 +558,29 @@ export async function POST(request: NextRequest) {
   const force = Boolean(body.force)
   const question = mode === "chat" ? sanitizeQuestion(body.message) : null
   const semanticPlanForQuestion = question
-    ? await timer.mark("semanticPlanner", () => buildSemanticPlanWithAI({ userQuestion: question }))
+    ? await timer.mark("semanticPlanner", () => buildSemanticPlanWithAI({ userQuestion: question }, {
+        onSemanticRouter: (meta) => {
+          timer.note("semanticRouter", meta.durationMs)
+          timer.meta("semanticRouterModel", meta.model)
+          timer.meta("semanticRouterSource", meta.source)
+          timer.meta("semanticRouterIntent", meta.intent)
+          timer.meta("semanticRouterConfidence", meta.confidence)
+          timer.meta("semanticRouterFallback", meta.fallback ? "true" : "false")
+          timer.meta("semanticRouterTimeout", meta.timeout ? "true" : "false")
+        },
+      }))
     : null
   if (semanticPlanForQuestion) {
     timer.meta("plannerMode", semanticPlanForQuestion.plannerMode)
     timer.meta("primaryGoal", semanticPlanForQuestion.primaryGoal)
   }
   const isDecisionMemoryReviewQuestion = semanticPlanForQuestion?.primaryGoal === "decision_memory_review"
+  const isStructuredGoal = isStructuredOrionGoal(semanticPlanForQuestion)
+  if (isStructuredGoal) timer.meta("structuredGoal", "true")
+  const useLegacyIntentRoute = mode === "chat"
+    && Boolean(question)
+    && !isDecisionMemoryReviewQuestion
+    && shouldUseLegacyIntentRoute(semanticPlanForQuestion)
   const previousConversationState = mode === "chat"
     ? coerceOperationalConversationState(body.operationalConversationState || body.conversationState)
     : null
@@ -536,11 +588,13 @@ export async function POST(request: NextRequest) {
   const persistentMemory = isDecisionMemoryReviewQuestion
     ? { memoryTableReady: false, memoryItems: [], proactiveAlerts: [] as OrionProactiveAlert[] }
     : await timer.mark("enrichMemory", () => enrichSnapshotWithPersistentOrionMemory(companyId, snapshot, false))
-  const commercialSubject = mode === "chat" && question && !isDecisionMemoryReviewQuestion
+  const commercialSubject = useLegacyIntentRoute && question
     ? await timer.mark("commercialSubject", () => resolveCommercialSubject(companyId, question))
     : null
   const intentRoute = mode === "chat" && question && !isDecisionMemoryReviewQuestion
-    ? await timer.mark("intentRoute", () => routeOrionIntent({ message: question, previousState: previousConversationState, commercialSubject }))
+    ? isStructuredGoal
+      ? timer.markSync("intentRoute", () => buildStructuredIntentRoute(semanticPlanForQuestion))
+      : await timer.mark("intentRoute", () => routeOrionIntent({ message: question, previousState: previousConversationState, commercialSubject }))
     : null
   const commercialSubjectSummary = summarizeCommercialSubjectResolution(commercialSubject)
   const operationalContext = mode === "chat" && question && !isDecisionMemoryReviewQuestion
@@ -685,7 +739,8 @@ export async function POST(request: NextRequest) {
   if (mode === "chat" && question && isDecisionMemoryReviewQuestion) {
     timer.meta("responseKind", "decision_memory_review")
     const localAnalysis = buildLocalOrionAnalysis(snapshot, question, null)
-    const payload = await timer.mark("buildPayload", () => buildPayload(companyId, companyName, localAnalysis, snapshot, false, null, question, null, previousConversationState, semanticPlanForQuestion))
+    let payload = await timer.mark("buildPayload", () => buildPayload(companyId, companyName, localAnalysis, snapshot, false, null, question, null, previousConversationState, semanticPlanForQuestion))
+    payload = await attachExecutiveConversation(payload, question, semanticPlanForQuestion, timer)
     await saveOrionAnalysisLog({
       companyId,
       userId: appUserId,
@@ -704,13 +759,22 @@ export async function POST(request: NextRequest) {
 
   const shouldUsePlanAnswer = Boolean(operationalPlan && reasoningMode && !isExecutionReasoningMode(reasoningMode))
   const shouldUseOperationalAnswer = shouldUseOperationalExecutionAnswer(promptConversationState)
-  if (mode === "chat" && question && (shouldUsePlanAnswer || shouldUseOperationalAnswer || shouldUseStrategicCopilotByRoute(operationalContext))) {
-    timer.meta("responseKind", shouldUsePlanAnswer ? "plan_answer" : shouldUseOperationalAnswer ? "operational_answer" : "strategic_copilot")
-    const strategicAnswerOverride = !shouldUseOperationalAnswer && usage.monthlyLimit !== null && usage.callsThisMonth >= usage.monthlyLimit
+  const routeWantsStrategicCopilot = shouldUseStrategicCopilotByRoute(operationalContext)
+  const structuredGoalBlocksStrategicCopilot = shouldBlockStrategicCopilotForStructuredGoal(semanticPlanForQuestion)
+  const responseKind = responseKindForStructuredChat({
+    shouldUsePlanAnswer,
+    shouldUseOperationalAnswer,
+    routeWantsStrategicCopilot,
+    semanticPlan: semanticPlanForQuestion,
+  })
+  if (mode === "chat" && question && (shouldUsePlanAnswer || shouldUseOperationalAnswer || (routeWantsStrategicCopilot && !structuredGoalBlocksStrategicCopilot) || isStructuredGoal)) {
+    timer.meta("responseKind", responseKind)
+    const strategicAnswerOverride = !structuredGoalBlocksStrategicCopilot && !shouldUseOperationalAnswer && usage.monthlyLimit !== null && usage.callsThisMonth >= usage.monthlyLimit
       ? fallbackStrategicCopilotAnswer()
       : null
     const localAnalysis = buildLocalOrionAnalysis(snapshot, question, operationalContext)
-    const payload = await timer.mark("buildPayload", () => buildPayload(companyId, companyName, localAnalysis, snapshot, false, operationalContext, question, strategicAnswerOverride, previousConversationState, semanticPlanForQuestion))
+    let payload = await timer.mark("buildPayload", () => buildPayload(companyId, companyName, localAnalysis, snapshot, false, operationalContext, question, strategicAnswerOverride, previousConversationState, semanticPlanForQuestion))
+    payload = await attachExecutiveConversation(payload, question, semanticPlanForQuestion, timer)
     const usedFallback = payload.strategicCopilotAnswer === fallbackStrategicCopilotAnswer()
     await saveOrionAnalysisLog({
       companyId,
@@ -784,6 +848,9 @@ export async function POST(request: NextRequest) {
   }
 
   timer.meta("responseKind", "openai_main")
+  if (isStructuredGoal) {
+    console.warn(`[ORION_ROUTE_WARN] structured goal fell into openai_main: ${semanticPlanForQuestion?.primaryGoal}`)
+  }
   try {
     const result = await timer.mark("openaiMain", () => runOrionOpenAI(snapshot, question, operationalContext, promptConversationState))
     const estimatedCostUsd = estimateOpenAICostUsd(result.model, result.inputTokens, result.outputTokens)

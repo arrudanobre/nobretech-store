@@ -4,6 +4,12 @@ import {
   isFinancialWithdrawalDecisionRequest,
   selectFinancialTraceabilityKind,
 } from "./financial-traceability-router"
+import {
+  buildSemanticRoute,
+  ORION_SEMANTIC_INTENTS,
+  type OrionSemanticRoute,
+  type OrionSemanticRouterMeta,
+} from "./orion-semantic-router"
 import type { OrionToolName } from "./orion-tool-registry"
 
 export type OrionSemanticPrimaryGoal =
@@ -61,7 +67,7 @@ export type OrionSemanticEntity = {
   label: string
 }
 
-export type OrionSemanticPlannerMode = "ai_semantic_plan" | "deterministic_fallback" | "deterministic_fast_path"
+export type OrionSemanticPlannerMode = "ai_semantic_plan" | "deterministic_fallback" | "deterministic_fast_path" | "local_semantic_route"
 
 export type OrionSemanticPlan = {
   primaryGoal: OrionSemanticPrimaryGoal
@@ -93,6 +99,7 @@ type BuildSemanticPlanWithAIOptions = {
   apiKey?: string | null
   model?: string
   fetcher?: SemanticPlannerFetch
+  onSemanticRouter?: (meta: OrionSemanticRouterMeta) => void
 }
 
 // Centralized tokenizer (reused, not scattered). Same pattern as financial-traceability-router.
@@ -110,117 +117,6 @@ function tokenize(value: string) {
 
 function hasAny(tokens: Set<string>, values: string[]) {
   return values.some((value) => tokens.has(value))
-}
-
-const allowedPrimaryGoals = [
-  "purchase_capacity",
-  "reinvestment_decision",
-  "withdrawal_decision",
-  "sales_performance_review",
-  "profit_traceability",
-  "inventory_review",
-  "inventory_priority",
-  "lead_review",
-  "campaign_review",
-  "marketing_strategy",
-  "cash_health",
-  "business_review",
-  "business_strategy",
-  "capital_allocation",
-  "decision_memory_review",
-  "operational_action",
-  "audit_traceability",
-  "unknown",
-] as const
-
-const allowedResponseModes = [
-  "executive_summary",
-  "audit_traceability",
-  "decision",
-  "comparison",
-  "operational_plan",
-  "memory_review",
-] as const
-
-const allowedTimeframeTypes = [
-  "current_period",
-  "today",
-  "last_n_days",
-  "date_range",
-  "next_n_days",
-  "all_available",
-  "unknown",
-] as const
-
-const allowedEntityTypes = ["product", "campaign", "lead", "finance", "inventory", "decision", "unknown"] as const
-const allowedConfidence = ["low", "medium", "high"] as const
-const allowedTools: OrionToolName[] = [
-  "finance.cashPosition",
-  "finance.receivables",
-  "finance.payables",
-  "sales.performance",
-  "sales.marginByProduct",
-  "inventory.stuckItems",
-  "inventory.availableStock",
-  "marketing.campaignPerformance",
-  "leads.funnelHealth",
-  "reinvestment.decision",
-]
-
-const semanticEntitySchema = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    type: { type: "string", enum: allowedEntityTypes },
-    label: { type: "string" },
-  },
-  required: ["type", "label"],
-}
-
-const semanticPlanSchema = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    primaryGoal: { type: "string", enum: allowedPrimaryGoals },
-    secondaryGoals: { type: "array", items: { type: "string" } },
-    toolsNeeded: { type: "array", items: { type: "string", enum: allowedTools } },
-    timeframe: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        type: { type: "string", enum: allowedTimeframeTypes },
-        days: { type: ["number", "null"] },
-        startDate: { type: ["string", "null"] },
-        endDate: { type: ["string", "null"] },
-        label: { type: "string" },
-      },
-      required: ["type", "days", "startDate", "endDate", "label"],
-    },
-    budgetAmount: { type: ["number", "null"] },
-    budgetCurrency: { type: ["string", "null"], enum: ["BRL", null] },
-    entities: { type: "array", items: semanticEntitySchema },
-    comparisonTargets: { type: "array", items: { type: "string" } },
-    responseMode: { type: "string", enum: allowedResponseModes },
-    confidence: { type: "string", enum: allowedConfidence },
-    needsClarification: { type: "boolean" },
-    clarificationQuestion: { type: ["string", "null"] },
-    reasoningHints: { type: "array", items: { type: "string" } },
-  },
-  required: [
-    "primaryGoal",
-    "secondaryGoals",
-    "toolsNeeded",
-    "timeframe",
-    "budgetAmount",
-    "budgetCurrency",
-    "entities",
-    "comparisonTargets",
-    "responseMode",
-    "confidence",
-    "needsClarification",
-    "clarificationQuestion",
-    "reasoningHints",
-  ],
 }
 
 function parseBudgetNumberFromText(value: string) {
@@ -300,6 +196,9 @@ export function parseTimeframe(message: string, currentPeriodLabel?: string | nu
 
   if (hasAny(tokenSet, ["hoje", "agora"])) {
     return { type: "current_period", days: null, startDate: null, endDate: null, label: currentPeriodLabel || "período atual" }
+  }
+  if (hasAny(tokenSet, ["semana", "semanal"])) {
+    return { type: "next_n_days", days: 7, startDate: null, endDate: null, label: "esta semana" }
   }
   if (hasAny(tokenSet, ["mes", "mensal"])) {
     return { type: "current_period", days: null, startDate: null, endDate: null, label: currentPeriodLabel || "mês atual" }
@@ -476,6 +375,15 @@ function pickPrimaryGoal(message: string): { goal: OrionSemanticPrimaryGoal; mod
   if (asksLoss) return { goal: "business_review", mode: "executive_summary" }
   if (hasAny(tokens, campaignTokens) && hasAny(tokens, ["vale", "rodar", "agora", "devo"])) return { goal: "business_strategy", mode: "decision" }
   if (hasStrategy || (tokens.has("fazer") && tokens.has("primeiro"))) return { goal: "business_strategy", mode: "operational_plan" }
+
+  // Weekly/forward-window strategy ("essa semana", "próximos dias") with action/plan/strategy/vision intent.
+  const hasWeeklyHorizon = tokens.has("semana") || tokens.has("semanal")
+    || (hasAny(tokens, ["proximos", "proximas"]) && hasAny(tokens, ["dias", "dia"]))
+  const hasStrategicIntent = tokens.has("fazer") || tokens.has("plano") || tokens.has("estrategia") || tokens.has("visao")
+    || tokens.has("deveria") || tokens.has("priorizar") || tokens.has("foco")
+  if (hasWeeklyHorizon && hasStrategicIntent) {
+    return { goal: "business_strategy", mode: "decision" }
+  }
   const multiIntent = [hasPerformance, hasProfit, hasStuckInventory, hasRecommend].filter(Boolean).length >= 2
   if (multiIntent) return { goal: "business_review", mode: "executive_summary" }
 
@@ -553,113 +461,157 @@ export function buildDeterministicSemanticPlan(input: OrionSemanticPlannerInput)
   }
 }
 
-function extractPlannerOutputText(payload: unknown): string {
-  if (!payload || typeof payload !== "object") return ""
-  const direct = (payload as { output_text?: unknown }).output_text
-  if (typeof direct === "string") return direct
-  const output = (payload as { output?: unknown }).output
-  if (!Array.isArray(output)) return ""
-  const parts: string[] = []
-  for (const item of output) {
-    if (!item || typeof item !== "object") continue
-    const content = (item as { content?: unknown }).content
-    if (!Array.isArray(content)) continue
-    for (const contentItem of content) {
-      if (!contentItem || typeof contentItem !== "object") continue
-      const text = (contentItem as { text?: unknown }).text
-      if (typeof text === "string") parts.push(text)
+function routeTimeframeToPlanTimeframe(
+  routeTimeframe: OrionSemanticRoute["timeframe"],
+  fallback: OrionSemanticTimeframe,
+  currentPeriodLabel?: string | null
+): OrionSemanticTimeframe {
+  if (!routeTimeframe) return fallback
+  if (routeTimeframe.type === "today") {
+    return {
+      type: "today",
+      days: null,
+      startDate: null,
+      endDate: null,
+      label: routeTimeframe.label || "hoje",
     }
   }
-  return parts.join("\n")
-}
-
-function compactString(value: unknown, max = 160) {
-  return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, max) : ""
-}
-
-function isAllowedValue<T extends readonly string[]>(value: unknown, allowed: T): value is T[number] {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value)
-}
-
-function normalizeStringArray(value: unknown, maxItems = 8, maxLength = 80) {
-  if (!Array.isArray(value)) return []
-  return Array.from(new Set(value.map((item) => compactString(item, maxLength)).filter(Boolean))).slice(0, maxItems)
-}
-
-function normalizeEntities(value: unknown): OrionSemanticEntity[] {
-  if (!Array.isArray(value)) return []
-  return value.flatMap((item) => {
-    if (!item || typeof item !== "object") return []
-    const rawType = (item as { type?: unknown }).type
-    const label = compactString((item as { label?: unknown }).label, 80)
-    if (!label) return []
-    return [{
-      type: isAllowedValue(rawType, allowedEntityTypes) ? rawType : "unknown",
-      label,
-    }]
-  }).slice(0, 8)
-}
-
-function normalizeTimeframe(value: unknown, fallback: OrionSemanticTimeframe): OrionSemanticTimeframe {
-  if (!value || typeof value !== "object") return fallback
-  const raw = value as Record<string, unknown>
-  const type = isAllowedValue(raw.type, allowedTimeframeTypes) ? raw.type : fallback.type
-  const days = typeof raw.days === "number" && Number.isFinite(raw.days) && raw.days > 0 && raw.days <= 3650
-    ? raw.days
-    : null
-  const label = compactString(raw.label, 80) || fallback.label
-  return {
-    type,
-    days,
-    startDate: typeof raw.startDate === "string" && raw.startDate.trim() ? raw.startDate.trim().slice(0, 20) : null,
-    endDate: typeof raw.endDate === "string" && raw.endDate.trim() ? raw.endDate.trim().slice(0, 20) : null,
-    label,
+  if (routeTimeframe.type === "current_week") {
+    return {
+      type: "next_n_days",
+      days: 7,
+      startDate: null,
+      endDate: null,
+      label: routeTimeframe.label || "esta semana",
+    }
   }
+  if (routeTimeframe.type === "next_n_days") {
+    return {
+      type: "next_n_days",
+      days: routeTimeframe.days || fallback.days || 7,
+      startDate: null,
+      endDate: null,
+      label: routeTimeframe.label || (routeTimeframe.days ? `próximos ${routeTimeframe.days} dias` : fallback.label),
+    }
+  }
+  if (routeTimeframe.type === "current_month") {
+    return {
+      type: "current_period",
+      days: null,
+      startDate: null,
+      endDate: null,
+      label: routeTimeframe.label || currentPeriodLabel || "mês atual",
+    }
+  }
+  if (routeTimeframe.type === "custom") {
+    return {
+      type: "date_range",
+      days: routeTimeframe.days || null,
+      startDate: null,
+      endDate: null,
+      label: routeTimeframe.label || fallback.label,
+    }
+  }
+  return fallback
 }
 
-function normalizeAiPlan(value: unknown, fallback: OrionSemanticPlan): OrionSemanticPlan | null {
-  if (!value || typeof value !== "object") return null
-  const raw = value as Record<string, unknown>
-  if (!isAllowedValue(raw.primaryGoal, allowedPrimaryGoals)) return null
-  if (!isAllowedValue(raw.responseMode, allowedResponseModes)) return null
-  if (!isAllowedValue(raw.confidence, allowedConfidence)) return null
+function responseModeForRoute(intent: OrionSemanticRoute["intent"], fallback: OrionSemanticPlan): OrionSemanticResponseMode {
+  if (intent === "audit_traceability") return "audit_traceability"
+  if (intent === "capital_allocation" || intent === "marketing_strategy") return "decision"
+  if (intent === "operational_action") return "operational_plan"
+  if (intent === "decision_memory_review") return "executive_summary"
+  if (intent === "unknown") return fallback.responseMode
+  return "executive_summary"
+}
 
-  const secondaryGoals = normalizeStringArray(raw.secondaryGoals)
-  const primaryGoal = raw.primaryGoal
-  const tools = normalizeStringArray(raw.toolsNeeded, 12, 64).filter((tool): tool is OrionToolName =>
-    allowedTools.includes(tool as OrionToolName)
-  )
-  const deterministicTools = toolsForPlan(primaryGoal, secondaryGoals)
-  const toolsNeeded = primaryGoal === "decision_memory_review"
+function semanticEntityFromLabel(label: string): OrionSemanticEntity {
+  const normalized = label.toLowerCase()
+  if (/campanha|roi|ads|meta/.test(normalized)) return { type: "campaign", label }
+  if (/lead|cliente|whatsapp|follow/.test(normalized)) return { type: "lead", label }
+  if (/caixa|saldo|liquidez|financeiro|conta/.test(normalized)) return { type: "finance", label }
+  if (/estoque|invent[áa]rio|sku/.test(normalized)) return { type: "inventory", label }
+  if (/decis[aã]o|recomenda|pend[eê]ncia/.test(normalized)) return { type: "decision", label }
+  if (/ipad|iphone|macbook|apple|airpods|watch|pencil|produto/.test(normalized)) return { type: "product", label }
+  return { type: "unknown", label }
+}
+
+function semanticRouteToPlan(
+  route: OrionSemanticRoute,
+  fallback: OrionSemanticPlan,
+  input: OrionSemanticPlannerInput
+): OrionSemanticPlan {
+  if (route.intent === "unknown") {
+    return fallbackForOpenManagementQuestion(input, fallback)
+  }
+
+  const tokens = new Set(tokenize(input.userQuestion))
+  const secondaryGoals = Array.from(new Set([
+    ...collectSecondaryGoals(tokens, route.intent),
+  ])).slice(0, 12)
+  const toolsNeeded = route.intent === "decision_memory_review"
     ? []
-    : Array.from(new Set([...tools, ...deterministicTools]))
-  const aiBudgetAmount = typeof raw.budgetAmount === "number" && Number.isFinite(raw.budgetAmount) && raw.budgetAmount > 0
-    ? raw.budgetAmount
-    : null
-  const budgetAmount = fallback.budgetAmount ?? aiBudgetAmount
-  const budgetCurrency = budgetAmount !== null ? "BRL" : null
-  const needsClarification = typeof raw.needsClarification === "boolean" ? raw.needsClarification : false
-  const clarificationQuestion = needsClarification ? compactString(raw.clarificationQuestion, 180) || "Sobre qual parte da operação você quer que eu foque?" : null
+    : Array.from(new Set([...route.toolsNeeded, ...toolsForPlan(route.intent, secondaryGoals)]))
+  const budgetAmount = fallback.budgetAmount ?? route.budgetAmount ?? null
 
   return {
-    primaryGoal,
+    primaryGoal: route.intent,
     secondaryGoals,
     toolsNeeded,
-    timeframe: normalizeTimeframe(raw.timeframe, fallback.timeframe),
+    timeframe: routeTimeframeToPlanTimeframe(route.timeframe, fallback.timeframe, input.currentPeriodLabel),
     budgetAmount,
-    budgetCurrency,
-    entities: normalizeEntities(raw.entities),
-    comparisonTargets: normalizeStringArray(raw.comparisonTargets, 6, 80),
-    responseMode: raw.responseMode,
-    confidence: raw.confidence,
-    needsClarification,
-    clarificationQuestion,
+    budgetCurrency: budgetAmount !== null ? "BRL" : null,
+    entities: route.entities.map(semanticEntityFromLabel).slice(0, 8),
+    comparisonTargets: fallback.comparisonTargets,
+    responseMode: responseModeForRoute(route.intent, fallback),
+    confidence: route.confidence,
+    needsClarification: false,
+    clarificationQuestion: null,
     reasoningHints: [
-      ...normalizeStringArray(raw.reasoningHints, 6, 140),
-      "Planner semântico via IA estruturada.",
+      route.reasoning,
+      "Semantic Router IA compacto; engines determinísticas calculam dados.",
     ],
-    plannerMode: "ai_semantic_plan",
+    plannerMode: route.source === "local" ? "local_semantic_route" : "ai_semantic_plan",
   }
+}
+
+function fallbackForOpenManagementQuestion(
+  input: OrionSemanticPlannerInput,
+  fallback: OrionSemanticPlan
+): OrionSemanticPlan {
+  const tokens = new Set(tokenize(input.userQuestion))
+  const hasOperationalDirection = hasAny(tokens, ["hoje", "agora", "comeco", "começo", "perdido", "fazer", "primeiro", "foco"])
+  const hasBusinessHealthSubject = hasAny(tokens, ["nobretech", "empresa", "negocio", "negócio", "operacao", "operação"])
+  const hasBusinessHealthSignal = hasAny(tokens, ["bem", "indo", "esta", "está", "estamos", "saudavel", "saudável", "saude", "saúde", "situacao", "situação"])
+  const hasBusinessHealthQuestion = hasBusinessHealthSubject && hasBusinessHealthSignal
+  const hasStrategicDirection = hasAny(tokens, ["caminho", "rumo", "visao", "visão", "faria", "lugar", "vendo", "enxergando", "inteligente", "nobretech", "empresa", "bem"])
+  if (isDeterministicGuardrailPlan(fallback) || (!hasOperationalDirection && !hasStrategicDirection && fallback.primaryGoal !== "unknown")) return fallback
+  const intent: OrionSemanticPrimaryGoal = hasBusinessHealthQuestion ? "business_review" : hasOperationalDirection ? "operational_action" : hasStrategicDirection ? "business_strategy" : "unknown"
+  if (intent === "unknown") return fallback
+  const secondaryGoals = collectSecondaryGoals(tokens, intent)
+  return {
+    ...fallback,
+    primaryGoal: intent,
+    secondaryGoals,
+    toolsNeeded: toolsForPlan(intent, secondaryGoals),
+    responseMode: intent === "operational_action" ? "operational_plan" : "executive_summary",
+    confidence: hasBusinessHealthQuestion || hasOperationalDirection ? "medium" : "low",
+    needsClarification: false,
+    clarificationQuestion: null,
+    reasoningHints: [
+      ...fallback.reasoningHints,
+      "Fallback seguro para pergunta natural de gestão/direção; unknown reservado para fora de escopo.",
+    ],
+    plannerMode: "deterministic_fallback",
+  }
+}
+
+function isDeterministicGuardrailPlan(plan: OrionSemanticPlan): boolean {
+  return plan.primaryGoal === "decision_memory_review"
+    || plan.responseMode === "audit_traceability"
+    || (plan.primaryGoal === "capital_allocation" && plan.budgetAmount !== null)
+    || plan.primaryGoal === "reinvestment_decision"
+    || plan.primaryGoal === "withdrawal_decision"
+    || plan.primaryGoal === "purchase_capacity"
 }
 
 function applySemanticPlanGuardrails(aiPlan: OrionSemanticPlan, fallback: OrionSemanticPlan): OrionSemanticPlan {
@@ -697,70 +649,6 @@ function applySemanticPlanGuardrails(aiPlan: OrionSemanticPlan, fallback: OrionS
   return aiPlan
 }
 
-async function runAiSemanticPlanner(
-  input: OrionSemanticPlannerInput,
-  fallback: OrionSemanticPlan,
-  options?: BuildSemanticPlanWithAIOptions
-): Promise<OrionSemanticPlan | null> {
-  const apiKey = options?.apiKey ?? process.env.OPENAI_API_KEY
-  if (!apiKey) return null
-  const fetcher = options?.fetcher || fetch
-  const model = options?.model || process.env.ORION_SEMANTIC_PLANNER_MODEL || process.env.ORION_OPENAI_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini"
-  const controller = new AbortController()
-  const timeoutMs = Number(process.env.ORION_SEMANTIC_PLANNER_TIMEOUT_MS) || 3000
-  const timeout = setTimeout(() => controller.abort(), timeoutMs)
-  const response = await fetcher("https://api.openai.com/v1/responses", {
-    method: "POST",
-    signal: controller.signal,
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      instructions: [
-        "Você é o planejador semântico da ORION, copiloto executivo da Nobretech.",
-        "Transforme a pergunta do usuário em um plano JSON estruturado.",
-        "Você NÃO calcula números financeiros.",
-        "Você NÃO inventa caixa, lucro, margem, vendas, estoque, recebíveis ou métricas.",
-        "Você NÃO responde ao usuário final.",
-        "Identifique objetivo principal, objetivos secundários, período, orçamento informado, entidades citadas, ferramentas necessárias, modo de resposta e necessidade de esclarecimento.",
-        "Use decision_memory_review quando o usuário quiser revisar decisões abertas, recomendações pendentes, ações em acompanhamento, decisões anteriores, o que a ORION monitora, o que ficou pendente ou recomendações que a ORION fez.",
-        "Use capital_allocation quando o usuário trouxer orçamento aproximado e perguntar onde colocar, aplicar, mexer ou priorizar dinheiro em estoque, recompra ou produtos.",
-        "Use audit_traceability quando o usuário pedir raciocínio, lógica, cálculo, por que chegou no valor, por que recomendou um teto ou abertura da conta de reinvestimento, recompra, caixa ou lucro.",
-        "Use operational_action quando o usuário pedir execução imediata do que fazer agora, sem pedir revisão de memória decisória.",
-        "Os dados reais serão calculados por engines determinísticas do sistema.",
-      ].join(" "),
-      input: JSON.stringify({
-        userQuestion: input.userQuestion,
-        currentPeriodLabel: input.currentPeriodLabel || null,
-        hasOpenMemory: Boolean(input.hasOpenMemory),
-        currentDate: input.currentDate || new Date().toISOString().slice(0, 10),
-        deterministicFallback: {
-          primaryGoal: fallback.primaryGoal,
-          responseMode: fallback.responseMode,
-          timeframe: fallback.timeframe,
-          budgetAmount: fallback.budgetAmount,
-        },
-      }),
-      text: {
-        format: {
-          type: "json_schema",
-          name: "orion_semantic_plan",
-          strict: true,
-          schema: semanticPlanSchema,
-        },
-      },
-    }),
-  }).finally(() => clearTimeout(timeout))
-
-  const payload = await response.json().catch(() => null)
-  if (!response.ok) return null
-  const outputText = extractPlannerOutputText(payload)
-  if (!outputText) return null
-  return normalizeAiPlan(JSON.parse(outputText), fallback)
-}
-
 // Sync public entry point: deterministic fallback, safe for tests/clientless helpers.
 export function buildSemanticPlan(input: OrionSemanticPlannerInput): OrionSemanticPlan {
   return buildDeterministicSemanticPlan(input)
@@ -773,7 +661,7 @@ export function buildFastSemanticPlan(input: OrionSemanticPlannerInput): OrionSe
   const goal = deterministic.primaryGoal
   const obvious =
     goal === "decision_memory_review" ||
-    goal === "audit_traceability" ||
+    deterministic.responseMode === "audit_traceability" ||
     (goal === "capital_allocation" && deterministic.budgetAmount !== null) ||
     goal === "reinvestment_decision" ||
     goal === "withdrawal_decision" ||
@@ -797,25 +685,38 @@ export async function buildSemanticPlanWithAI(
   if (fast) return fast
   const fallback = buildDeterministicSemanticPlan(input)
   try {
-    const aiPlan = await runAiSemanticPlanner(input, fallback, options)
-    if (aiPlan && (aiPlan.confidence === "medium" || aiPlan.confidence === "high" || aiPlan.needsClarification)) {
+    const route = await buildSemanticRoute({
+      userQuestion: input.userQuestion,
+      selectedPeriod: input.currentPeriodLabel || undefined,
+      hasOpenMemory: input.hasOpenMemory,
+      currentDate: input.currentDate,
+      availableIntents: ORION_SEMANTIC_INTENTS,
+    }, {
+      apiKey: options?.apiKey,
+      model: options?.model,
+      fetcher: options?.fetcher,
+      onComplete: options?.onSemanticRouter,
+    })
+    const aiPlan = semanticRouteToPlan(route, fallback, input)
+    if (aiPlan.confidence === "medium" || aiPlan.confidence === "high" || aiPlan.needsClarification) {
       return applySemanticPlanGuardrails(aiPlan, fallback)
     }
     return {
-      ...fallback,
-      reasoningHints: [...fallback.reasoningHints, "Planner IA indisponível ou confiança baixa; usando fallback determinístico."],
+      ...fallbackForOpenManagementQuestion(input, fallback),
+      reasoningHints: [...fallback.reasoningHints, "Semantic Router indisponível ou confiança baixa; usando fallback determinístico."],
       plannerMode: "deterministic_fallback",
     }
   } catch (error) {
     const aborted = error instanceof Error && (error.name === "AbortError" || /abort/i.test(error.message))
-    if (aborted) console.warn("[ORION_PERF] plannerTimeout=true")
+    if (aborted) console.warn("[ORION_PERF] plannerTimeout=true fallbackApplied=true")
+    const safeFallback = fallbackForOpenManagementQuestion(input, fallback)
     return {
-      ...fallback,
+      ...safeFallback,
       reasoningHints: [
-        ...fallback.reasoningHints,
+        ...safeFallback.reasoningHints,
         aborted
-          ? "Planner IA estourou timeout; usando fallback determinístico."
-          : "Planner IA falhou; usando fallback determinístico.",
+          ? "Semantic Router estourou timeout; usando fallback determinístico."
+          : "Semantic Router falhou; usando fallback determinístico.",
       ],
       plannerMode: "deterministic_fallback",
     }

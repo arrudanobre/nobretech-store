@@ -42,6 +42,7 @@ import { Button } from "@/components/ui/button"
 import { humanizeChartLabel, humanizeOrionText } from "@/lib/orion/executive-translation"
 import { isActionableLead } from "@/lib/orion/lead-classification"
 import { cn } from "@/lib/utils"
+import type { OrionExecutiveVoice } from "@/lib/orion/orion-executive-voice-layer"
 import type {
   OrionApiPayload,
   OrionChartInterpretation,
@@ -662,25 +663,137 @@ function AuditTraceabilityMessage({ text }: { text: string }) {
   )
 }
 
+function ExecutiveVoiceCard({ voice }: { voice: OrionExecutiveVoice }) {
+  return (
+    <div className="mb-4 flex items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3">
+      <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-indigo-400" />
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold text-white">{voice.headline}</p>
+        {voice.subline ? <p className="mt-0.5 text-xs leading-5 text-slate-400">{voice.subline}</p> : null}
+      </div>
+      <span className="ml-auto shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[11px] text-slate-300">{voice.badge}</span>
+    </div>
+  )
+}
+
+function WithExecutiveVoice({ voice, children }: { voice?: OrionExecutiveVoice; children: ReactNode }) {
+  if (!voice) return <>{children}</>
+  return (
+    <>
+      <ExecutiveVoiceCard voice={voice} />
+      {children}
+    </>
+  )
+}
+
+function ConversationalAnswerCard({
+  conversation,
+}: {
+  conversation: NonNullable<NonNullable<OrionApiPayload["orionResponse"]>["executiveConversation"]>
+}) {
+  const paragraphs = conversation.conversationalAnswer
+    .split(/\n{2,}|(?<=\.)\n/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm leading-6 text-slate-100">
+      {paragraphs.map((p, i) => (
+        <p key={i} className={i === 0 ? "" : "mt-3"}>{p}</p>
+      ))}
+      {conversation.nextActions.length > 0 ? (
+        <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-slate-300">
+          {conversation.nextActions.slice(0, 3).map((action, i) => (
+            <li key={i}>{action}</li>
+          ))}
+        </ul>
+      ) : null}
+      {conversation.followUpQuestion ? (
+        <p className="mt-3 text-xs italic text-slate-400">{conversation.followUpQuestion}</p>
+      ) : null}
+    </div>
+  )
+}
+
+function WithConversation({
+  conversation,
+  children,
+}: {
+  conversation?: NonNullable<OrionApiPayload["orionResponse"]>["executiveConversation"]
+  children: ReactNode
+}) {
+  if (!conversation?.conversationalAnswer?.trim()) return <>{children}</>
+  return (
+    <div className="space-y-3">
+      <ConversationalAnswerCard conversation={conversation} />
+      <details className="group rounded-2xl border border-white/10 bg-white/[0.025]">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs font-semibold uppercase text-slate-400 transition hover:text-slate-200">
+          <span>Evidências usadas pela ORION</span>
+          <ChevronDown className="h-4 w-4 transition group-open:rotate-180" />
+        </summary>
+        <div className="space-y-3 border-t border-white/10 p-3 opacity-85">{children}</div>
+      </details>
+    </div>
+  )
+}
+
 function OrionMessageContent({ message }: { message: ChatMessage }) {
   const response = message.orionResponse
+  const voice = response?.executiveVoice
+  const conversation = response?.executiveConversation
+  const evidenceVoice = conversation?.conversationalAnswer?.trim() ? undefined : voice
   if (response?.responseKind === "reinvestment_decision" && response.structured?.reinvestmentDecision) {
-    return <ReinvestmentDecisionMessage decision={response.structured.reinvestmentDecision} fallback={response.text || message.content} />
+    return (
+      <WithConversation conversation={conversation}>
+        <WithExecutiveVoice voice={evidenceVoice}>
+          <ReinvestmentDecisionMessage decision={response.structured.reinvestmentDecision} fallback={response.text || message.content} />
+        </WithExecutiveVoice>
+      </WithConversation>
+    )
   }
   if (response?.responseKind === "business_decision") {
-    return <BusinessDecisionMessage decision={response.structured?.businessDecision} fallback={response.text || message.content} />
+    return (
+      <WithConversation conversation={conversation}>
+        <WithExecutiveVoice voice={evidenceVoice}>
+          <BusinessDecisionMessage decision={response.structured?.businessDecision} fallback={response.text || message.content} />
+        </WithExecutiveVoice>
+      </WithConversation>
+    )
   }
   if (response?.responseKind === "decision_memory_review") {
-    return <DecisionMemoryReviewMessage review={response.structured?.decisionMemoryReview} fallback={response.text || message.content} />
+    return (
+      <WithConversation conversation={conversation}>
+        <WithExecutiveVoice voice={evidenceVoice}>
+          <DecisionMemoryReviewMessage review={response.structured?.decisionMemoryReview} fallback={response.text || message.content} />
+        </WithExecutiveVoice>
+      </WithConversation>
+    )
   }
   if (response?.responseKind === "business_review") {
-    return <BusinessReviewMessage review={response.structured?.businessReview} fallback={response.text || message.content} />
+    return (
+      <WithConversation conversation={conversation}>
+        <WithExecutiveVoice voice={evidenceVoice}>
+          <BusinessReviewMessage review={response.structured?.businessReview} fallback={response.text || message.content} />
+        </WithExecutiveVoice>
+      </WithConversation>
+    )
   }
   if (response?.responseKind === "cash_health_summary") {
-    return <CashHealthMessage summary={response.structured?.cashHealthSummary} fallback={response.text || message.content} />
+    return (
+      <WithConversation conversation={conversation}>
+        <WithExecutiveVoice voice={evidenceVoice}>
+          <CashHealthMessage summary={response.structured?.cashHealthSummary} fallback={response.text || message.content} />
+        </WithExecutiveVoice>
+      </WithConversation>
+    )
   }
   if (response?.responseKind === "audit_traceability") {
-    return <AuditTraceabilityMessage text={response.structured?.auditBreakdown?.text || response.text || message.content} />
+    return (
+      <WithConversation conversation={conversation}>
+        <WithExecutiveVoice voice={evidenceVoice}>
+          <AuditTraceabilityMessage text={response.structured?.auditBreakdown?.text || response.text || message.content} />
+        </WithExecutiveVoice>
+      </WithConversation>
+    )
   }
   if (message.reinvestmentDecision) {
     return <ReinvestmentDecisionMessage decision={message.reinvestmentDecision} fallback={message.content} />

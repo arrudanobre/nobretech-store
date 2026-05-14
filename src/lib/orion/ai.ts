@@ -395,7 +395,8 @@ export async function runOrionOpenAI(
   const input = buildOrionInput(snapshot, question, operationalContext, operationalConversationState)
   const operationalHealth = input.operational_health
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 120000)
+  const timeoutMs = Number(process.env.ORION_OPENAI_TIMEOUT_MS) || 12000
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     signal: controller.signal,

@@ -8,6 +8,8 @@ import {
 import { buildFinancialTraceabilityResponse, buildReinvestmentAuditBreakdown } from "./financial-decision-response"
 import { selectFinancialTraceabilityKind } from "./financial-traceability-router"
 import { dedupeDecisionMemories, type OrionDecisionMemoryContext, type OrionDecisionMemoryInput } from "./orion-decision-memory-store"
+import { buildExecutiveVoice, type OrionExecutiveVoice } from "./orion-executive-voice-layer"
+import type { OrionExecutiveConversation } from "./orion-executive-conversation-layer"
 import { buildReinvestmentDecision, type ReinvestmentDecision } from "./reinvestment-intelligence-engine"
 import { buildSemanticPlan, type OrionSemanticPlan } from "./semantic-planner"
 import type { OrionAppliedOperationalMemoryContext } from "./operational-memory"
@@ -76,6 +78,8 @@ export type OrionResponsePayload = {
     }
   }
   decisionMemoryCandidates?: OrionDecisionMemoryInput[]
+  executiveVoice?: OrionExecutiveVoice
+  executiveConversation?: OrionExecutiveConversation
 }
 
 export type BuildOrionResponseInput = {
@@ -326,20 +330,104 @@ function buildAuditTraceabilityResponse(plan: OrionSemanticPlan, snapshot: Orion
   }
 }
 
+// Labels that come from memory/context cards and must NEVER be treated as the recommended product.
+const NON_PRODUCT_LABELS = new Set([
+  "decisao estrategica pendente",
+  "decisao de capital pendente",
+  "decisao de trafego pendente",
+  "decisao de estoque pendente",
+  "decisao de marketing pendente",
+  "acao operacional pendente",
+  "contexto anterior",
+  "caixa",
+  "teto seguro",
+  "orcamento informado",
+  "lucro rastreavel",
+  "vendas comerciais",
+  "melhor sinal comercial",
+])
+
+function normalizeProductCandidate(value: string | null | undefined): string {
+  if (!value) return ""
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+function isProductLabel(value: string | null | undefined): boolean {
+  const normalized = normalizeProductCandidate(value)
+  if (!normalized) return false
+  return !NON_PRODUCT_LABELS.has(normalized)
+}
+
+function selectTopProductLabel(
+  businessDecision: OrionBusinessDecision | null,
+  reinvestmentDecision: ReinvestmentDecision | null
+): string | null {
+  const reinvestmentLabel = reinvestmentDecision?.recommendedProducts?.find((p) => isProductLabel(p.label))?.label
+  if (reinvestmentLabel) return reinvestmentLabel
+
+  if (businessDecision?.keyFindings?.length) {
+    const signalFinding = businessDecision.keyFindings.find(
+      (f) => normalizeProductCandidate(f.label) === "melhor sinal comercial"
+    )
+    if (signalFinding?.value && isProductLabel(signalFinding.value)) return signalFinding.value
+    for (const finding of businessDecision.keyFindings) {
+      if (isProductLabel(finding.label)) return finding.label
+    }
+  }
+  return null
+}
+
+function attachExecutiveVoice(payload: OrionResponsePayload, companyId: string | null, snapshot: OrionSnapshot): OrionResponsePayload {
+  const cashBalance = readNumber(snapshot.executive?.cashBalance ?? snapshot.finance?.reconciledCashBalance)
+  const businessDecision = payload.structured?.businessDecision || null
+  const decisionMemoryReview = payload.structured?.decisionMemoryReview || null
+  const reinvestmentDecision = payload.structured?.reinvestmentDecision || null
+  const businessDecisionType = businessDecision?.decisionType || null
+
+  const topProduct = selectTopProductLabel(businessDecision, reinvestmentDecision)
+  const primaryOpen = decisionMemoryReview?.openDecisions?.[0] || null
+
+  const context = {
+    recommendationTitle: businessDecision?.recommendation?.title || null,
+    recommendationAction: businessDecision?.recommendation?.action || reinvestmentDecision?.recommendedAction || null,
+    recommendationReason: businessDecision?.recommendation?.reason || null,
+    topProductLabel: topProduct,
+    firstNextStep: businessDecision?.nextSteps?.[0]?.action || null,
+    secondNextStep: businessDecision?.nextSteps?.[1]?.action || null,
+    primaryAvoid: businessDecision?.avoid?.[0]?.reason || businessDecision?.avoid?.[0]?.title || null,
+    primaryRisk: businessDecision?.keyFindings?.find((f) => f.severity === "critical" || f.severity === "attention")?.evidence || null,
+    openDecisionsCount: decisionMemoryReview?.openDecisions?.length || 0,
+    primaryOpenDecisionTitle: primaryOpen?.title || null,
+    primaryOpenDecisionRecommendation: primaryOpen?.recommendation || null,
+  }
+
+  const voice = buildExecutiveVoice({
+    responseKind: payload.responseKind,
+    businessDecisionType,
+    cashBalance,
+    seed: companyId || "",
+    context,
+  })
+  return { ...payload, executiveVoice: voice }
+}
+
 export function buildOrionResponse(input: BuildOrionResponseInput): OrionResponsePayload {
   const semanticPlan = input.semanticPlan || buildSemanticPlan({ userQuestion: input.userQuestion })
 
   const companyId = input.companyId || null
+  let payload: OrionResponsePayload
   if (semanticPlan.primaryGoal === "decision_memory_review") {
-    return buildDecisionMemoryReviewResponse(semanticPlan, input.decisionMemoryContext)
-  }
-  if (semanticPlan.primaryGoal === "audit_traceability" || semanticPlan.responseMode === "audit_traceability") {
-    return buildAuditTraceabilityResponse(semanticPlan, input.snapshot, input.userQuestion)
-  }
-  if (semanticPlan.primaryGoal === "purchase_capacity" || semanticPlan.primaryGoal === "reinvestment_decision") {
-    return buildReinvestmentResponse(semanticPlan, input.snapshot, companyId)
-  }
-  if (
+    payload = buildDecisionMemoryReviewResponse(semanticPlan, input.decisionMemoryContext)
+  } else if (semanticPlan.primaryGoal === "audit_traceability" || semanticPlan.responseMode === "audit_traceability") {
+    payload = buildAuditTraceabilityResponse(semanticPlan, input.snapshot, input.userQuestion)
+  } else if (semanticPlan.primaryGoal === "purchase_capacity" || semanticPlan.primaryGoal === "reinvestment_decision") {
+    payload = buildReinvestmentResponse(semanticPlan, input.snapshot, companyId)
+  } else if (
     semanticPlan.primaryGoal === "capital_allocation"
     || semanticPlan.primaryGoal === "business_strategy"
     || semanticPlan.primaryGoal === "operational_action"
@@ -351,16 +439,16 @@ export function buildOrionResponse(input: BuildOrionResponseInput): OrionRespons
     || semanticPlan.primaryGoal === "sales_performance_review"
     || semanticPlan.primaryGoal === "lead_review"
   ) {
-    return buildBusinessDecisionResponse(semanticPlan, input.snapshot, input.userQuestion, input.memoryContext, input.decisionMemoryContext, companyId)
+    payload = buildBusinessDecisionResponse(semanticPlan, input.snapshot, input.userQuestion, input.memoryContext, input.decisionMemoryContext, companyId)
+  } else if (semanticPlan.primaryGoal === "cash_health") {
+    payload = buildCashHealthSummary(semanticPlan, input.snapshot)
+  } else {
+    payload = {
+      responseKind: "generic_executive",
+      renderMode: "plain_text",
+      semanticPlan,
+      text: "",
+    }
   }
-  if (semanticPlan.primaryGoal === "cash_health") {
-    return buildCashHealthSummary(semanticPlan, input.snapshot)
-  }
-
-  return {
-    responseKind: "generic_executive",
-    renderMode: "plain_text",
-    semanticPlan,
-    text: "",
-  }
+  return attachExecutiveVoice(payload, companyId, input.snapshot)
 }
