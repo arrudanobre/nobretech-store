@@ -71,6 +71,9 @@ type Purchase = {
     photoUrl: string | null
     imei: string | null
     serial: string | null
+    variationText: string | null
+    finalAmount?: number | null
+    originalAmount?: number | null
   }
   purchaseItems: Array<PurchaseItem>
   provenance: {
@@ -132,6 +135,9 @@ type PurchaseItem = {
   photoUrl: string | null
   imei: string | null
   serial: string | null
+  variationText: string | null
+  finalAmount?: number | null
+  originalAmount?: number | null
   warrantyStart: string | null
   warrantyEnd: string | null
   issues: Array<{
@@ -268,19 +274,11 @@ function latestTimelineDate(timeline: Array<{ date: string | null }>) {
   return null
 }
 
-function PortalShell({ children }: { children: React.ReactNode }) {
+function PortalShell({ children, tone = "light" }: { children: React.ReactNode; tone?: "light" | "dark" }) {
   return (
-    <main className="min-h-screen bg-[#f4f7fb] px-3 py-3 pb-24 text-slate-950 sm:px-6 sm:py-8 sm:pb-10">
+    <main className={`min-h-screen px-3 py-3 pb-24 sm:px-6 sm:py-8 sm:pb-10 ${tone === "dark" ? "bg-[linear-gradient(135deg,#030712_0%,#07111f_48%,#0b1f3a_100%)] text-white" : "bg-[#f4f7fb] text-slate-950"}`}>
       <div className="mx-auto grid w-full max-w-[1180px] grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-[1.05fr_0.95fr]">{children}</div>
     </main>
-  )
-}
-
-function PortalCard({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return (
-    <section className={`rounded-[1.45rem] border border-[#dce6f2] bg-white p-4 shadow-[0_12px_34px_rgba(15,27,45,0.045)] sm:p-5 ${className}`}>
-      {children}
-    </section>
   )
 }
 
@@ -430,29 +428,36 @@ function PinGate({
   onSubmit: () => void
 }) {
   return (
-    <PortalShell>
-      <header className="px-1 py-2 lg:col-span-2">
-        <p className="text-xs font-bold uppercase tracking-[0.22em] text-royal-600">Nobretech Store</p>
-      </header>
-
-      <PortalCard className="overflow-hidden lg:col-span-2 lg:mx-auto lg:w-full lg:max-w-xl">
-        <div className="rounded-[1.25rem] bg-gradient-to-br from-navy-900 to-royal-700 p-5 text-white">
-          <div className="flex items-start justify-between gap-4">
-            <div>
+    <PortalShell tone="dark">
+      <section className="lg:col-span-2 lg:mx-auto lg:flex lg:min-h-[calc(100vh-4rem)] lg:w-full lg:max-w-5xl lg:items-center">
+        <div className="grid w-full overflow-hidden rounded-[1.75rem] border border-white/10 bg-[#07111f]/95 shadow-[0_30px_100px_rgba(0,0,0,0.45)] lg:grid-cols-[0.95fr_1.05fr]">
+          <div className="border-b border-white/10 bg-[linear-gradient(160deg,#081427_0%,#0c2447_100%)] p-6 sm:p-8 lg:border-b-0 lg:border-r">
+            <p className="text-xs font-bold uppercase tracking-[0.24em] text-white/55">Nobretech Store</p>
+            <div className="mt-10 max-w-md">
               <p className="text-xs font-bold uppercase tracking-[0.22em] text-royal-100">Compra Verificada</p>
-              <h1 className="mt-2 text-2xl font-bold leading-tight">Olá! Digite o PIN para acessar seu pedido.</h1>
-              <p className="mt-2 text-sm leading-6 text-white/75">
-                Digite o código de 6 dígitos informado na etiqueta do seu produto.
+              <h1 className="mt-4 text-4xl font-black leading-none text-white sm:text-5xl">Olá!</h1>
+              <p className="mt-3 text-xl font-bold leading-7 text-white/90">Digite o PIN para acessar seu pedido.</p>
+              <p className="mt-4 text-sm leading-6 text-white/62">
+                A Nobretech protege os detalhes da sua compra até confirmar o código de segurança da etiqueta.
               </p>
             </div>
-            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/12 ring-1 ring-white/15">
-              <ShieldCheck className="h-6 w-6" />
-            </span>
+            <div className="mt-10 grid gap-3 text-sm text-white/72">
+              <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3">
+                <ShieldCheck className="h-5 w-5 text-emerald-300" />
+                <span>Pedido protegido por PIN</span>
+              </div>
+              <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3">
+                <PackageCheck className="h-5 w-5 text-royal-200" />
+                <span>Resumo, garantia e documentos após validação</span>
+              </div>
+            </div>
           </div>
-        </div>
 
-        <div className="pt-5">
-          <label htmlFor="pin" className="text-xs font-bold uppercase tracking-wide text-slate-500">PIN de segurança</label>
+          <div className="flex flex-col justify-center bg-[#08101d] p-6 sm:p-8">
+            <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/8 text-white ring-1 ring-white/15">
+              <LockKeyhole className="h-6 w-6" />
+            </span>
+            <label htmlFor="pin" className="mt-8 text-xs font-bold uppercase tracking-wide text-white/55">PIN de segurança</label>
           <input
             id="pin"
             value={pin}
@@ -464,7 +469,7 @@ function PinGate({
             onKeyDown={(event) => {
               if (event.key === "Enter" && pin.length === 6 && !verifying) onSubmit()
             }}
-            className="mt-2 h-16 w-full rounded-2xl border border-slate-200 bg-white px-4 text-center font-mono text-2xl font-bold tracking-[0.46em] text-slate-950 outline-none transition placeholder:text-slate-300 focus:border-royal-500 focus:ring-4 focus:ring-royal-100 disabled:bg-slate-100"
+            className="mt-2 h-16 w-full rounded-2xl border border-white/15 bg-white px-4 text-center font-mono text-2xl font-black tracking-[0.46em] text-slate-950 outline-none transition placeholder:text-slate-300 focus:border-royal-300 focus:ring-4 focus:ring-royal-400/25 disabled:bg-slate-200"
             placeholder="000000"
           />
 
@@ -477,7 +482,7 @@ function PinGate({
           <Button
             fullWidth
             size="lg"
-            className="mt-5 h-13 rounded-2xl"
+            className="mt-5 h-13 rounded-2xl bg-royal-500 font-extrabold shadow-[0_16px_35px_rgba(58,107,196,0.28)] disabled:bg-white/10 disabled:text-white/35 disabled:shadow-none"
             disabled={!intro?.available || disabledByLock || pin.length !== 6}
             isLoading={verifying}
             onClick={onSubmit}
@@ -485,11 +490,12 @@ function PinGate({
             Acessar minha compra
           </Button>
 
-          <p className="mt-4 text-center text-xs leading-5 text-slate-500">
+          <p className="mt-4 text-center text-xs leading-5 text-white/50">
             Não compartilhe sua senha. Antes do PIN correto nenhum detalhe sensível da compra é exibido.
           </p>
         </div>
-      </PortalCard>
+        </div>
+      </section>
     </PortalShell>
   )
 }
@@ -521,7 +527,11 @@ function VerifiedDeviceCard({ purchase }: { purchase: Purchase }) {
         <ProductThumb src={purchase.device.photoUrl} name={purchase.device.model} color={purchase.device.color} size={220} />
         <div className="min-w-0 flex-1">
           <h2 className="text-xl font-extrabold leading-tight text-navy-900">{fallback(purchase.device.model)}</h2>
-          <p className="mt-1 text-sm font-semibold text-slate-500">{fallback(purchase.device.color)}</p>
+          {purchase.device.variationText ? (
+            <p className="mt-1 text-sm font-semibold text-slate-500">{purchase.device.variationText}</p>
+          ) : purchase.device.color ? (
+            <p className="mt-1 text-sm font-semibold text-slate-500">{purchase.device.color}</p>
+          ) : null}
           <span className={`mt-3 inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-extrabold ${statusCopy.className}`}>
             <ShieldCheck className="h-3.5 w-3.5" />
             {statusCopy.label}
@@ -831,6 +841,11 @@ function itemTone(type: PurchaseItem["type"]) {
   return "neutral"
 }
 
+function displayItemAmount(item: PurchaseItem) {
+  if (typeof item.finalAmount !== "number") return null
+  return formatCurrencyBR(item.finalAmount)
+}
+
 function VerifiedPurchaseItemsCard({ purchase }: { purchase: Purchase }) {
   const items = purchase.purchaseItems?.length ? purchase.purchaseItems : [{
     id: "principal",
@@ -845,6 +860,9 @@ function VerifiedPurchaseItemsCard({ purchase }: { purchase: Purchase }) {
     photoUrl: purchase.device.photoUrl,
     imei: purchase.device.imei,
     serial: purchase.device.serial,
+    variationText: purchase.device.variationText,
+    finalAmount: purchase.device.finalAmount ?? purchase.sale.purchaseAmount,
+    originalAmount: purchase.device.originalAmount ?? null,
     warrantyStart: purchase.sale.warrantyStart,
     warrantyEnd: purchase.sale.warrantyEnd,
     issues: [],
@@ -855,23 +873,48 @@ function VerifiedPurchaseItemsCard({ purchase }: { purchase: Purchase }) {
       <div className="divide-y divide-slate-100">
         {items.map((item, index) => {
           const tone = itemTone(item.type)
-          const amount = item.type === "free" ? "Brinde" : item.type === "principal" ? formatCurrencyBR(purchase.sale.purchaseAmount) : item.label
+          const amount = displayItemAmount(item)
+          const originalAmount = typeof item.originalAmount === "number" && item.originalAmount > 0
+            ? formatCurrencyBR(item.originalAmount)
+            : null
 
           return (
-            <div key={item.id || `${item.type}-${index}`} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
+            <div key={item.id || `${item.type}-${index}`} className="grid grid-cols-[auto_1fr] gap-3 py-3 first:pt-0 last:pb-0 sm:grid-cols-[auto_1fr_auto] sm:items-center">
               <ProductThumb src={item.photoUrl} name={item.model} color={item.color} size={76} />
               <div className="min-w-0 flex-1">
                 <p className="line-clamp-2 text-sm font-extrabold leading-5 text-navy-900">{fallback(item.model)}</p>
-                <p className="mt-0.5 text-xs font-semibold text-slate-500">{fallback(item.color || item.storage)}</p>
+                {item.variationText ? (
+                  <p className="mt-0.5 text-xs font-semibold text-slate-500">{item.variationText}</p>
+                ) : item.color || item.storage ? (
+                  <p className="mt-0.5 text-xs font-semibold text-slate-500">{item.color || item.storage}</p>
+                ) : null}
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
                   <StatusPill tone={tone as "blue" | "green" | "neutral" | "amber"}>{item.label}</StatusPill>
                   {item.issues.length > 0 && <StatusPill tone="amber">OS vinculada</StatusPill>}
                 </div>
               </div>
-              <p className="shrink-0 text-right text-sm font-black text-navy-900">{amount}</p>
+              <div className="col-span-2 text-left sm:col-span-1 sm:text-right">
+                {item.type === "free" ? (
+                  <div className="space-y-0.5">
+                    {originalAmount && <p className="text-xs font-bold text-slate-400 line-through">{originalAmount}</p>}
+                    <p className="text-sm font-black text-emerald-700">{amount || formatCurrencyBR(0)}</p>
+                  </div>
+                ) : amount ? (
+                  <p className="text-sm font-black text-navy-900">{amount}</p>
+                ) : (
+                  <p className="text-xs font-bold text-slate-400">Valor no resumo</p>
+                )}
+              </div>
             </div>
           )
         })}
+        <div className="flex items-center justify-between gap-4 border-t border-slate-200 pt-4">
+          <div>
+            <p className="text-xs font-extrabold uppercase tracking-wide text-slate-500">Total da compra</p>
+            <p className="mt-0.5 text-xs font-semibold text-slate-400">Valor pago pelo cliente</p>
+          </div>
+          <p className="text-lg font-black text-navy-900">{formatCurrencyBR(purchase.sale.purchaseAmount)}</p>
+        </div>
       </div>
     </CollapsiblePortalCard>
   )

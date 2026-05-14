@@ -58,6 +58,9 @@ export type PublicPurchaseDetails = {
     photoUrl: string | null
     imei: string | null
     serial: string | null
+    variationText: string | null
+    finalAmount: number | null
+    originalAmount: number | null
   }
   purchaseItems: PublicPurchaseItem[]
   provenance: {
@@ -134,6 +137,9 @@ export type PublicPurchaseItem = {
   photoUrl: string | null
   imei: string | null
   serial: string | null
+  variationText: string | null
+  finalAmount: number | null
+  originalAmount: number | null
   warrantyStart: string | null
   warrantyEnd: string | null
   issues: PublicPurchaseIssue[]
@@ -180,6 +186,7 @@ type SaleAccessRow = {
   inventory_origin: string | null
   inventory_supplier_name: string | null
   inventory_photos: string[] | null
+  inventory_notes: string | null
   previous_sale_date: string | Date | null
   previous_owner_name: string | null
   previous_owner_cpf: string | null
@@ -225,8 +232,11 @@ type AdditionalSaleItemRow = {
   type: string | null
   name: string | null
   sale_price: string | number | null
+  inventory_suggested_price: string | number | null
   packaging_type: string | null
   packaging_notes: string | null
+  inventory_notes: string | null
+  condition_notes: string | null
   model: string | null
   variant: string | null
   storage: string | null
@@ -236,6 +246,13 @@ type AdditionalSaleItemRow = {
   imei: string | null
   imei2: string | null
   serial_number: string | null
+}
+
+type SaleVariantSelectionRow = {
+  scope: "main" | "additional"
+  inventoryId: string
+  variantName: string | null
+  quantity: number
 }
 
 type PublicPaymentLine = {
@@ -396,6 +413,93 @@ function uniqueDeviceName(...parts: Array<string | null>) {
   return normalized.join(" ") || "Aparelho não informado"
 }
 
+function cleanDisplayText(value?: string | null) {
+  const text = value?.trim()
+  return text || null
+}
+
+function realInventoryDisplayName(input: {
+  storedName?: string | null
+  model?: string | null
+  variant?: string | null
+  storage?: string | null
+  color?: string | null
+  inventoryNotes?: string | null
+  conditionNotes?: string | null
+}) {
+  const storedName = getAdditionalItemDisplayName(input.storedName)
+  if (storedName !== "Item adicional") return storedName
+
+  const customName = input.inventoryNotes?.match(/^Nome:\s*(.+)$/i)?.[1]?.trim()
+  if (customName) return customName
+
+  const notesName = cleanDisplayText(input.inventoryNotes?.replace(/^Acessório:\s*/i, ""))
+  if (notesName) return notesName
+
+  const conditionName = input.conditionNotes?.match(/^Acessório:\s*(.+)$/i)?.[1]?.trim() || cleanDisplayText(input.conditionNotes)
+  if (conditionName) return conditionName
+
+  return uniqueDeviceName(input.model || null, input.variant || null, input.storage || null, input.color || null)
+}
+
+function variationText(value?: string | null) {
+  return cleanDisplayText(value)
+}
+
+function moneyAmount(value: unknown) {
+  const amount = Number(value || 0)
+  return Number.isFinite(amount) && amount > 0 ? Math.round(amount * 100) / 100 : null
+}
+
+function zeroMoney() {
+  return 0
+}
+
+function consumeVariantSelection(
+  selections: SaleVariantSelectionRow[],
+  scope: SaleVariantSelectionRow["scope"],
+  inventoryId?: string | null
+) {
+  if (!inventoryId) return null
+  const index = selections.findIndex((item) => item.scope === scope && item.inventoryId === inventoryId)
+  if (index < 0) return null
+  const [selection] = selections.splice(index, 1)
+  return variationText(selection?.variantName)
+}
+
+async function getSaleVariantSelections(saleId: string) {
+  const result = await pool.query<{ new_data: Record<string, unknown> | null }>(
+    `
+      SELECT new_data
+      FROM audit_logs
+      WHERE table_name = 'sales'
+        AND record_id = $1::uuid
+        AND action = 'created'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    [saleId]
+  )
+  const rawSelections = result.rows[0]?.new_data?.variantSelections
+  if (!Array.isArray(rawSelections)) return []
+
+  return rawSelections
+    .map((item): SaleVariantSelectionRow | null => {
+      if (!item || typeof item !== "object") return null
+      const row = item as Record<string, unknown>
+      const scope = row.scope === "main" || row.scope === "additional" ? row.scope : null
+      const inventoryId = typeof row.inventoryId === "string" ? row.inventoryId : null
+      if (!scope || !inventoryId) return null
+      return {
+        scope,
+        inventoryId,
+        variantName: typeof row.variantName === "string" ? row.variantName : null,
+        quantity: Math.max(1, Math.floor(Number(row.quantity) || 1)),
+      }
+    })
+    .filter((item): item is SaleVariantSelectionRow => Boolean(item))
+}
+
 function companySettings(value: SaleAccessRow["company_settings"]) {
   if (!value) return {}
   if (typeof value === "string") {
@@ -478,8 +582,11 @@ async function getAdditionalItemsForSale(saleId: string) {
         sai.type,
         sai.name,
         sai.sale_price,
+        i.suggested_price AS inventory_suggested_price,
         sai.packaging_type,
         sai.packaging_notes,
+        i.notes AS inventory_notes,
+        i.condition_notes,
         pc.model,
         pc.variant,
         pc.storage,
@@ -634,6 +741,7 @@ async function getSaleByToken(token: string) {
         i.origin AS inventory_origin,
         i.supplier_name AS inventory_supplier_name,
         i.photos AS inventory_photos,
+        i.notes AS inventory_notes,
         i.grade,
         i.battery_health,
         i.ios_version,
@@ -923,6 +1031,7 @@ function buildTechnicalReportDocument(row: SaleAccessRow): PublicTechnicalReport
 
 async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPurchaseDetails> {
   const additionalItems = await getAdditionalItemsForSale(row.id)
+  const variantSelections = await getSaleVariantSelections(row.id)
   const publicPayments = await getPublicPaymentsForSale(row.id)
   const inventoryIds = [
     row.inventory_id,
@@ -930,7 +1039,14 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
   ].filter((id): id is string => Boolean(id))
   const problemsByInventoryId = await getProblemsByInventoryId(row.id, inventoryIds)
   const imagesByInventoryId = await getPrimaryProductImagesByInventoryId(inventoryIds)
-  const deviceName = uniqueDeviceName(row.model, row.variant, row.storage)
+  const deviceName = realInventoryDisplayName({
+    model: row.model,
+    variant: row.variant,
+    storage: row.storage,
+    color: row.color,
+    inventoryNotes: row.inventory_notes,
+    conditionNotes: row.condition_notes,
+  })
   const { saleDate, warrantyStart, warrantyEnd } = warrantyPeriodFromSale(row)
   const settings = companySettings(row.company_settings)
   const support = whatsappUrl(settings.phone)
@@ -961,6 +1077,11 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
   }))
   const principalIssues = row.inventory_id ? problemsByInventoryId.get(row.inventory_id) || [] : []
   const principalImage = row.inventory_id ? imagesByInventoryId.get(row.inventory_id) : null
+  const additionalChargedTotal = additionalItems.reduce((sum, item) => {
+    if (normalizePublicItemType(item.type) === "free") return sum
+    return sum + Number(item.sale_price || 0)
+  }, 0)
+  const principalFinalAmount = Math.max(0, Math.round((purchaseAmount - additionalChargedTotal) * 100) / 100)
   const principalItem: PublicPurchaseItem = {
     id: "principal",
     type: "principal",
@@ -974,6 +1095,9 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
     photoUrl: principalImage?.image_url || firstPhoto(row.inventory_photos),
     imei: maskTrailing(row.imei),
     serial: maskTrailing(row.serial_number),
+    variationText: consumeVariantSelection(variantSelections, "main", row.inventory_id),
+    finalAmount: principalFinalAmount,
+    originalAmount: null,
     warrantyStart,
     warrantyEnd,
     issues: principalIssues,
@@ -985,11 +1109,22 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
       const itemType = normalizePublicItemType(item.type)
       const issues = item.product_id ? problemsByInventoryId.get(item.product_id) || [] : []
       const itemImage = item.product_id ? imagesByInventoryId.get(item.product_id) : null
+      const itemName = realInventoryDisplayName({
+        storedName: item.name,
+        model: item.model,
+        variant: item.variant,
+        storage: item.storage,
+        color: item.color,
+        inventoryNotes: item.inventory_notes,
+        conditionNotes: item.condition_notes,
+      })
+      const saleAmount = moneyAmount(item.sale_price)
+      const originalAmount = moneyAmount(item.inventory_suggested_price) || saleAmount
       return {
         id: `item_${index + 1}`,
         type: itemType,
         label: publicItemLabel(itemType),
-        model: uniqueDeviceName(getAdditionalItemDisplayName(item.name), item.model, item.variant, item.storage),
+        model: itemName,
         storage: item.storage || null,
         color: item.color || null,
         grade: item.grade || null,
@@ -998,6 +1133,9 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
         photoUrl: itemImage?.image_url || null,
         imei: maskTrailing(item.imei),
         serial: maskTrailing(item.serial_number),
+        variationText: consumeVariantSelection(variantSelections, "additional", item.product_id),
+        finalAmount: itemType === "free" ? zeroMoney() : saleAmount,
+        originalAmount: itemType === "free" ? originalAmount : null,
         warrantyStart: null,
         warrantyEnd: null,
         issues,
@@ -1052,6 +1190,9 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
       photoUrl: principalItem.photoUrl,
       imei: principalItem.imei,
       serial: principalItem.serial,
+      variationText: principalItem.variationText,
+      finalAmount: principalItem.finalAmount,
+      originalAmount: principalItem.originalAmount,
     },
     purchaseItems,
     provenance: buildProvenance(row),
