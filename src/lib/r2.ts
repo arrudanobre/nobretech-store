@@ -17,14 +17,47 @@ function requiredEnv(name: string) {
   return value
 }
 
+function unquote(value: string) {
+  return value.replace(/^["']|["']$/g, "").trim()
+}
+
+function normalizeR2AccountId(value: string) {
+  const rawValue = unquote(value)
+  const endpointHost = rawValue.startsWith("http://") || rawValue.startsWith("https://")
+    ? new URL(rawValue).hostname
+    : rawValue
+  const accountId = endpointHost.replace(/\.r2\.cloudflarestorage\.com$/i, "")
+
+  if (!/^[a-z0-9]+$/i.test(accountId) || accountId.includes(".")) {
+    throw new Error("R2_ACCOUNT_ID inválido. Use o Account ID puro ou o endpoint R2 completo.")
+  }
+
+  return accountId
+}
+
+function normalizePublicUrl(value: string) {
+  const rawValue = unquote(value).replace(/\/+$/, "")
+  const withProtocol = /^https?:\/\//i.test(rawValue) ? rawValue : `https://${rawValue}`
+
+  try {
+    const url = new URL(withProtocol)
+    if (!["https:", "http:"].includes(url.protocol) || !url.hostname) {
+      throw new Error("invalid")
+    }
+    return url.toString().replace(/\/+$/, "")
+  } catch {
+    throw new Error("R2_PUBLIC_URL inválida. Use uma URL pública completa, por exemplo https://pub-...r2.dev")
+  }
+}
+
 export function getR2Config(): R2Config {
   if (!r2Config) {
     r2Config = {
-      accountId: requiredEnv("R2_ACCOUNT_ID"),
+      accountId: normalizeR2AccountId(requiredEnv("R2_ACCOUNT_ID")),
       accessKeyId: requiredEnv("R2_ACCESS_KEY_ID"),
       secretAccessKey: requiredEnv("R2_SECRET_ACCESS_KEY"),
       bucketName: requiredEnv("R2_BUCKET_NAME"),
-      publicUrl: requiredEnv("R2_PUBLIC_URL").replace(/\/+$/, ""),
+      publicUrl: normalizePublicUrl(requiredEnv("R2_PUBLIC_URL")),
     }
   }
   return r2Config
