@@ -13,11 +13,27 @@ declare global {
 // NEXT_PHASE=phase-production-build during `next build` — no actual DB connections are made.
 // The SSL guard must only fire at runtime, not during static analysis/build.
 const isBuildPhase = process.env.NEXT_PHASE === "phase-production-build"
+const isLocalDevRuntime = process.env.NODE_ENV !== "production" && !isBuildPhase
+const looksLikeRailwayDatabase =
+  process.env.DATABASE_PROVIDER === "railway" || Boolean(connectionString?.match(/railway|rlwy|monorail/i))
+const isRailwayDatabaseForSsl =
+  process.env.DATABASE_PROVIDER === "railway" || Boolean(connectionString?.includes("railway"))
+
+if (
+  connectionString &&
+  isLocalDevRuntime &&
+  looksLikeRailwayDatabase &&
+  process.env.ALLOW_RAILWAY_DATABASE_IN_DEV !== "true"
+) {
+  throw new Error(
+    "[db] Local development is refusing to use a Railway-looking DATABASE_URL. " +
+      "Point .env.local to postgresql://nobretech:nobretech@localhost:5433/nobretech_local, " +
+      "or set ALLOW_RAILWAY_DATABASE_IN_DEV=true only for an intentional read-only exception."
+  )
+}
 
 const buildSslConfig = () => {
-  const isRailwayDatabase =
-    process.env.DATABASE_PROVIDER === "railway" || Boolean(connectionString?.includes("railway"))
-  if (!isRailwayDatabase) return undefined
+  if (!isRailwayDatabaseForSsl) return undefined
   const ca = process.env.DATABASE_SSL_CA
   if (ca) return { ca, rejectUnauthorized: true }
   const isExplicitRailwayException =

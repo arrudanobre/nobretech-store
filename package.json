@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:stock-sale:local": "npx --yes tsx scripts/test-stock-sale-local.ts",
+    "cleanup:test-stock-sale:local": "npx --yes tsx scripts/cleanup-test-stock-sale-local.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1043.0",
