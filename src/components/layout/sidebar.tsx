@@ -6,7 +6,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { SignOutButton } from "@clerk/nextjs"
 import { cn } from "@/lib/utils"
-import { BarChart3, Package, ShoppingCart, ShieldCheck, AlertTriangle, FileText, Users, Truck, DollarSign, Settings, Calculator, ListChecks, ChevronDown, Menu, X, LogOut, Mail, BrainCircuit, type LucideIcon } from "lucide-react"
+import { BarChart3, Package, ShoppingCart, ShieldCheck, AlertTriangle, FileText, Users, Truck, DollarSign, Settings, Calculator, ListChecks, ChevronDown, Menu, X, LogOut, Mail, BrainCircuit, Megaphone, type LucideIcon } from "lucide-react"
 import { useState, useEffect, createContext, useContext, useCallback } from "react"
 import { supabase } from "@/lib/supabase"
 import { canAccess, roleLabels, type PermissionKey, type UserRole } from "@/lib/permissions"
@@ -62,6 +62,7 @@ const staticNavItems: (Omit<NavItem, "badge"> & { badge?: { count?: number; defa
   { label: "ORION AI", href: "/orion", icon: BrainCircuit, permission: "finance.view" },
   { label: "Estoque", href: "/estoque", icon: Package, badge: { defaultCount: 0, color: "bg-royal-500", source: "db", countKey: "estoque" } },
   { label: "Vendas", href: "/vendas", icon: ShoppingCart },
+  { label: "Central de Divulgação", href: "/marketing/divulgacao", icon: Megaphone },
   { label: "Avaliação de Recebimento", href: "/avaliacao", icon: Calculator },
   { label: "Preços de Fornecedores", href: "/precos-fornecedor", icon: ListChecks },
   { label: "Garantias", href: "/garantias", icon: ShieldCheck, badge: { defaultCount: 0, color: "bg-danger-500", source: "db", countKey: "garantias" } },
