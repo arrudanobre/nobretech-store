@@ -1,14 +1,27 @@
 import { NextResponse } from "next/server"
 import type { PoolClient } from "pg"
 import { pool } from "@/lib/db"
-import { canAccess, canEditFinance, requireApiAuthContext } from "@/lib/auth-context"
+import { canAccess, canEditFinance, requireApiAuthContext, type AuthorizedAuthContext } from "@/lib/auth-context"
 import { syncTransactionMovement } from "@/lib/finance/sync-transaction-movement"
+import { restoreInventoryVariantQuantity } from "@/lib/inventory/inventory-variants"
+import { parseQtyFromNotes } from "@/lib/sale-totals"
 
 type RouteContext = {
   params: Promise<{ id: string }> | { id: string }
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const LOCAL_ATOMIC_SALE_TEST_TOKEN = "TESTE_ATOMIC_SALE_LOCAL"
+
+class SaleReservationError extends Error {
+  statusCode: number
+
+  constructor(message: string, statusCode = 400) {
+    super(message)
+    this.name = "SaleReservationError"
+    this.statusCode = statusCode
+  }
+}
 
 type SaleRow = {
   id: string
@@ -22,6 +35,64 @@ type SaleRow = {
   sale_date: string | null
   sale_status: string | null
   trade_in_id: string | null
+  notes: string | null
+}
+
+type SaleVariantAllocation = {
+  scope: "main" | "additional"
+  inventoryId: string
+  variantId: string
+  variantName: string | null
+  variantColorHex: string | null
+  quantity: number
+}
+
+type SaleStockRestoration = {
+  scope: "additional"
+  inventoryId: string
+  quantity: number
+}
+
+function isLocalAtomicSaleTestRequest(request: Request) {
+  return (
+    process.env.NODE_ENV !== "production" &&
+    process.env.DATABASE_URL_TEST &&
+    process.env.DATABASE_URL === process.env.DATABASE_URL_TEST &&
+    request.headers.get("x-debug-atomic-sale-test") === LOCAL_ATOMIC_SALE_TEST_TOKEN
+  )
+}
+
+async function resolveReservationAuthContext(request: Request): ReturnType<typeof requireApiAuthContext> {
+  if (!isLocalAtomicSaleTestRequest(request)) return requireApiAuthContext()
+
+  const companyId = request.headers.get("x-debug-company-id")
+  const appUserId = request.headers.get("x-debug-user-id")
+  const email = request.headers.get("x-debug-user-email") || "atomic-sale-local@nobretech.test"
+
+  if (!companyId || !appUserId || !UUID_RE.test(companyId) || !UUID_RE.test(appUserId)) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { data: null, error: { message: "Headers locais de teste inválidos." } },
+        { status: 400 }
+      ),
+    }
+  }
+
+  const context: AuthorizedAuthContext = {
+    status: "authorized",
+    clerkUserId: `local:${appUserId}`,
+    appUserId,
+    email,
+    fullName: "Teste Atomic Sale Local",
+    role: "owner",
+    avatarUrl: null,
+    companyId,
+    companyName: "NOBRETECH TESTE LOCAL",
+    companySlug: "nobretech-teste-local",
+  }
+
+  return { ok: true, context }
 }
 
 async function writeSaleAudit(
@@ -54,7 +125,7 @@ async function loadSaleForUpdate(client: PoolClient, saleId: string, companyId: 
   const result = await client.query<SaleRow>(
     `
       SELECT id, company_id, inventory_id, customer_id, source_type, warranty_months,
-             warranty_start, warranty_end, sale_date, sale_status, trade_in_id
+             warranty_start, warranty_end, sale_date, sale_status, trade_in_id, notes
       FROM sales
       WHERE id = $1::uuid
         AND company_id = $2::uuid
@@ -63,6 +134,109 @@ async function loadSaleForUpdate(client: PoolClient, saleId: string, companyId: 
     [saleId, companyId]
   )
   return result.rows[0] || null
+}
+
+function normalizeVariantAllocations(value: unknown): SaleVariantAllocation[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item): SaleVariantAllocation | null => {
+      if (!item || typeof item !== "object") return null
+      const row = item as Record<string, unknown>
+      const scope = row.scope === "additional" ? "additional" : row.scope === "main" ? "main" : null
+      const inventoryId = typeof row.inventoryId === "string" ? row.inventoryId : ""
+      const variantId = typeof row.variantId === "string" ? row.variantId : ""
+      const quantity = Math.max(1, Math.floor(Number(row.quantity) || 1))
+      if (!scope || !UUID_RE.test(inventoryId) || !UUID_RE.test(variantId)) return null
+      return {
+        scope,
+        inventoryId,
+        variantId,
+        variantName: typeof row.variantName === "string" ? row.variantName : null,
+        variantColorHex: typeof row.variantColorHex === "string" ? row.variantColorHex : null,
+        quantity,
+      }
+    })
+    .filter((item): item is SaleVariantAllocation => Boolean(item))
+}
+
+function normalizeStockRestorations(value: unknown): SaleStockRestoration[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item): SaleStockRestoration | null => {
+      if (!item || typeof item !== "object") return null
+      const row = item as Record<string, unknown>
+      const inventoryId = typeof row.inventoryId === "string" ? row.inventoryId : ""
+      const quantity = Math.max(1, Math.floor(Number(row.quantity) || 1))
+      if (row.scope !== "additional" || !UUID_RE.test(inventoryId)) return null
+      return {
+        scope: "additional",
+        inventoryId,
+        quantity,
+      }
+    })
+    .filter((item): item is SaleStockRestoration => Boolean(item))
+}
+
+async function loadSaleStockHistory(client: PoolClient, sale: SaleRow) {
+  const result = await client.query<{ new_data: Record<string, unknown> | null }>(
+    `
+      SELECT new_data
+      FROM audit_logs
+      WHERE company_id = $1::uuid
+        AND table_name = 'sales'
+        AND record_id = $2::uuid
+        AND action = 'created'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    [sale.company_id, sale.id]
+  )
+  const data = result.rows[0]?.new_data
+  return {
+    variantAllocations: normalizeVariantAllocations(data?.variantSelections),
+    stockRestorations: normalizeStockRestorations(data?.stockRestorations),
+  }
+}
+
+async function getSaleInventoryIdsWithVariants(client: PoolClient, sale: SaleRow) {
+  const result = await client.query<{ inventory_id: string }>(
+    `
+      WITH sale_inventory AS (
+        SELECT $1::uuid AS inventory_id
+        UNION
+        SELECT product_id::uuid
+        FROM sales_additional_items
+        WHERE sale_id = $2::uuid
+          AND company_id = $3::uuid
+          AND product_id IS NOT NULL
+      )
+      SELECT DISTINCT v.inventory_id
+      FROM inventory_item_variants v
+      JOIN sale_inventory si ON si.inventory_id = v.inventory_id
+      WHERE v.company_id = $3::uuid
+    `,
+    [sale.inventory_id, sale.id, sale.company_id]
+  )
+  return new Set(result.rows.map((row) => row.inventory_id))
+}
+
+async function restoreInventoryQuantity(
+  client: PoolClient,
+  input: { companyId: string; inventoryId: string; quantity: number }
+) {
+  await client.query(
+    `
+      UPDATE inventory
+      SET quantity = COALESCE(quantity, 0) + $3,
+          status = 'in_stock',
+          logistics_status = 'in_stock',
+          commercial_status = 'available',
+          updated_at = NOW()
+      WHERE id = $1::uuid
+        AND company_id = $2::uuid
+    `,
+    [input.inventoryId, input.companyId, Math.max(1, Math.floor(Number(input.quantity) || 1))]
+  )
 }
 
 async function completeReservation(client: PoolClient, sale: SaleRow) {
@@ -150,6 +324,52 @@ async function completeReservation(client: PoolClient, sale: SaleRow) {
 }
 
 async function cancelReservation(client: PoolClient, sale: SaleRow, userId: string) {
+  const { variantAllocations, stockRestorations } = await loadSaleStockHistory(client, sale)
+  const inventoryIdsWithVariants = await getSaleInventoryIdsWithVariants(client, sale)
+  const allocatedVariantInventoryIds = new Set(variantAllocations.map((item) => item.inventoryId))
+  const missingVariantHistory = [...inventoryIdsWithVariants].filter((inventoryId) => {
+    return !allocatedVariantInventoryIds.has(inventoryId)
+  })
+
+  if (missingVariantHistory.length > 0) {
+    console.warn("[sales-reservation] missing variant cancellation history", {
+      saleId: sale.id,
+      companyId: sale.company_id,
+      inventoryIds: missingVariantHistory,
+    })
+    throw new SaleReservationError(
+      "Esta venda foi criada sem o vínculo histórico da variação. Não é seguro cancelar automaticamente porque a cor correta não pode ser devolvida ao estoque.",
+      409
+    )
+  }
+
+  const additionalItems = await client.query<{ product_id: string | null }>(
+    `SELECT product_id
+     FROM sales_additional_items
+     WHERE sale_id = $1::uuid
+       AND company_id = $2::uuid
+       AND product_id IS NOT NULL`,
+    [sale.id, sale.company_id]
+  )
+  const restoredAdditionalInventoryIds = new Set(stockRestorations.map((item) => item.inventoryId))
+  const legacyAdditionalItemsWithoutQuantity = additionalItems.rows.filter((item) => {
+    if (!item.product_id) return false
+    if (allocatedVariantInventoryIds.has(item.product_id)) return false
+    return !restoredAdditionalInventoryIds.has(item.product_id)
+  })
+
+  if (legacyAdditionalItemsWithoutQuantity.length > 0) {
+    console.warn("[sales-reservation] missing additional item quantity history", {
+      saleId: sale.id,
+      companyId: sale.company_id,
+      inventoryIds: legacyAdditionalItemsWithoutQuantity.map((item) => item.product_id),
+    })
+    throw new SaleReservationError(
+      "Esta venda possui item adicional sem histórico confiável de quantidade. Não é seguro cancelar automaticamente porque o estoque poderia voltar incompleto ou duplicado.",
+      409
+    )
+  }
+
   const transactionResult = await client.query<{ id: string }>(
     `
       UPDATE transactions
@@ -182,26 +402,31 @@ async function cancelReservation(client: PoolClient, sale: SaleRow, userId: stri
     [sale.id, sale.company_id]
   )
 
-  if ((sale.source_type || "own") === "own") {
-    await client.query(
-      "UPDATE inventory SET status = 'in_stock' WHERE id = $1::uuid AND company_id = $2::uuid AND status IN ('reserved', 'sold')",
-      [sale.inventory_id, sale.company_id]
-    )
+  if (!allocatedVariantInventoryIds.has(sale.inventory_id)) {
+    await restoreInventoryQuantity(client, {
+      companyId: sale.company_id,
+      inventoryId: sale.inventory_id,
+      quantity: parseQtyFromNotes(sale.notes),
+    })
   }
 
-  await client.query(
-    `
-      UPDATE inventory i
-      SET status = 'in_stock'
-      FROM sales_additional_items sai
-      WHERE sai.product_id = i.id
-        AND sai.sale_id = $1::uuid
-        AND sai.company_id = $2::uuid
-        AND i.company_id = $2::uuid
-        AND i.status IN ('reserved', 'sold')
-    `,
-    [sale.id, sale.company_id]
-  )
+  for (const allocation of variantAllocations) {
+    await restoreInventoryVariantQuantity({
+      client,
+      companyId: sale.company_id,
+      inventoryId: allocation.inventoryId,
+      variantId: allocation.variantId,
+      quantity: allocation.quantity,
+    })
+  }
+
+  for (const item of stockRestorations) {
+    await restoreInventoryQuantity(client, {
+      companyId: sale.company_id,
+      inventoryId: item.inventoryId,
+      quantity: item.quantity,
+    })
+  }
 
   if (sale.trade_in_id) {
     const tradeIn = await client.query<{ linked_inventory_id: string | null }>(
@@ -241,12 +466,16 @@ async function cancelReservation(client: PoolClient, sale: SaleRow, userId: stri
 }
 
 export async function POST(request: Request, context: RouteContext) {
-  const authResult = await requireApiAuthContext()
+  const authResult = await resolveReservationAuthContext(request)
   if (!authResult.ok) return authResult.response
 
   const { id } = await Promise.resolve(context.params)
   if (!UUID_RE.test(id)) {
-    return NextResponse.json({ error: { message: "saleId inválido" } }, { status: 400 })
+    console.warn("[sales-reservation] invalid sale id", { saleId: id })
+    return NextResponse.json(
+      { error: { message: "Identificador da venda inválido. Reabra a venda e tente cancelar novamente." } },
+      { status: 400 }
+    )
   }
 
   const body = await request.json().catch(() => ({}))
@@ -314,7 +543,11 @@ export async function POST(request: Request, context: RouteContext) {
   } catch (error) {
     await client.query("ROLLBACK")
     const message = error instanceof Error ? error.message : "Erro ao processar reserva"
-    return NextResponse.json({ error: { message } }, { status: 500 })
+    const status = error instanceof SaleReservationError ? error.statusCode : 500
+    if (!(error instanceof SaleReservationError)) {
+      console.error("[sales-reservation] failed to process sale reservation action", { saleId: id, action, error })
+    }
+    return NextResponse.json({ error: { message } }, { status })
   } finally {
     client.release()
   }

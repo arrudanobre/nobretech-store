@@ -2,12 +2,14 @@ export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
 import { NextRequest, NextResponse } from "next/server"
+import type { PoolClient } from "pg"
 import { pool } from "@/lib/db"
 import { requireApiAuthContext, type AuthorizedAuthContext } from "@/lib/auth-context"
 import { checkRateLimit } from "@/lib/rate-limit"
 import { isFinancialPayment } from "@/lib/sale-payments"
 import { formatPaymentMethod } from "@/lib/helpers"
 import { syncTransactionMovement } from "@/lib/finance/sync-transaction-movement"
+import { decrementInventoryVariantQuantity } from "@/lib/inventory/inventory-variants"
 import {
   SaleOperationalError,
   buildAdditionalItemStockPlan,
@@ -126,6 +128,48 @@ type ValidatedAdditionalItem = {
   cost: number
   salePrice: number
   qty: number
+  selectedVariantId: string | null
+  selectedVariantName: string | null
+  selectedVariantColorHex: string | null
+}
+
+type SaleVariantAllocation = {
+  scope: "main" | "additional"
+  inventoryId: string
+  variantId: string
+  variantName: string | null
+  variantColorHex: string | null
+  quantity: number
+}
+
+type SaleStockRestoration = {
+  scope: "additional"
+  inventoryId: string
+  quantity: number
+}
+
+function stockStateForQuantity(quantity: number, emptyStockStatus: "sold" | "reserved") {
+  if (quantity > 0) {
+    return {
+      status: "in_stock",
+      logisticsStatus: "in_stock",
+      commercialStatus: "available",
+    }
+  }
+
+  if (emptyStockStatus === "reserved") {
+    return {
+      status: "reserved",
+      logisticsStatus: "in_stock",
+      commercialStatus: "reserved",
+    }
+  }
+
+  return {
+    status: "sold",
+    logisticsStatus: "unavailable",
+    commercialStatus: "sold",
+  }
 }
 
 type ValidatedInput = {
@@ -158,6 +202,9 @@ type ValidatedInput = {
   payments: ValidatedPayment[]
   productName: string
   isReservation: boolean
+  selectedVariantId: string | null
+  selectedVariantName: string | null
+  selectedVariantColorHex: string | null
 }
 
 function parseAndValidateInput(
@@ -238,6 +285,9 @@ function parseAndValidateInput(
         cost: safeNumber(item.cost),
         salePrice: safeNumber(item.salePrice),
         qty: safePositiveInt(item.qty) || 1,
+        selectedVariantId: isUuid(item.selectedVariantId) ? item.selectedVariantId : null,
+        selectedVariantName: safeString(item.selectedVariantName, 120),
+        selectedVariantColorHex: safeString(item.selectedVariantColorHex, 30),
       })
     }
   }
@@ -300,8 +350,72 @@ function parseAndValidateInput(
       payments,
       productName,
       isReservation: Boolean(b.isReservation),
+      selectedVariantId: isUuid(b.selectedVariantId) ? b.selectedVariantId : null,
+      selectedVariantName: safeString(b.selectedVariantName, 120),
+      selectedVariantColorHex: safeString(b.selectedVariantColorHex, 30),
     },
   }
+}
+
+async function requiresVariantSelection(input: {
+  client: PoolClient
+  companyId: string
+  inventoryId: string
+  hasSerial: boolean
+}) {
+  if (input.hasSerial) return false
+  const res = await input.client.query<{ available_variants: string | number }>(
+    `SELECT COUNT(*) AS available_variants
+     FROM inventory_item_variants
+     WHERE company_id = $1::uuid AND inventory_id = $2::uuid AND quantity > 0`,
+    [input.companyId, input.inventoryId]
+  )
+  return Number(res.rows[0]?.available_variants || 0) > 0
+}
+
+function buildSaleVariantAllocations(
+  input: ValidatedInput,
+  loweredStock: { mainVariant: boolean; additionalVariantItemIds: Set<string> }
+): SaleVariantAllocation[] {
+  const allocations: SaleVariantAllocation[] = []
+
+  if (loweredStock.mainVariant && input.selectedVariantId) {
+    allocations.push({
+      scope: "main",
+      inventoryId: input.inventoryId,
+      variantId: input.selectedVariantId,
+      variantName: input.selectedVariantName,
+      variantColorHex: input.selectedVariantColorHex,
+      quantity: Math.max(1, input.quantity),
+    })
+  }
+
+  for (const item of input.additionalItems) {
+    if (!loweredStock.additionalVariantItemIds.has(item.itemId) || !item.selectedVariantId) continue
+    allocations.push({
+      scope: "additional",
+      inventoryId: item.itemId,
+      variantId: item.selectedVariantId,
+      variantName: item.selectedVariantName,
+      variantColorHex: item.selectedVariantColorHex,
+      quantity: Math.max(1, item.qty),
+    })
+  }
+
+  return allocations
+}
+
+function buildSaleStockRestorations(
+  plans: AdditionalItemStockPlan[],
+  additionalVariantItemIds: Set<string>
+): SaleStockRestoration[] {
+  return plans
+    .filter((plan) => !additionalVariantItemIds.has(plan.itemId))
+    .map((plan) => ({
+      scope: "additional",
+      inventoryId: plan.itemId,
+      quantity: Math.max(1, plan.requestedQuantity),
+    }))
 }
 
 // --- POST handler ---
@@ -363,21 +477,46 @@ export async function POST(request: NextRequest) {
     await client.query("SET LOCAL statement_timeout = '30000'")
 
     // 1. Lock main inventory item
-    const inventoryRes = await client.query<{ quantity: string; status: string }>(
-      `SELECT quantity, status FROM inventory WHERE id = $1::uuid AND company_id = $2::uuid FOR UPDATE`,
+    const inventoryRes = await client.query<{ quantity: string; status: string; imei: string | null; serial_number: string | null }>(
+      `SELECT quantity, status, imei, serial_number FROM inventory WHERE id = $1::uuid AND company_id = $2::uuid FOR UPDATE`,
       [input.inventoryId, companyId]
     )
     if ((inventoryRes.rowCount ?? 0) === 0) {
       throw new SaleOperationalError("Produto não encontrado ou não pertence à empresa.")
     }
 
+    const mainRequiresVariant = await requiresVariantSelection({
+      client,
+      companyId,
+      inventoryId: input.inventoryId,
+      hasSerial: Boolean(inventoryRes.rows[0].imei || inventoryRes.rows[0].serial_number),
+    })
+    if (mainRequiresVariant && !input.selectedVariantId) {
+      throw new SaleOperationalError("Selecione a variação do item antes de concluir a venda.")
+    }
+
     // 2. Lock and validate additional items (prevents concurrent oversell)
+    const additionalItemIdsRequiringVariant = new Set<string>()
     if (input.additionalItems.length > 0) {
       const itemIds = Array.from(new Set(input.additionalItems.map((i) => i.itemId)))
-      const additionalInventoryRes = await client.query<LockedInventoryForSale>(
-        `SELECT id, quantity, status FROM inventory WHERE id = ANY($1::uuid[]) AND company_id = $2::uuid FOR UPDATE`,
+      const additionalInventoryRes = await client.query<LockedInventoryForSale & { imei: string | null; serial_number: string | null }>(
+        `SELECT id, quantity, status, imei, serial_number FROM inventory WHERE id = ANY($1::uuid[]) AND company_id = $2::uuid FOR UPDATE`,
         [itemIds, companyId]
       )
+      for (const row of additionalInventoryRes.rows) {
+        const additionalRequiresVariant = await requiresVariantSelection({
+          client,
+          companyId,
+          inventoryId: row.id,
+          hasSerial: Boolean(row.imei || row.serial_number),
+        })
+        if (additionalRequiresVariant) additionalItemIdsRequiringVariant.add(row.id)
+      }
+      for (const item of input.additionalItems) {
+        if (additionalItemIdsRequiringVariant.has(item.itemId) && !item.selectedVariantId) {
+          throw new SaleOperationalError(`Selecione a variação do item adicional ${item.name} antes de concluir a venda.`)
+        }
+      }
       additionalItemStockPlans = buildAdditionalItemStockPlan({
         items: input.additionalItems,
         lockedInventoryRows: additionalInventoryRes.rows,
@@ -471,22 +610,43 @@ export async function POST(request: NextRequest) {
       throw new SaleOperationalError("Falha local forçada após insert da venda.")
     }
 
-    // 5. Update main inventory stock (skip for supplier items)
-    if (input.sourceType !== "supplier") {
+    // 5. Update main inventory stock for the real inventory item selected in the sale.
+    if (mainRequiresVariant && input.selectedVariantId) {
+      try {
+        await decrementInventoryVariantQuantity({
+          client,
+          companyId,
+          inventoryId: input.inventoryId,
+          variantId: input.selectedVariantId,
+          quantity: input.quantity,
+          emptyStockStatus: input.isReservation ? "reserved" : "sold",
+        })
+      } catch (error) {
+        throw new SaleOperationalError(error instanceof Error ? error.message : "Erro ao baixar variação do estoque.")
+      }
+    } else {
       const currentQty = Math.max(1, Number(inventoryRes.rows[0].quantity || 1))
       const nextQty = Math.max(0, currentQty - Math.max(1, input.quantity))
+      const stockState = stockStateForQuantity(nextQty, input.isReservation ? "reserved" : "sold")
 
-      if (nextQty > 0) {
-        await client.query(
-          `UPDATE inventory SET quantity = $1, status = 'in_stock', updated_at = NOW() WHERE id = $2::uuid`,
-          [nextQty, input.inventoryId]
-        )
-      } else {
-        await client.query(
-          `UPDATE inventory SET quantity = 0, status = $1, updated_at = NOW() WHERE id = $2::uuid`,
-          [input.isReservation ? "reserved" : "sold", input.inventoryId]
-        )
-      }
+      await client.query(
+        `UPDATE inventory
+         SET quantity = $1,
+             status = $2,
+             logistics_status = $3,
+             commercial_status = $4,
+             updated_at = NOW()
+         WHERE id = $5::uuid
+           AND company_id = $6::uuid`,
+        [
+          nextQty,
+          stockState.status,
+          stockState.logisticsStatus,
+          stockState.commercialStatus,
+          input.inventoryId,
+          companyId,
+        ]
+      )
     }
 
     // 6. Process additional items
@@ -498,18 +658,42 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    for (const stockPlan of additionalItemStockPlans) {
-      if (stockPlan.nextQuantity > 0) {
-        await client.query(
-          `UPDATE inventory SET quantity = $1, status = 'in_stock', updated_at = NOW() WHERE id = $2::uuid`,
-          [stockPlan.nextQuantity, stockPlan.itemId]
-        )
-      } else {
-        await client.query(
-          `UPDATE inventory SET quantity = 0, status = $1, updated_at = NOW() WHERE id = $2::uuid`,
-          [stockPlan.nextStatus, stockPlan.itemId]
-        )
+    for (const additionalItem of input.additionalItems) {
+      if (!additionalItemIdsRequiringVariant.has(additionalItem.itemId) || !additionalItem.selectedVariantId) continue
+      try {
+        await decrementInventoryVariantQuantity({
+          client,
+          companyId,
+          inventoryId: additionalItem.itemId,
+          variantId: additionalItem.selectedVariantId,
+          quantity: additionalItem.qty,
+          emptyStockStatus: input.isReservation ? "reserved" : "sold",
+        })
+      } catch (error) {
+        throw new SaleOperationalError(error instanceof Error ? error.message : "Erro ao baixar variação do item adicional.")
       }
+    }
+
+    for (const stockPlan of additionalItemStockPlans.filter((plan) => !additionalItemIdsRequiringVariant.has(plan.itemId))) {
+      const stockState = stockStateForQuantity(stockPlan.nextQuantity, stockPlan.nextStatus === "reserved" ? "reserved" : "sold")
+      await client.query(
+        `UPDATE inventory
+         SET quantity = $1,
+             status = $2,
+             logistics_status = $3,
+             commercial_status = $4,
+             updated_at = NOW()
+         WHERE id = $5::uuid
+           AND company_id = $6::uuid`,
+        [
+          stockPlan.nextQuantity,
+          stockState.status,
+          stockState.logisticsStatus,
+          stockState.commercialStatus,
+          stockPlan.itemId,
+          companyId,
+        ]
+      )
     }
 
     // 7. Handle trade-in
@@ -669,6 +853,12 @@ export async function POST(request: NextRequest) {
     }
 
     // 13. Audit log
+    const mainVariantStockLowered = mainRequiresVariant && Boolean(input.selectedVariantId)
+    const variantSelections = buildSaleVariantAllocations(input, {
+      mainVariant: mainVariantStockLowered,
+      additionalVariantItemIds: additionalItemIdsRequiringVariant,
+    })
+    const stockRestorations = buildSaleStockRestorations(additionalItemStockPlans, additionalItemIdsRequiringVariant)
     await client.query(
       `INSERT INTO audit_logs (company_id, user_id, action, table_name, record_id, old_data, new_data)
        VALUES ($1::uuid, $2, 'created', 'sales', $3::uuid, NULL, $4)`,
@@ -676,7 +866,13 @@ export async function POST(request: NextRequest) {
         companyId,
         appUserId,
         saleId,
-        JSON.stringify({ saleStatus: input.saleStatus, finalTotal: input.finalTotal, payments: paymentIds.length }),
+        JSON.stringify({
+          saleStatus: input.saleStatus,
+          finalTotal: input.finalTotal,
+          payments: paymentIds.length,
+          variantSelections,
+          stockRestorations,
+        }),
       ]
     )
 

@@ -41,6 +41,9 @@ type InventoryProduct = {
   name: string
   brand?: string | null
   category?: string | null
+  product_type?: string | null
+  category_name_snapshot?: string | null
+  category_normalized?: string | null
   model?: string | null
   storage?: string | null
   color?: string | null
@@ -57,6 +60,17 @@ type InventoryProduct = {
   type?: "own" | "supplier"
   supplier_name?: string | null
   quantity?: number
+  hasVariants?: boolean
+  variants?: InventorySaleVariant[]
+}
+
+type InventorySaleVariant = {
+  id: string
+  colorName: string
+  colorHex: string | null
+  quantity: number
+  unitCost: number | null
+  suggestedPrice: number | null
 }
 
 type TradeInState = {
@@ -92,6 +106,9 @@ type FinanceAccountOption = {
 type SupplierPrice = {
   id: string
   category?: string | null
+  product_type?: string | null
+  category_name_snapshot?: string | null
+  category_normalized?: string | null
   model?: string | null
   storage?: string | null
   grade?: string | null
@@ -114,6 +131,10 @@ type AdditionalSaleItem = {
   availableQty: number
   imei?: string
   serialNumber?: string
+  variants?: InventorySaleVariant[]
+  selectedVariantId?: string | null
+  selectedVariantName?: string | null
+  selectedVariantColorHex?: string | null
 }
 
 const SALE_ORIGINS = [
@@ -414,8 +435,6 @@ const createInventoryItemForTradeIn = createTradeInInventoryItem
 const uploadPhotosForTradeIn = uploadTradeInPhotos
 const linkSaleTradeIn = updateSaleTradeInLink
 const linkTradeInInventory = updateTradeInWithInventoryLink
-const mockInStock: InventoryProduct[] = []
-
 function SectionCard({
   eyebrow,
   title,
@@ -624,7 +643,41 @@ function PendingChecklist({ items }: { items: Array<{ label: string; done: boole
   )
 }
 
-const classifyAdditionalItem = (product: InventoryProduct | any) => {
+const normalizeSaleKindValue = (value?: string | null) => String(value || "")
+  .normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .trim()
+  .toLowerCase()
+  .replace(/[\s-]+/g, "_")
+
+function getSaleItemKind(product: {
+  name?: string | null
+  condition_notes?: string | null
+  product_type?: string | null
+  category?: string | null
+  category_name_snapshot?: string | null
+  category_normalized?: string | null
+  imei?: string | null
+  serial_number?: string | null
+  serialNumber?: string | null
+  hasVariants?: boolean
+  variants?: InventorySaleVariant[]
+}): "device" | "accessory" {
+  const productType = normalizeSaleKindValue(product.product_type)
+  const categories = [
+    product.category,
+    product.category_name_snapshot,
+    product.category_normalized,
+  ].map(normalizeSaleKindValue)
+
+  if (productType === "accessory") return "accessory"
+  if (categories.some((category) => category === "accessories" || category === "acessorios" || category === "acessorio")) return "accessory"
+  if (!product.imei && !product.serial_number && !product.serialNumber && saleAvailableVariants(product).length > 0) return "accessory"
+
+  if (productType === "device") return "device"
+  if (product.imei || product.serial_number || product.serialNumber) return "device"
+  if (categories.some((category) => ["iphone", "ipad", "macbook", "apple_watch", "airpods"].includes(category))) return "device"
+
   const text = `${product.name || ""} ${product.condition_notes || ""}`.toLowerCase()
   if (/(capa|pel[ií]cula|fone|airpods|cabo|fonte|carregador|pencil|caneta|case|adaptador|suporte)/i.test(text)) {
     return "accessory"
@@ -632,9 +685,47 @@ const classifyAdditionalItem = (product: InventoryProduct | any) => {
   return "device"
 }
 
+const saleAvailableVariants = (product?: {
+  imei?: string | null
+  serial_number?: string | null
+  variants?: InventorySaleVariant[]
+} | null) => {
+  if (!product || product.imei || product.serial_number) return []
+  return (product.variants || []).filter((variant) => Number(variant.quantity || 0) > 0)
+}
+
+const variantSalePrice = (product: Pick<InventoryProduct, "suggested">, variant?: InventorySaleVariant | null) => {
+  return Number(variant?.suggestedPrice ?? product.suggested ?? 0)
+}
+
+const variantUnitCost = (product: Pick<InventoryProduct, "cost">, variant?: InventorySaleVariant | null) => {
+  return Number(variant?.unitCost ?? product.cost ?? 0)
+}
+
+const mapVariantPayload = (variant: {
+  id?: string
+  colorName?: string | null
+  color_name?: string | null
+  colorHex?: string | null
+  color_hex?: string | null
+  quantity?: string | number | null
+  unitCost?: string | number | null
+  unit_cost?: string | number | null
+  suggestedPrice?: string | number | null
+  suggested_price?: string | number | null
+}): InventorySaleVariant => ({
+  id: variant.id || "",
+  colorName: variant.colorName || variant.color_name || "Variação",
+  colorHex: variant.colorHex ?? variant.color_hex ?? null,
+  quantity: Math.max(0, Number(variant.quantity || 0)),
+  unitCost: (variant.unitCost ?? variant.unit_cost) == null ? null : Number(variant.unitCost ?? variant.unit_cost),
+  suggestedPrice: (variant.suggestedPrice ?? variant.suggested_price) == null ? null : Number(variant.suggestedPrice ?? variant.suggested_price),
+})
+
 function NewSaleContent() {
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedProduct, setSelectedProduct] = useState<InventoryProduct | null>(null)
+  const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null)
   const [customer, setCustomer] = useState({ name: "", cpf: "", phone: "", email: "" })
   const [customerNotes, setCustomerNotes] = useState("")
   const [customerEditableNotes, setCustomerEditableNotes] = useState("")
@@ -749,19 +840,22 @@ function NewSaleContent() {
       try {
         const { data, error } = await supabase
           .from("inventory")
-          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, grade, status, quantity, condition_notes, notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color, brand, category)")
+          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, grade, status, quantity, condition_notes, notes, type, supplier_name, product_type, category_name_snapshot, catalog:catalog_id(model, variant, storage, color, brand, category)")
           .in("status", ["active", "in_stock"] as any)
           .order("created_at", { ascending: false })
 
         if (error) throw error
 
         const imageMap: Record<string, ProductImageRecord | null> = await fetchProductImageMap((data || []).map((item: any) => item.id)).catch(() => ({}))
-        const products = (data || []).map((item: any) => {
+        const products: InventoryProduct[] = (data || []).map((item: any) => {
           return {
             id: item.id,
             name: getProductName(item),
             brand: item.catalog?.brand || null,
             category: item.catalog?.category || null,
+            product_type: item.product_type || null,
+            category_name_snapshot: item.category_name_snapshot || null,
+            category_normalized: item.catalog?.category || null,
             model: item.catalog?.model || null,
             storage: item.catalog?.storage || null,
             color: item.catalog?.color || null,
@@ -778,9 +872,33 @@ function NewSaleContent() {
             type: item.type || "own",
             supplier_name: item.supplier_name || null,
             quantity: Math.max(1, Number(item.quantity || 1)),
+            hasVariants: false,
+            variants: [],
           }
         })
         setInventoryProducts(products)
+        if (products.length > 0) {
+          fetch("/api/inventory/batch-variants", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ inventory_ids: products.map((product) => product.id) }),
+          })
+            .then((res) => res.json())
+            .then((payload) => {
+              const variantsById = payload?.data?.variants_by_id || {}
+              setInventoryProducts((current) => current.map((product) => {
+                const variants = (variantsById[product.id] || []).map(mapVariantPayload)
+                return { ...product, variants, hasVariants: saleAvailableVariants({ ...product, variants }).length > 0 }
+              }))
+              setSelectedProduct((current) => {
+                if (!current) return current
+                const variants = (variantsById[current.id] || []).map(mapVariantPayload)
+                if (variants.length === 0) return current
+                return { ...current, variants, hasVariants: saleAvailableVariants({ ...current, variants }).length > 0 }
+              })
+            })
+            .catch(() => null)
+        }
       } catch (err) {
         console.error("Erro ao carregar inventário:", err)
       } finally {
@@ -812,7 +930,7 @@ function NewSaleContent() {
     const fetchProduct = async () => {
       try {
         const { data: items, error } = await (supabase.from("inventory") as any)
-          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, grade, status, quantity, condition_notes, notes, type, supplier_name, catalog:catalog_id(model, variant, storage, color, brand, category)")
+          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, grade, status, quantity, condition_notes, notes, type, supplier_name, product_type, category_name_snapshot, catalog:catalog_id(model, variant, storage, color, brand, category)")
           .eq("id", preselectId)
           .single()
 
@@ -831,6 +949,9 @@ function NewSaleContent() {
           name: getProductName(items),
           brand: items.catalog?.brand || null,
           category: items.catalog?.category || null,
+          product_type: items.product_type || null,
+          category_name_snapshot: items.category_name_snapshot || null,
+          category_normalized: items.catalog?.category || null,
           model: items.catalog?.model || null,
           storage: items.catalog?.storage || null,
           color: items.catalog?.color || null,
@@ -847,11 +968,23 @@ function NewSaleContent() {
           type: items.type || "own",
           supplier_name: items.supplier_name || null,
           quantity: Math.max(1, Number(items.quantity || 1)),
+          hasVariants: false,
+          variants: [],
         }
         const imageMap: Record<string, ProductImageRecord | null> = await fetchProductImageMap([product.id]).catch(() => ({}))
         product.productImage = imageMap[product.id] || null
-        const initialPrice = product.suggested.toString()
+        const variantsPayload = await fetch("/api/inventory/batch-variants", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ inventory_ids: [product.id] }),
+        }).then((res) => res.json()).catch(() => null)
+        const variants = (variantsPayload?.data?.variants_by_id?.[product.id] || []).map(mapVariantPayload)
+        product.variants = variants
+        product.hasVariants = saleAvailableVariants(product).length > 0
+        const autoVariant = saleAvailableVariants(product).length === 1 ? saleAvailableVariants(product)[0] : null
+        const initialPrice = variantSalePrice(product, autoVariant).toString()
         setSelectedProduct(product)
+        setSelectedVariantId(autoVariant?.id || null)
         setSalePrice(initialPrice)
         setSalePriceInput(initialPrice)
         setIsSalePriceManual(false)
@@ -964,10 +1097,27 @@ function NewSaleContent() {
     )
   }, [searchTerm, inventoryProducts])
 
+  const selectedProductVariants = useMemo(() => saleAvailableVariants(selectedProduct), [selectedProduct])
+  const selectedMainVariant = useMemo(
+    () => selectedProductVariants.find((variant) => variant.id === selectedVariantId) || null,
+    [selectedProductVariants, selectedVariantId]
+  )
+  const mainVariantRequired = selectedProductVariants.length > 0
+  const selectedProductEffectiveCost = useMemo(() => {
+    if (!selectedProduct) return 0
+    if (selectedProduct.type === "supplier") return parseFloat(supplierCostInput) || 0
+    return variantUnitCost(selectedProduct, selectedMainVariant)
+  }, [selectedProduct, selectedMainVariant, supplierCostInput])
+  const selectedProductCostLabel = selectedMainVariant?.unitCost != null
+    ? "Custo da variação"
+    : mainVariantRequired
+      ? "Custo médio"
+      : "Custo"
+
   // Preco unitario e totais
   const unitPrice = parseFloat(salePrice) || 0
   const totalBasePrice = unitPrice * quantity
-  const originalUnitPrice = Number(selectedProduct?.suggested || 0)
+  const originalUnitPrice = selectedProduct ? variantSalePrice(selectedProduct, selectedMainVariant) : 0
   const originalTotalPrice = originalUnitPrice * quantity
   const hasMainProductDiscount = Boolean(selectedProduct && originalUnitPrice > 0 && unitPrice > 0 && unitPrice < originalUnitPrice)
   const mainProductDiscount = hasMainProductDiscount ? originalTotalPrice - totalBasePrice : 0
@@ -986,10 +1136,8 @@ function NewSaleContent() {
   // Lucro base do produto principal (por unidade): independe do método de pagamento
   const baseProfit = useMemo(() => {
     if (!selectedProduct || !salePrice) return 0
-    const supplierCost = parseFloat(supplierCostInput) || 0
-    const effectiveCost = selectedProduct.type === "supplier" ? supplierCost : selectedProduct.cost
-    return unitPrice - effectiveCost
-  }, [selectedProduct, salePrice, unitPrice, supplierCostInput])
+    return unitPrice - selectedProductEffectiveCost
+  }, [selectedProduct, salePrice, unitPrice, selectedProductEffectiveCost])
 
   // Lucro base TOTAL considerando quantidade
   const totalBaseProfit = useMemo(() => {
@@ -1025,9 +1173,13 @@ function NewSaleContent() {
   }, [])
 
   const addAdditionalSaleItem = useCallback((item: InventoryProduct) => {
+    const variants = saleAvailableVariants(item)
+    const autoVariant = variants.length === 1 ? variants[0] : null
     setHasAdditionalItem(true)
     setAdditionalSaleItems((previous) => {
       if (previous.some((selected) => selected.itemId === item.id)) return previous
+      const effectiveSuggested = variantSalePrice(item, autoVariant)
+      const effectiveCost = variantUnitCost(item, autoVariant)
       return [
         ...previous,
         {
@@ -1035,17 +1187,24 @@ function NewSaleContent() {
           name: item.name,
           brand: item.brand || null,
           category: item.category || null,
+          product_type: item.product_type || null,
+          category_name_snapshot: item.category_name_snapshot || null,
+          category_normalized: item.category_normalized || item.category || null,
           model: item.model || null,
           color: item.color || null,
           productImage: item.productImage || null,
-          cost: item.cost,
-          suggested: item.suggested,
+          cost: effectiveCost,
+          suggested: effectiveSuggested,
           type: "upsell",
-          salePrice: item.suggested.toString(),
+          salePrice: effectiveSuggested.toString(),
           qty: 1,
-          availableQty: getAvailableQty(item),
+          availableQty: autoVariant ? autoVariant.quantity : getAvailableQty(item),
           imei: item.imei || "",
           serialNumber: item.serial_number || "",
+          variants,
+          selectedVariantId: autoVariant?.id || null,
+          selectedVariantName: autoVariant?.colorName || null,
+          selectedVariantColorHex: autoVariant?.colorHex || null,
         },
       ]
     })
@@ -1068,14 +1227,62 @@ function NewSaleContent() {
     })
   }, [])
 
+  const selectMainVariant = useCallback((variant: InventorySaleVariant) => {
+    if (!selectedProduct) return
+    const currentSuggestedPrice = variantSalePrice(selectedProduct, selectedMainVariant)
+    const nextSuggestedPrice = variantSalePrice(selectedProduct, variant)
+    const currentSalePrice = parseFloat(salePrice)
+    const shouldUseVariantPrice = !isSalePriceManual && (
+      !currentSalePrice ||
+      Math.abs(currentSalePrice - currentSuggestedPrice) < 0.005
+    )
+    setSelectedVariantId(variant.id)
+    if (shouldUseVariantPrice) {
+      const initialPrice = nextSuggestedPrice.toString()
+      setSalePrice(initialPrice)
+      setSalePriceInput(initialPrice)
+    }
+    setQuantity((current) => clampQty(current, variant.quantity))
+  }, [selectedProduct, selectedMainVariant, salePrice, isSalePriceManual, clampQty])
+
+  const selectAdditionalVariant = useCallback((itemId: string, variant: InventorySaleVariant) => {
+    setAdditionalSaleItems((previous) => previous.map((item) => {
+      if (item.itemId !== itemId) return item
+      const nextSuggested = variantSalePrice(item, variant)
+      return {
+        ...item,
+        selectedVariantId: variant.id,
+        selectedVariantName: variant.colorName,
+        selectedVariantColorHex: variant.colorHex,
+        cost: variantUnitCost(item, variant),
+        suggested: nextSuggested,
+        salePrice: item.type === "upsell" ? nextSuggested.toString() : item.salePrice,
+        availableQty: variant.quantity,
+        qty: clampQty(item.qty, variant.quantity),
+      }
+    }))
+  }, [clampQty])
+
   // Quantidade máxima disponível no item selecionado.
   const maxAvailableQty = useMemo(() => {
+    if (selectedMainVariant) return selectedMainVariant.quantity
     return getAvailableQty(selectedProduct)
-  }, [selectedProduct, getAvailableQty])
+  }, [selectedProduct, selectedMainVariant, getAvailableQty])
 
   useEffect(() => {
     setQuantity((current) => clampQty(current, maxAvailableQty))
   }, [maxAvailableQty, clampQty])
+
+  useEffect(() => {
+    if (!selectedProduct || selectedVariantId || selectedProductVariants.length !== 1) return
+    const onlyVariant = selectedProductVariants[0]
+    setSelectedVariantId(onlyVariant.id)
+    if (!isSalePriceManual) {
+      const initialPrice = variantSalePrice(selectedProduct, onlyVariant).toString()
+      setSalePrice(initialPrice)
+      setSalePriceInput(initialPrice)
+    }
+  }, [selectedProduct, selectedProductVariants, selectedVariantId, isSalePriceManual])
 
   useEffect(() => {
     setAdditionalSaleItems((previous) => previous.map((item) => ({
@@ -1109,9 +1316,12 @@ function NewSaleContent() {
     }
   }, [salePrice, isSalePriceManual])
 
-  const selectProduct = (product: typeof mockInStock[0]) => {
-    const initialPrice = product.suggested.toString()
+  const selectProduct = (product: InventoryProduct) => {
+    const variants = saleAvailableVariants(product)
+    const autoVariant = variants.length === 1 ? variants[0] : null
+    const initialPrice = variantSalePrice(product, autoVariant).toString()
     setSelectedProduct(product)
+    setSelectedVariantId(autoVariant?.id || null)
     setSalePrice(initialPrice)
     setSalePriceInput(initialPrice)
     setIsSalePriceManual(false)
@@ -1120,6 +1330,7 @@ function NewSaleContent() {
 
   const clearSelectedProduct = () => {
     setSelectedProduct(null)
+    setSelectedVariantId(null)
     setSalePrice("")
     setSalePriceInput("")
     setSupplierCostInput("")
@@ -1258,6 +1469,24 @@ function NewSaleContent() {
     try {
       const today = todayISO()
       const warrantyEnd = addDaysISO(today, parseInt(warrantyMonths) * 30)
+      if (mainVariantRequired && !selectedMainVariant) {
+        throw new Error("Selecione a variação do item antes de concluir a venda.")
+      }
+      if (selectedMainVariant && quantity > selectedMainVariant.quantity) {
+        throw new Error(`Só existe ${selectedMainVariant.quantity} unidade disponível na variação ${selectedMainVariant.colorName}.`)
+      }
+      const invalidAdditionalVariant = additionalSaleItems.find((item) => saleAvailableVariants(item).length > 0 && !item.selectedVariantId)
+      if (invalidAdditionalVariant) {
+        throw new Error(`Selecione a variação do item adicional ${getAdditionalItemDisplayName(invalidAdditionalVariant.name)} antes de concluir a venda.`)
+      }
+      const overstockedAdditionalVariant = additionalSaleItems.find((item) => {
+        const variant = saleAvailableVariants(item).find((v) => v.id === item.selectedVariantId)
+        return Boolean(variant && (item.qty || 1) > variant.quantity)
+      })
+      if (overstockedAdditionalVariant) {
+        const variant = saleAvailableVariants(overstockedAdditionalVariant).find((v) => v.id === overstockedAdditionalVariant.selectedVariantId)
+        throw new Error(`Só existe ${variant?.quantity || 0} unidade disponível na variação ${variant?.colorName || "selecionada"}.`)
+      }
 
       // 0. Get user's company_id (required for RLS on all inserts)
       const { data: { user } } = await supabase.auth.getUser()
@@ -1387,6 +1616,9 @@ function NewSaleContent() {
           packagingNotes: packagingType === "other" ? packagingNotes.trim() || null : null,
           notes: saleOperationalNotes,
           quantity,
+          selectedVariantId: selectedMainVariant?.id || null,
+          selectedVariantName: selectedMainVariant?.colorName || null,
+          selectedVariantColorHex: selectedMainVariant?.colorHex || null,
           isReservation,
           productName: selectedProduct!.name,
           additionalItems: additionalSaleItems.map((item) => ({
@@ -1396,6 +1628,9 @@ function NewSaleContent() {
             cost: item.cost * (item.qty || 1),
             salePrice: item.type === "upsell" ? parseFloat(item.salePrice) * (item.qty || 1) : 0,
             qty: item.qty || 1,
+            selectedVariantId: item.selectedVariantId || null,
+            selectedVariantName: item.selectedVariantName || null,
+            selectedVariantColorHex: item.selectedVariantColorHex || null,
           })),
           payments: finalPaymentRows.map((payment) => ({
             paymentMethod: payment.payment_method,
@@ -1510,13 +1745,13 @@ function NewSaleContent() {
   const riskReserve = useMemo(() => {
     if (!selectedProduct) return 0
     return estimateRiskReserve({
-      cost: selectedProduct.cost * quantity,
+      cost: selectedProductEffectiveCost * quantity,
       category: selectedProduct.name,
       grade: selectedProduct.grade,
       batteryHealth: selectedProduct.battery,
       warrantyMonths: Number(warrantyMonths || 0),
     })
-  }, [selectedProduct, quantity, warrantyMonths])
+  }, [selectedProduct, selectedProductEffectiveCost, quantity, warrantyMonths])
 
   const tradeInPaymentAmount = hasTradeIn ? Math.min(tradeInValue, finalTotal) : 0
   const editablePaymentsTotal = useMemo(() => {
@@ -1626,7 +1861,7 @@ function NewSaleContent() {
     return inventoryProducts
       .filter((item) => item.id !== selectedProduct?.id)
       .filter((item) => !selectedIds.has(item.id))
-      .filter((item) => additionalFilter === "all" || classifyAdditionalItem(item) === additionalFilter)
+      .filter((item) => additionalFilter === "all" || getSaleItemKind(item) === additionalFilter)
       .filter((item) => {
         if (!term) return true
         return [item.name, item.imei, item.serial_number, item.condition_notes]
@@ -1702,6 +1937,12 @@ function NewSaleContent() {
   }, [hasTradeIn, tradeInModel, tradeInEvaluation, tradeIn.value])
   const tradeInDeviceName = tradeInModel?.name || tradeInModelSearch || "Aparelho recebido"
   const hasValidTradeIn = !hasTradeIn || Boolean(tradeIn.category && tradeInModel && Number(tradeIn.value || 0) > 0)
+  const additionalItemsMissingVariant = additionalSaleItems.filter((item) => saleAvailableVariants(item).length > 0 && !item.selectedVariantId)
+  const additionalItemsOverVariantStock = additionalSaleItems.filter((item) => {
+    const variant = saleAvailableVariants(item).find((v) => v.id === item.selectedVariantId)
+    return Boolean(variant && (item.qty || 1) > variant.quantity)
+  })
+  const hasRequiredVariantsSelected = (!mainVariantRequired || Boolean(selectedVariantId)) && additionalItemsMissingVariant.length === 0 && additionalItemsOverVariantStock.length === 0
   const tradeInOverageNeedsDecision = hasTradeIn && storeAmountDue > 0
   const canResolveTradeInOverage = !tradeInOverageNeedsDecision || Boolean(tradeInOverageDecision && tradeInOverageDecision !== "block")
   const paidAdditionalCount = additionalSaleItems.reduce((sum, item) => item.type === "upsell" ? sum + (item.qty || 1) : sum, 0)
@@ -1737,7 +1978,7 @@ function NewSaleContent() {
     }> = []
 
     if (selectedProduct) {
-      const cost = (selectedProduct.type === "supplier" ? parseFloat(supplierCostInput) || 0 : selectedProduct.cost) * quantity
+      const cost = selectedProductEffectiveCost * quantity
       rows.push({
         id: selectedProduct.id,
         name: selectedProduct.name,
@@ -1746,7 +1987,9 @@ function NewSaleContent() {
         model: selectedProduct.model,
         color: selectedProduct.color,
         productImage: selectedProduct.productImage,
-        identity: productIdentity || "Sem IMEI/serial informado",
+        identity: [productIdentity || null, selectedMainVariant ? `Variação ${selectedMainVariant.colorName}` : null]
+          .filter(Boolean)
+          .join(" · ") || "Sem IMEI/serial informado",
         type: "Principal",
         quantity,
         unitPrice,
@@ -1768,7 +2011,7 @@ function NewSaleContent() {
       const cost = additionalItem.cost * qty
       const itemKind = isFree
         ? "Brinde"
-        : classifyAdditionalItem(additionalItem) === "accessory"
+        : getSaleItemKind(additionalItem) === "accessory"
           ? "Acessório"
           : "Upsell"
       rows.push({
@@ -1795,7 +2038,7 @@ function NewSaleContent() {
     })
 
     return rows
-  }, [selectedProduct, supplierCostInput, quantity, productIdentity, unitPrice, totalBasePrice, additionalSaleItems])
+  }, [selectedProduct, selectedMainVariant, selectedProductEffectiveCost, quantity, productIdentity, unitPrice, totalBasePrice, additionalSaleItems])
 
   const remainingPaymentTargets = useMemo(() => {
     return salePayments.flatMap((payment, index) => {
@@ -1918,6 +2161,8 @@ function NewSaleContent() {
     { label: "Fechar pagamentos", done: hasPaymentReady },
     ...(selectedProduct?.type === "supplier" ? [{ label: "Informar custo do fornecedor", done: Boolean(supplierCostInput) }] : []),
     ...(!paymentValidation.ok ? [{ label: paymentValidation.message || "Revisar pagamentos", done: false }] : []),
+    ...(mainVariantRequired ? [{ label: "Selecionar variação do produto principal", done: Boolean(selectedVariantId) }] : []),
+    ...(additionalItemsMissingVariant.length > 0 ? [{ label: "Selecionar variação dos adicionais/brindes", done: false }] : []),
     ...(hasTradeIn ? [{ label: "Preencher dados mínimos do trade-in", done: hasValidTradeIn }] : []),
     ...(tradeInOverageNeedsDecision ? [{ label: "Decidir diferença do trade-in", done: canResolveTradeInOverage }] : []),
   ]
@@ -1929,6 +2174,7 @@ function NewSaleContent() {
     salePrice &&
     hasPaymentReady &&
     (selectedProduct?.type !== "supplier" || supplierCostInput) &&
+    hasRequiredVariantsSelected &&
     hasValidTradeIn &&
     canResolveTradeInOverage
   )
@@ -1996,14 +2242,51 @@ function NewSaleContent() {
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="text-right">
-                      <p className="text-xs uppercase tracking-wide text-gray-400">Custo</p>
-                      <p className="text-sm font-semibold text-navy-900">{formatBRL(selectedProduct.cost)}</p>
+                      <p className="text-xs uppercase tracking-wide text-gray-400">{selectedProductCostLabel}</p>
+                      <p className="text-sm font-semibold text-navy-900">{formatBRL(selectedProductEffectiveCost)}</p>
+                      {selectedMainVariant?.unitCost != null ? (
+                        <p className="text-[11px] font-medium text-gray-400">{selectedMainVariant.colorName}</p>
+                      ) : null}
                     </div>
                     <Button variant="outline" size="sm" onClick={clearSelectedProduct}>
                       Trocar
                     </Button>
                   </div>
                 </div>
+
+                {mainVariantRequired && (
+                  <div className="mt-4 rounded-xl border border-gray-100 bg-white p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Variação vendida</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {selectedProductVariants.map((variant) => (
+                        <button
+                          key={variant.id}
+                          type="button"
+                          onClick={() => selectMainVariant(variant)}
+                          className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
+                            selectedVariantId === variant.id
+                              ? "border-royal-500 bg-royal-50 text-royal-700"
+                              : "border-gray-200 bg-white text-gray-600 hover:border-royal-300"
+                          }`}
+                        >
+                          <span
+                            className="h-3 w-3 rounded-full border border-gray-200"
+                            style={{ backgroundColor: variant.colorHex || "#f3f4f6" }}
+                          />
+                          {variant.colorName} · {variant.quantity} disponível(is)
+                        </button>
+                      ))}
+                    </div>
+                    {!selectedVariantId && (
+                      <p className="mt-2 text-xs font-semibold text-red-600">Escolha a variação antes de concluir a venda.</p>
+                    )}
+                    {selectedMainVariant && quantity > selectedMainVariant.quantity && (
+                      <p className="mt-2 text-xs font-semibold text-red-600">
+                        Só existe {selectedMainVariant.quantity} unidade disponível na variação {selectedMainVariant.colorName}.
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 <div className="mt-4 grid gap-3 md:grid-cols-3">
                   <Input
@@ -2084,8 +2367,8 @@ function NewSaleContent() {
                           </p>
                         </div>
                       </div>
-                      <Badge variant={classifyAdditionalItem(product) === "accessory" ? "blue" : "gray"}>
-                        {classifyAdditionalItem(product) === "accessory" ? "Acessório" : "Aparelho"}
+                      <Badge variant={getSaleItemKind(product) === "accessory" ? "blue" : "gray"}>
+                        {getSaleItemKind(product) === "accessory" ? "Acessório" : "Aparelho"}
                       </Badge>
                     </div>
                     <div className="mt-3 flex items-end justify-between">
@@ -2260,6 +2543,34 @@ function NewSaleContent() {
                                 onChange={(event) => updateAdditionalSaleItem(item.itemId, { qty: clampQty(parseInt(event.target.value) || 1, item.availableQty) })}
                               />
                             </div>
+                            {saleAvailableVariants(item).length > 0 && (
+                              <div className="mt-3 rounded-xl border border-gray-100 bg-surface/70 p-3">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Variação vendida</p>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  {saleAvailableVariants(item).map((variant) => (
+                                    <button
+                                      key={variant.id}
+                                      type="button"
+                                      onClick={() => selectAdditionalVariant(item.itemId, variant)}
+                                      className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors ${
+                                        item.selectedVariantId === variant.id
+                                          ? "border-royal-500 bg-white text-royal-700"
+                                          : "border-gray-200 bg-white/70 text-gray-600 hover:border-royal-300"
+                                      }`}
+                                    >
+                                      <span
+                                        className="h-3 w-3 rounded-full border border-gray-200"
+                                        style={{ backgroundColor: variant.colorHex || "#f3f4f6" }}
+                                      />
+                                      {variant.colorName} · {variant.quantity} disp.
+                                    </button>
+                                  ))}
+                                </div>
+                                {!item.selectedVariantId && (
+                                  <p className="mt-2 text-xs font-semibold text-red-600">Escolha a variação deste item.</p>
+                                )}
+                              </div>
+                            )}
                             {isFree && (
                               <div className="mt-3 rounded-xl border border-success-500/20 bg-success-100/25 px-3 py-2 text-xs font-semibold text-green-800">
                                 Este item tem valor real de {formatBRL(Number(item.suggested || item.salePrice || 0) * (item.qty || 1))}, mas sairá por R$ 0,00 como brinde.

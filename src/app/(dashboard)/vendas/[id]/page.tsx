@@ -81,6 +81,54 @@ const auditField = (data: unknown, key: string) => {
   return (data as Record<string, unknown>)[key]
 }
 
+type SaleVariantSelection = {
+  scope: "main" | "additional"
+  inventoryId: string
+  variantName: string | null
+}
+
+type AuditLogLike = {
+  action?: unknown
+  new_data?: unknown
+}
+
+const normalizeVariantText = (value: unknown) => {
+  const text = typeof value === "string" ? value.trim() : ""
+  return text || null
+}
+
+const extractVariantSelections = (logs: AuditLogLike[]): SaleVariantSelection[] => {
+  const createdLog = logs.find((log) => log?.action === "created" && log?.new_data && typeof log.new_data === "object")
+  const selections = createdLog?.new_data && typeof createdLog.new_data === "object"
+    ? (createdLog.new_data as Record<string, unknown>).variantSelections
+    : null
+  if (!Array.isArray(selections)) return []
+
+  return selections
+    .map((item): SaleVariantSelection | null => {
+      if (!item || typeof item !== "object") return null
+      const row = item as Record<string, unknown>
+      const scope = row.scope === "main" || row.scope === "additional" ? row.scope : null
+      const inventoryId = typeof row.inventoryId === "string" ? row.inventoryId : null
+      if (!scope || !inventoryId) return null
+      return {
+        scope,
+        inventoryId,
+        variantName: normalizeVariantText(row.variantName),
+      }
+    })
+    .filter((item): item is SaleVariantSelection => Boolean(item))
+}
+
+const findVariantText = (
+  selections: SaleVariantSelection[],
+  scope: SaleVariantSelection["scope"],
+  inventoryId?: string | null
+) => {
+  if (!inventoryId) return null
+  return selections.find((item) => item.scope === scope && item.inventoryId === inventoryId)?.variantName || null
+}
+
 type SaleInventoryImageItem = {
   id?: string | null
   brand?: string | null
@@ -1109,6 +1157,8 @@ export default function SaleDetailPage() {
 
   const catalog = product?.catalog || {}
   const fullModel = `${catalog.model || "—"}${catalog.variant ? " " + catalog.variant : ""} ${catalog.storage || ""} ${catalog.color || ""}`.trim()
+  const variantSelections = extractVariantSelections(auditLogs)
+  const mainVariantText = findVariantText(variantSelections, "main", sale?.inventory_id)
   const mainProductImage = getSaleItemImageInput(product, productImagesById, fullModel)
   const okCount = checklist.filter((i: any) => i.status === "ok").length
   const failCount = checklist.filter((i: any) => i.status === "fail").length
@@ -1411,6 +1461,9 @@ export default function SaleDetailPage() {
           <div className="bg-surface rounded-xl p-4">
             <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Modelo</p>
             <p className="text-sm font-semibold text-navy-900">{fullModel}</p>
+            {mainVariantText && (
+              <p className="mt-1 text-xs font-semibold text-gray-500">{mainVariantText}</p>
+            )}
           </div>
           <div className="bg-surface rounded-xl p-4">
             <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">IMEI</p>
@@ -1571,7 +1624,12 @@ export default function SaleDetailPage() {
                         className="rounded-lg bg-white"
                         imageClassName="p-1"
                       />
-                      <span className="font-medium text-navy-900">{fullModel}</span>
+                      <div className="min-w-0">
+                        <p className="font-medium text-navy-900">{fullModel}</p>
+                        {mainVariantText && (
+                          <p className="mt-0.5 text-xs font-semibold text-gray-500">{mainVariantText}</p>
+                        )}
+                      </div>
                     </div>
                   </td>
                   <td className="px-4 py-3 font-mono text-gray-500 text-xs">{product?.imei || product?.serial_number || "—"}</td>
@@ -1589,6 +1647,7 @@ export default function SaleDetailPage() {
                   const profit = Number(item.profit ?? (isUpsell ? saleP - cost : -cost))
                   const imei = item.inventory?.imei || item.inventory?.serial_number || "—"
                   const itemName = getAdditionalItemDisplayName(item.name)
+                  const itemVariantText = findVariantText(variantSelections, "additional", item.product_id)
                   const itemImage = getSaleItemImageInput(item.inventory, productImagesById, itemName)
                   return (
                     <tr key={item.id} className="hover:bg-gray-50/50 transition-colors">
@@ -1605,7 +1664,12 @@ export default function SaleDetailPage() {
                             className="rounded-lg bg-white"
                             imageClassName="p-1"
                           />
-                          <span className="font-medium text-navy-900">{itemName}</span>
+                          <div className="min-w-0">
+                            <p className="font-medium text-navy-900">{itemName}</p>
+                            {itemVariantText && (
+                              <p className="mt-0.5 text-xs font-semibold text-gray-500">{itemVariantText}</p>
+                            )}
+                          </div>
                         </div>
                       </td>
                       <td className="px-4 py-3 font-mono text-gray-500 text-xs">{imei}</td>
@@ -1643,6 +1707,9 @@ export default function SaleDetailPage() {
                 <div className="min-w-0 flex-1">
                   <span className="text-[11px] font-bold bg-royal-100 text-royal-600 px-2 py-0.5 rounded-full">PRINCIPAL</span>
                   <p className="mt-1 truncate text-sm font-semibold text-navy-900">{fullModel}</p>
+                  {mainVariantText && (
+                    <p className="text-xs font-semibold text-gray-500">{mainVariantText}</p>
+                  )}
                 </div>
               </div>
               <div className="flex items-center justify-between text-xs text-gray-500">
@@ -1656,6 +1723,7 @@ export default function SaleDetailPage() {
               const saleP = Number(item.sale_price || 0)
               const profit = Number(item.profit ?? (isUpsell ? saleP - cost : -cost))
               const itemName = getAdditionalItemDisplayName(item.name)
+              const itemVariantText = findVariantText(variantSelections, "additional", item.product_id)
               const itemImage = getSaleItemImageInput(item.inventory, productImagesById, itemName)
               return (
                 <div key={item.id} className={`rounded-xl p-3 border ${isUpsell ? 'bg-success-50 border-success-200' : 'bg-amber-50 border-amber-200'}`}>
@@ -1669,6 +1737,9 @@ export default function SaleDetailPage() {
                     <div className="min-w-0 flex-1">
                       <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${isUpsell ? 'bg-success-100 text-success-600' : 'bg-amber-100 text-amber-600'}`}>{isUpsell ? 'UPSELL' : 'BRINDE'}</span>
                       <p className="mt-1 truncate text-sm font-semibold text-navy-900">{itemName}</p>
+                      {itemVariantText && (
+                        <p className="text-xs font-semibold text-gray-500">{itemVariantText}</p>
+                      )}
                     </div>
                   </div>
                   <div className="text-xs text-gray-400 mb-1">
@@ -1840,6 +1911,9 @@ export default function SaleDetailPage() {
                       <span className="text-[10px] font-bold bg-royal-100 text-royal-600 px-1.5 py-0.5 rounded-full">PRINCIPAL</span>
                       {isSealed && <span className="text-[10px] font-bold bg-emerald-100 text-emerald-600 px-1.5 py-0.5 rounded-full">LACRADO</span>}
                     </div>
+                    {mainVariantText && (
+                      <p className="text-xs font-semibold text-gray-500 mt-0.5">{mainVariantText}</p>
+                    )}
                     <p className="text-xs text-gray-400 mt-0.5">
                       {product?.imei ? `IMEI: ${product.imei}` : product?.serial_number ? `S/N: ${product.serial_number}` : "Sem IMEI"}
                       {product?.grade && ` · ${product.grade}`}
@@ -1896,6 +1970,7 @@ export default function SaleDetailPage() {
             const itemImei = invItem?.imei || item.imei || null
             const itemSerial = invItem?.serial_number || null
             const itemName = getAdditionalItemDisplayName(item.name)
+            const itemVariantText = findVariantText(variantSelections, "additional", item.product_id)
             return (
               <div key={item.id} className="rounded-xl border border-gray-100 bg-surface p-4 cursor-default">
                 <div className="flex items-start gap-3 mb-3">
@@ -1908,6 +1983,9 @@ export default function SaleDetailPage() {
                       {isSealed && <span className="text-[10px] font-bold bg-emerald-100 text-emerald-600 px-1.5 py-0.5 rounded-full">LACRADO</span>}
                       {!hasInventoryLink && <span className="text-[10px] font-bold bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded-full">MANUAL</span>}
                     </div>
+                    {itemVariantText && (
+                      <p className="text-xs font-semibold text-gray-500 mt-0.5">{itemVariantText}</p>
+                    )}
                     <p className="text-xs text-gray-400 mt-0.5">
                       {itemImei ? `IMEI: ${itemImei}` : itemSerial ? `S/N: ${itemSerial}` : "Sem IMEI"}
                       {invItemGrade && ` · ${invItemGrade}`}
@@ -2172,6 +2250,7 @@ export default function SaleDetailPage() {
                       const saleP = Number(item.sale_price || 0)
                       const profit = isUpsell ? saleP - cost : -cost
                       const margin = isUpsell && saleP > 0 ? ((profit / saleP) * 100).toFixed(1) : null
+                      const itemVariantText = findVariantText(variantSelections, "additional", item.product_id)
                       return (
                         <div
                           key={item.id}
@@ -2184,6 +2263,9 @@ export default function SaleDetailPage() {
                                 {isUpsell ? "UPSELL" : "BRINDE"}
                               </span>
                             </div>
+                            {itemVariantText && (
+                              <p className="mb-1 text-xs font-semibold text-gray-500">{itemVariantText}</p>
+                            )}
                             <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-gray-500">
                               <span>Custo: <span className="font-medium text-navy-800">{formatBRL(cost)}</span></span>
                               {isUpsell && <span>Venda: <span className="font-medium text-navy-800">{formatBRL(saleP)}</span></span>}
