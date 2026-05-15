@@ -70,6 +70,16 @@ export interface GeneralStrategy {
   generalCta: string
   generalNote: string
   angle: string
+  /**
+   * If `null` use smart default: highlight story when primary product has a strong
+   * argument (discount, last unit, warranty, high battery). User can force on/off.
+   */
+  addHighlightStory?: boolean | null
+  /**
+   * If `null` use smart default: ON for ≤3 products, OFF for >3 products to
+   * prioritize vitrine pages. User can force on/off.
+   */
+  addCtaStory?: boolean | null
 }
 
 export interface InstallmentInfo {
@@ -114,10 +124,20 @@ export interface ProductFacts {
 export interface StoryTag {
   type: TagType
   label: string
+  /** Compact alternative used when the full label would overflow a card. */
+  shortLabel?: string
 }
 
 export interface VitrineItem {
+  /** Inventory id — stable key for the presence guardrail (name may be trimmed). */
+  productId: string
   name: string
+  /** Short commercial subtitle — never repeats name's storage/color/grade. */
+  subtitle: string
+  /** Dedicated warranty line (from explicit warrantyLabel only). */
+  warrantyLine: string | null
+  /** Dedicated kit/gift line showing the real content. */
+  kitLine: string | null
   price: string | null
   basePrice: string | null
   discountPercent: number | null
@@ -132,9 +152,28 @@ export interface VitrineItem {
   storage: string | null
   quantity: number
   isPrimary: boolean
+  /** Visual weight class — controls card height/pill budget in the UI. */
+  cardType: "rich" | "normal" | "simple"
 }
 
+export type StoryKind = "vitrine" | "highlight" | "cta" | "trust"
+
+/**
+ * Visual density of a vitrine story. Drives both how many products fit per
+ * page (3/4/5) and how compactly each card renders. Picked from the product
+ * mix and objective by `pickDensityMode` — never hardcoded.
+ */
+export type DensityMode = "detailed" | "standard" | "compact"
+
 export interface StoryData {
+  /** Logical role of this story slide. Drives label, layout, AI mapping. */
+  kind: StoryKind
+  /** Label used by the UI (ex: "Vitrine 1/2", "Destaque", "Fechamento"). */
+  label: string
+  /** Pagination metadata when `kind === "vitrine"`. */
+  pageInfo?: { page: number; total: number }
+  /** Visual density. Set on vitrine stories; null on highlight/cta/trust. */
+  density?: DensityMode
   badge: string
   headline: string
   sub: string
@@ -148,6 +187,11 @@ export interface StoryData {
   ctaMain: string | null
   ctaSub: string | null
   vitrineProducts?: VitrineItem[]
+  /** Deterministic benefit lines for the vitrine bottom block. Never invented. */
+  benefits?: string[]
+  /** Big footer CTA shown on vitrine stories. */
+  footerCtaMain?: string | null
+  footerCtaSub?: string | null
 }
 
 export interface CarouselSlide {
@@ -167,7 +211,11 @@ export interface CarouselSlideVisual extends CarouselSlide {
 }
 
 export interface GeneratedContent {
-  stories: [StoryData, StoryData, StoryData]
+  /**
+   * Dynamic list. First N entries are vitrine pages (max 3 products each), then
+   * optional highlight + cta + trust stories depending on strategy flags.
+   */
+  stories: StoryData[]
   carousel: CarouselSlideVisual[]
   whatsapp: string
   instagram: string
@@ -183,6 +231,12 @@ export interface ProductCopySuggestion {
   strongPoint: string
   cta: string
   objection: string
+  shortPitch?: string
+  trustArgument?: string
+  urgencyLine?: string
+  whatsappLine?: string
+  instagramLine?: string
+  storyWhatsappText?: string
 }
 
 export interface CampaignAngleSuggestion {
@@ -246,6 +300,93 @@ function productDisplayName(facts: Pick<ProductFacts, "name" | "storage" | "colo
   return parts.filter(Boolean).join(" ")
 }
 
+const STORY_NAME_MAX = 42
+
+/**
+ * Commercial name for the story card. Keeps model + storage + color intact
+ * (color is never dropped). Trims only low-value supplier cruft when the name
+ * is excessively long — never an ellipsis through essential info.
+ */
+function buildStoryProductName(f: ProductFacts): string {
+  const full = productDisplayName({ name: f.copyTitle || f.name, storage: f.storage, color: f.color })
+  if (full.length <= STORY_NAME_MAX) return full
+
+  // Strip parenthetical / supplier noise first.
+  let trimmed = full.replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s{2,}/g, " ").trim()
+  if (trimmed.length <= STORY_NAME_MAX) return trimmed
+
+  // Drop low-value descriptor words but keep model, storage and color tokens.
+  const colorToken = f.color?.toLocaleLowerCase("pt-BR")
+  const storageToken = f.storage?.toLocaleLowerCase("pt-BR")
+  const NOISE = new Set([
+    "modelo",
+    "executivo",
+    "premium",
+    "original",
+    "novo",
+    "nova",
+    "para",
+    "tipo",
+    "linha",
+  ])
+  const kept = trimmed
+    .split(" ")
+    .filter((w) => {
+      const lw = w.toLocaleLowerCase("pt-BR")
+      if (lw === colorToken || lw === storageToken) return true
+      return !NOISE.has(lw)
+    })
+  trimmed = kept.join(" ").replace(/\s{2,}/g, " ").trim()
+  return trimmed
+}
+
+/**
+ * Short commercial subtitle. NEVER repeats storage/color/grade already shown
+ * in the name. Pure fact-derived, never invented.
+ */
+function buildStoryProductSubtitle(f: ProductFacts): string {
+  if (f.grade && f.grade !== "Lacrado") return conditionLabel(f.grade)
+  if (f.grade === "Lacrado") return "Lacrado"
+  if (f.battery_health != null) return `Bateria ${f.battery_health}%`
+  if (f.gifts) return "Com kit incluso"
+  return "Disponível agora"
+}
+
+/**
+ * Compact warranty line for the card. Comes ONLY from the explicit
+ * warrantyLabel — never inferred, never inherited from another product.
+ */
+function buildWarrantyLine(f: ProductFacts): string | null {
+  const raw = f.warrantyLabel?.trim()
+  if (!raw) return null
+  if (/apple/i.test(raw)) {
+    const yr = raw.match(/(\d+)\s*ano/i)
+    return yr ? `Garantia Apple ${yr[1]} ano${Number(yr[1]) > 1 ? "s" : ""}` : "Garantia Apple"
+  }
+  const m = raw.match(/(\d+)\s*mes/i)
+  if (m) return `Garantia Nobretech ${m[1]}m`
+  return raw.length <= 28 ? raw : "Garantia Nobretech"
+}
+
+/**
+ * Compact kit/gift line — shows the REAL content, not just "Kit incluso".
+ * Falls back to "Kit: N itens" only when the content is too long to fit.
+ */
+function buildKitLine(f: ProductFacts): string | null {
+  const raw = f.gifts?.trim()
+  if (!raw) return null
+  const parts = raw
+    .split(/\s*[+,/]\s*/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+  const pretty = parts
+    .map((p, i) => (i === 0 ? p.charAt(0).toUpperCase() + p.slice(1) : p.toLocaleLowerCase("pt-BR")))
+    .join(" + ")
+  if (pretty.length <= 34) return pretty
+  if (parts.length >= 2) return `Kit: ${parts.length} itens`
+  return pretty.slice(0, 32).trim() + "…"
+}
+
 export function buildProductFacts(draft: ProductDraft): ProductFacts {
   const p = draft.product
   const base = draft.basePrice ?? p.suggested_price
@@ -296,24 +437,32 @@ export function buildProductFacts(draft: ProductDraft): ProductFacts {
   }
 }
 
+function compactWarrantyLabel(label: string): string {
+  // "Garantia Nobretech 6 meses" -> "Garantia 6m"; "Garantia Apple ..." -> "Garantia Apple".
+  const months = label.match(/(\d+)\s*mes/i)
+  if (/apple/i.test(label)) return "Garantia Apple"
+  if (months) return `Garantia ${months[1]}m`
+  return "Garantia"
+}
+
 function buildTags(facts: ProductFacts): StoryTag[] {
   const tags: StoryTag[] = []
   if (facts.grade) {
     tags.push({ type: "grade", label: facts.grade === "Lacrado" ? "Lacrado" : `Grade ${facts.grade}` })
   }
   if (facts.battery_health != null) {
-    tags.push({ type: "battery", label: `Bateria ${facts.battery_health}%` })
+    tags.push({ type: "battery", label: `Bateria ${facts.battery_health}%`, shortLabel: `Bat. ${facts.battery_health}%` })
   }
   if (facts.quantity <= 1) {
-    tags.push({ type: "stock", label: "Última unidade" })
+    tags.push({ type: "stock", label: "Última unidade", shortLabel: "1 unidade" })
   } else if (facts.quantity <= 3) {
     tags.push({ type: "stock", label: `${facts.quantity} unidades` })
   }
   if (facts.warrantyLabel) {
     const type = /apple/i.test(facts.warrantyLabel) ? "warranty_apple" : "warranty_nobretech"
-    tags.push({ type, label: facts.warrantyLabel })
+    tags.push({ type, label: facts.warrantyLabel, shortLabel: compactWarrantyLabel(facts.warrantyLabel) })
   }
-  if (facts.gifts) tags.push({ type: "gift", label: `Brinde: ${facts.gifts}` })
+  if (facts.gifts) tags.push({ type: "gift", label: `Brinde: ${facts.gifts}`, shortLabel: "Kit incluso" })
   if (facts.installment) tags.push({ type: "installment", label: facts.installment.text })
   if (facts.color) tags.push({ type: "color", label: facts.color })
   return tags
@@ -397,36 +546,378 @@ function pickPrimary(facts: ProductFacts[]): ProductFacts {
   return facts.find((f) => f.isPrimary) ?? facts[0]
 }
 
-function sortProductsForVitrine(facts: ProductFacts[]): ProductFacts[] {
-  return [...facts].sort((a, b) => {
-    const aDiscount = a.discount ? 1 : 0
-    const bDiscount = b.discount ? 1 : 0
-    if (aDiscount !== bDiscount) return bDiscount - aDiscount
+/** True when fact looks like an accessory (no device-only fields populated). */
+function looksLikeAccessory(f: ProductFacts): boolean {
+  return f.grade == null && f.battery_health == null && f.storage == null
+}
 
+/** Count strong commercial signals on a single product. */
+function commercialSignalScore(f: ProductFacts): number {
+  let n = 0
+  if (f.discount) n += 1
+  if (f.installment) n += 1
+  if (f.warrantyLabel) n += 2
+  if (f.gifts) n += 2
+  if (f.productNote) n += 1
+  if ((f.copyTitle || f.name).length > 34) n += 1
+  if (f.battery_health != null && f.battery_health >= 95) n += 1
+  return n
+}
+
+function sortProductsForVitrine(
+  facts: ProductFacts[],
+  strategy?: GeneralStrategy
+): ProductFacts[] {
+  const objective = strategy?.objective ?? "sell_fast"
+  return [...facts].sort((a, b) => {
+    // Manual featured always wins.
     const aFeatured = a.isFeatured ? 1 : 0
     const bFeatured = b.isFeatured ? 1 : 0
     if (aFeatured !== bFeatured) return bFeatured - aFeatured
+
+    // Manual primary next.
+    const aPrimary = a.isPrimary ? 1 : 0
+    const bPrimary = b.isPrimary ? 1 : 0
+    if (aPrimary !== bPrimary) return bPrimary - aPrimary
+
+    // Objective-specific reweighting.
+    if (objective === "bundle_gift") {
+      const aGift = a.gifts ? 1 : 0
+      const bGift = b.gifts ? 1 : 0
+      if (aGift !== bGift) return bGift - aGift
+    }
+    if (objective === "trust_proof") {
+      const trustScore = (f: ProductFacts) =>
+        (f.warrantyLabel ? 2 : 0) +
+        (f.battery_health != null && f.battery_health >= 95 ? 2 : 0) +
+        (f.grade ? 1 : 0)
+      const diff = trustScore(b) - trustScore(a)
+      if (diff !== 0) return diff
+    }
+    if (objective === "bundle_gift" || objective === "sell_fast") {
+      // Accessories drop below devices unless they carry the only gift signal.
+      const aAcc = looksLikeAccessory(a) ? 1 : 0
+      const bAcc = looksLikeAccessory(b) ? 1 : 0
+      if (aAcc !== bAcc) return aAcc - bAcc
+    }
+
+    // Generic commercial weight: discount → urgent stock → price.
+    const aDiscount = a.discount ? 1 : 0
+    const bDiscount = b.discount ? 1 : 0
+    if (aDiscount !== bDiscount) return bDiscount - aDiscount
 
     const aUrgent = a.quantity <= 1 ? 1 : 0
     const bUrgent = b.quantity <= 1 ? 1 : 0
     if (aUrgent !== bUrgent) return bUrgent - aUrgent
 
-    const aPrimary = a.isPrimary ? 1 : 0
-    const bPrimary = b.isPrimary ? 1 : 0
-    if (aPrimary !== bPrimary) return bPrimary - aPrimary
-
     return (b.disclosurePrice ?? 0) - (a.disclosurePrice ?? 0)
   })
 }
 
-function buildVitrineItems(facts: ProductFacts[]): VitrineItem[] {
-  return facts.slice(0, 6).map((f) => ({
-    name: f.copyTitle || f.name,
+/**
+ * Hard ceiling per vitrine story slide. Adaptive density never exceeds this
+ * even when the picker says compact. Five is the legibility limit at 1080×1920.
+ */
+export const MAX_PRODUCTS_PER_VITRINE_STORY = 5
+
+/** Effective chunk size per density mode. Drives both pagination and card sizing. */
+export const DENSITY_CHUNK_SIZE: Record<DensityMode, number> = {
+  detailed: 3,
+  standard: 4,
+  compact: 5,
+}
+
+/**
+ * Decide how many products fit per vitrine story based on the product mix
+ * and campaign objective. Conservative on doubt: defaults to standard (4).
+ */
+export function pickDensityMode(
+  facts: ProductFacts[],
+  strategy: GeneralStrategy
+): DensityMode {
+  if (facts.length === 0) return "standard"
+
+  const longNameCount = facts.filter((f) => (f.copyTitle || f.name).length > 28).length
+  const heavyBadgeCount = facts.filter((f) => commercialSignalScore(f) >= 4).length
+  const allAccessories = facts.every(looksLikeAccessory)
+  const allShortNames = facts.every((f) => (f.copyTitle || f.name).length <= 20)
+  const allLightSignals = facts.every((f) => commercialSignalScore(f) <= 1)
+
+  // Detailed (3): strong individual stories, long names, or trust/desire focus.
+  if (heavyBadgeCount >= 1) return "detailed"
+  if (longNameCount >= Math.ceil(facts.length / 2)) return "detailed"
+  if (strategy.objective === "trust_proof") return "detailed"
+  if (strategy.objective === "generate_desire") {
+    const primary = pickPrimary(facts)
+    if (primary.discount || (primary.battery_health != null && primary.battery_health >= 95)) {
+      return "detailed"
+    }
+  }
+
+  // Compact (5): catalogue feel — only when the entire mix is simple
+  // accessories (no grade/battery/storage signals) AND there are at least 5
+  // items to justify a tight 5-per-story grid.
+  if (allAccessories && allShortNames && allLightSignals && facts.length >= 5) {
+    return "compact"
+  }
+
+  // Default to standard (4) on doubt — never narrower than 4.
+  return "standard"
+}
+
+export function chunkProductsForStories<T>(
+  items: T[],
+  chunkSize: number = DENSITY_CHUNK_SIZE.standard
+): T[][] {
+  if (items.length === 0) return []
+  if (chunkSize <= 0) return [items]
+  const cap = Math.min(chunkSize, MAX_PRODUCTS_PER_VITRINE_STORY)
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += cap) {
+    out.push(items.slice(i, i + cap))
+  }
+  return out
+}
+
+/**
+ * Visual weight of a product card. Drives how many fit per story so a rich
+ * hero card does not get crammed next to other rich cards. Pure heuristic on
+ * real fact data — never invents anything.
+ *
+ * ~1 = simple/accessory · ~1.3 = médio · ~1.6 = rico · ~2 = hero pesado.
+ */
+export function getProductVisualWeight(f: ProductFacts): number {
+  let w = 1
+  if (f.battery_health != null) w += 0.15
+  if (f.grade) w += 0.15
+  if (f.warrantyLabel) w += 0.35
+  if (f.discount) w += 0.3
+  if (f.installment) w += 0.15
+  if (f.gifts) w += 0.35
+  if (f.productNote) w += 0.2
+  if (f.isPrimary || f.isFeatured) w += 0.25
+  const visualName = buildStoryProductName(f)
+  if (visualName.length > 34) w += 0.3
+  else if (visualName.length > 26) w += 0.18
+  // Many candidate pills => taller card.
+  const pillCount = buildTags(f).filter((t) => t.type !== "installment").length
+  if (pillCount >= 4) w += 0.25
+  else if (pillCount >= 3) w += 0.1
+  return Math.min(w, 2.35)
+}
+
+function estimateStoryNameLineCount(name: string): number {
+  const normalized = name.replace(/\s+/g, " ").trim()
+  if (normalized.length > 48) return 3
+  if (normalized.length > 26) return 2
+  return 1
+}
+
+function baseStoryCardHeight(cardType: "rich" | "normal" | "simple"): number {
+  if (cardType === "simple") return 172
+  if (cardType === "normal") return 208
+  return 226
+}
+
+export function getStoryCardHeight(
+  item: Pick<
+    VitrineItem,
+    | "name"
+    | "warrantyLine"
+    | "kitLine"
+    | "basePrice"
+    | "parcel"
+    | "tags"
+    | "hasDiscount"
+    | "isPrimary"
+    | "isFeatured"
+    | "cardType"
+  >
+): number {
+  const nameLines = estimateStoryNameLineCount(item.name)
+  const technicalPills = item.tags.filter((tag) => tag.type !== "installment" && tag.type !== "gift" && !tag.type.startsWith("warranty"))
+  return (
+    baseStoryCardHeight(item.cardType) +
+    Math.max(0, nameLines - 1) * 38 +
+    (item.warrantyLine ? 34 : 0) +
+    (item.kitLine ? 34 : 0) +
+    (item.basePrice ? 24 : 0) +
+    (item.parcel ? 18 : 0) +
+    (technicalPills.length >= 4 ? 18 : 0) +
+    (item.hasDiscount ? 22 : 0) +
+    (item.isPrimary || item.isFeatured ? 18 : 0)
+  )
+}
+
+function getProductStoryCardHeight(f: ProductFacts, objective: ObjectiveKey): number {
+  const item: Pick<
+    VitrineItem,
+    | "name"
+    | "warrantyLine"
+    | "kitLine"
+    | "basePrice"
+    | "parcel"
+    | "tags"
+    | "hasDiscount"
+    | "isPrimary"
+    | "isFeatured"
+    | "cardType"
+  > = {
+    name: buildStoryProductName(f),
+    warrantyLine: buildWarrantyLine(f),
+    kitLine: buildKitLine(f),
+    basePrice: f.discount && f.basePrice != null ? formatBRL(f.basePrice) : null,
+    parcel: f.installment?.text ?? null,
+    tags: orderedVitrineTags(f, objective),
+    hasDiscount: Boolean(f.discount),
+    isPrimary: f.isPrimary,
+    isFeatured: f.isFeatured,
+    cardType: classifyCardType(f),
+  }
+  return getStoryCardHeight(item)
+}
+
+/** True when card is a plain accessory/simple unit (low visual weight). */
+function isSimpleCard(f: ProductFacts): boolean {
+  return getProductVisualWeight(f) <= 1.15 && !f.isPrimary && !f.isFeatured && !f.discount
+}
+
+/**
+ * Weight-aware pagination. Packs products into stories using a per-story
+ * visual-weight budget instead of a flat count, then rebalances so the last
+ * story is not a single weak accessory. Hard cap 5/story, never drops items.
+ */
+export function chunkProductsForVisualStories(
+  facts: ProductFacts[],
+  density: DensityMode,
+  objective: ObjectiveKey = "sell_fast"
+): ProductFacts[][] {
+  if (facts.length === 0) return []
+  const maxCount = Math.min(DENSITY_CHUNK_SIZE[density], MAX_PRODUCTS_PER_VITRINE_STORY)
+  // Budget tuned for 1080x1920 export: rich warranty+kit cards get space,
+  // simple accessories can still pack densely.
+  const weightBudget = density === "detailed" ? 4.8 : density === "standard" ? 5.35 : 6.0
+  const heightBudget = density === "detailed" ? 760 : density === "standard" ? 860 : 1040
+  const cardGap = density === "compact" ? 20 : 28
+
+  const pages: ProductFacts[][] = []
+  let current: ProductFacts[] = []
+  let load = 0
+  let heightLoad = 0
+  for (const f of facts) {
+    const w = getProductVisualWeight(f)
+    const h = getProductStoryCardHeight(f, objective)
+    const wouldOverflow =
+      current.length > 0 &&
+      (current.length >= maxCount ||
+        load + w > weightBudget ||
+        heightLoad + cardGap + h > heightBudget)
+    if (wouldOverflow) {
+      pages.push(current)
+      current = []
+      load = 0
+      heightLoad = 0
+    }
+    current.push(f)
+    load += w
+    heightLoad += (current.length > 1 ? cardGap : 0) + h
+  }
+  if (current.length > 0) pages.push(current)
+
+  // Rebalance: avoid a final story that is a single simple accessory.
+  if (pages.length >= 2) {
+    const last = pages[pages.length - 1]
+    const prev = pages[pages.length - 2]
+    const lastIsWeak =
+      last.length === 1 && isSimpleCard(last[0])
+    if (lastIsWeak && prev.length >= 2) {
+      // Pull one product down from the previous story → 3+1 becomes 2+2.
+      const moved = prev.pop()!
+      pages[pages.length - 1] = [moved, ...last]
+    }
+  }
+
+  return pages
+}
+
+function classifyCardType(f: ProductFacts): "rich" | "normal" | "simple" {
+  const w = getProductVisualWeight(f)
+  if (f.isPrimary || f.isFeatured || f.discount || w >= 1.55) return "rich"
+  if (w <= 1.15) return "simple"
+  return "normal"
+}
+
+/**
+ * Objective-aware pill priority (lower = shown first). Warranty is
+ * deliberately demoted unless the objective is trust_proof — it already shows
+ * in the benefits block, so it must not expel battery/grade/kit from the card.
+ */
+function pillPriorityForObjective(
+  type: TagType,
+  objective: ObjectiveKey,
+  isAccessory: boolean
+): number {
+  const W = type.startsWith("warranty")
+  // Accessories: Lacrado(grade) > quantidade(stock) > cor > kit.
+  if (isAccessory) {
+    const accBase: Record<string, number> = {
+      grade: 0,
+      stock: 1,
+      color: 2,
+      gift: 3,
+      battery: 4,
+      warranty_nobretech: 6,
+      warranty_apple: 6,
+      new: 7,
+      installment: 99,
+    }
+    return accBase[type] ?? 20
+  }
+
+  let tables: Record<string, number>
+  if (objective === "bundle_gift") {
+    tables = { gift: 0, battery: 1, grade: 2, stock: 3, color: 7, new: 8 }
+  } else if (objective === "trust_proof") {
+    tables = { battery: 0, grade: 1, warranty_nobretech: 2, warranty_apple: 2, stock: 4, gift: 5, color: 7, new: 8 }
+  } else if (objective === "sell_fast") {
+    tables = { stock: 0, battery: 1, grade: 2, gift: 3, color: 7, new: 8 }
+  } else {
+    // generate_desire / new_arrival / reactivate_lead — balanced.
+    tables = { battery: 1, grade: 2, gift: 3, stock: 4, color: 7, new: 8 }
+  }
+  if (W && type in tables) return tables[type]
+  // Warranty not in the strong table → low priority (benefit block covers it).
+  if (W) return 6
+  return tables[type] ?? 20
+}
+
+function orderedVitrineTags(f: ProductFacts, objective: ObjectiveKey): StoryTag[] {
+  const isAccessory = f.grade == null && f.battery_health == null && f.storage == null
+  // Technical pills ONLY. Warranty + kit are dedicated card lines now and
+  // must never compete for pill space.
+  return buildTags(f)
+    .filter((t) => t.type !== "installment" && t.type !== "gift" && !t.type.startsWith("warranty"))
+    .sort(
+      (a, b) =>
+        pillPriorityForObjective(a.type, objective, isAccessory) -
+        pillPriorityForObjective(b.type, objective, isAccessory)
+    )
+    .slice(0, 4)
+}
+
+function buildVitrineItems(facts: ProductFacts[], objective: ObjectiveKey): VitrineItem[] {
+  return facts.map((f) => ({
+    productId: f.id,
+    name: buildStoryProductName(f),
+    subtitle: buildStoryProductSubtitle(f),
+    warrantyLine: buildWarrantyLine(f),
+    kitLine: buildKitLine(f),
     price: f.disclosurePrice != null ? formatBRL(f.disclosurePrice) : null,
     basePrice: f.discount && f.basePrice != null ? formatBRL(f.basePrice) : null,
     discountPercent: f.discount?.percent ?? null,
     parcel: f.installment?.text ?? null,
-    tags: buildTags(f).slice(0, 6),
+    // Installment is shown under the price, never as a pill — strip it here.
+    tags: orderedVitrineTags(f, objective),
     warrantyLabel: f.warrantyLabel || null,
     gifts: f.gifts || null,
     color: f.color,
@@ -436,219 +927,444 @@ function buildVitrineItems(facts: ProductFacts[]): VitrineItem[] {
     storage: f.storage,
     quantity: f.quantity,
     isPrimary: f.isPrimary,
+    cardType: classifyCardType(f),
   }))
 }
 
 function contextualCta(facts: ProductFacts[], strategy: GeneralStrategy): { main: string; sub: string } {
   const primary = pickPrimary(facts)
   const customCta = (strategy.generalCta || primary.productCta).trim()
+  const isSingle = facts.length === 1
   const hasDiscount = facts.some((f) => f.discount)
-  const hasUrgency = facts.some((f) => f.quantity <= 1)
-  const hasMultipleProducts = facts.length > 1
+  const someUrgent = facts.some((f) => f.quantity <= 1)
   const hasVariation = Boolean(primary.color || primary.productNote.toLowerCase().includes("cor"))
 
   if (customCta) return { main: customCta, sub: "Me chama que eu te passo as condições." }
-  if (hasUrgency) return { main: "Última unidade nessa condição.", sub: "Me chama para reservar." }
-  if (hasDiscount) return { main: "Condição especial disponível.", sub: "Me chama que eu vejo se ainda está disponível." }
-  if (hasMultipleProducts) {
-    return {
-      main: "Escolhe o modelo que combina contigo.",
-      sub: "Me chama e eu te mando as condições de cada modelo.",
-    }
-  }
-  if (hasVariation) return { main: "Gostou desse modelo?", sub: "Me chama para confirmar a cor disponível." }
-  return { main: "Gostou dessa unidade?", sub: "Me chama para reservar essa unidade." }
-}
 
-function relevantStory2Facts(facts: ProductFacts[]): ProductFacts[] {
-  return facts
-    .filter((f) => f.isFeatured || Boolean(f.discount) || f.quantity <= 1 || Boolean(f.warrantyLabel) || Boolean(f.gifts))
-    .slice(0, 4)
-}
-
-// ─── Story generators ────────────────────────────────────────────────────────
-
-function generateStory1(facts: ProductFacts[], strategy: GeneralStrategy): StoryData {
-  const primary = pickPrimary(facts)
-  const isMulti = facts.length > 1
-  const priceStr = primary.disclosurePrice != null ? formatBRL(primary.disclosurePrice) : null
-  const basePriceStr = primary.discount && primary.basePrice != null ? formatBRL(primary.basePrice) : null
-  const parcel = primary.installment?.text ?? null
-
-  const badgeMap: Record<ObjectiveKey, string> = {
-    sell_fast: "DISPONÍVEL HOJE",
-    generate_desire: "OPORTUNIDADE",
-    bundle_gift: "KIT COMPLETO",
-    trust_proof: "CONFERIDO",
-    new_arrival: "RECÉM-CHEGADO",
-    reactivate_lead: "AINDA DISPONÍVEL",
-  }
-
-  const headlineMap: Record<ObjectiveKey, string> = {
-    sell_fast: isMulti ? `${facts.length} opções\ndisponíveis.` : "Sem fila.\nSem espera.",
-    generate_desire: isMulti ? "Escolha\na sua condição." : `Imagina você\ncom esse ${primary.name.split(" ")[0]}.`,
-    bundle_gift: primary.gifts ? "Já sai\ncom tudo." : "Produto completo.\nSem surpresa depois.",
-    trust_proof: "Conferido.\nProcedência garantida.",
-    new_arrival: isMulti ? "Chegou\nnovo lote." : "Acabou\nde chegar.",
-    reactivate_lead: isMulti ? "Ainda\ndisponível." : "Ele ainda\nestá aqui.",
-  }
-
-  if (isMulti) {
-    return {
-      badge: badgeMap[strategy.objective],
-      headline: headlineMap[strategy.objective],
-      sub: `${facts.length} produtos disponíveis`,
-      tags: [],
-      productName: primary.name,
-      price: priceStr,
-      basePrice: basePriceStr,
-      parcel,
-      detailLines: [],
-      urgencyLine: urgencyBodyLine(strategy.urgencyLevel, primary.quantity),
-      ctaMain: null,
-      ctaSub: null,
-      vitrineProducts: buildVitrineItems(facts.slice(0, 4)),
-    }
-  }
-
-  const subMap: Record<ObjectiveKey, string> = {
-    sell_fast: `${primary.name} disponível agora.`,
-    generate_desire: `${conditionLabel(primary.grade)} — pronto pra você.`,
-    bundle_gift: primary.gifts ? `${primary.name} + ${primary.gifts}` : primary.name,
-    trust_proof: `${primary.name} — ${conditionLabel(primary.grade)}`,
-    new_arrival: `${primary.name} ${primary.storage ?? ""} chegou.`,
-    reactivate_lead: `${primary.name} — ainda disponível para você.`,
-  }
-
-  return {
-    badge: badgeMap[strategy.objective],
-    headline: headlineMap[strategy.objective],
-    sub: subMap[strategy.objective],
-    tags: buildTags(primary),
-    productName: primary.name,
-    price: priceStr,
-    basePrice: basePriceStr,
-    parcel,
-    detailLines: [],
-    urgencyLine: urgencyBodyLine(strategy.urgencyLevel, primary.quantity),
-    ctaMain: null,
-    ctaSub: null,
-  }
-}
-
-function generateStory2(facts: ProductFacts[], strategy: GeneralStrategy): StoryData {
-  const primary = pickPrimary(facts)
-  const isMulti = facts.length > 1
-  const priceStr = primary.disclosurePrice != null ? formatBRL(primary.disclosurePrice) : null
-  const basePriceStr = primary.discount && primary.basePrice != null ? formatBRL(primary.basePrice) : null
-  const parcel = primary.installment?.text ?? null
-
-  if (isMulti) {
-    const featuredFacts = relevantStory2Facts(facts)
-    if (featuredFacts.length === 0) {
+  // MULTI-PRODUCT: never use bare "última unidade" — it's ambiguous about
+  // which product. Use safe selection CTAs instead.
+  if (!isSingle) {
+    if (someUrgent) {
       return {
-        badge: "CONFIANÇA",
-        headline: "Escolha com\nsegurança.",
-        sub: "Produtos conferidos e condições por modelo",
-        tags: [],
-        productName: primary.name,
-        price: null,
-        basePrice: null,
-        parcel: null,
-        detailLines: ["Conferência individual", "Preço e parcela por produto", "Atendimento no WhatsApp"],
-        urgencyLine: null,
-        ctaMain: null,
-        ctaSub: null,
+        main: "Escolha o modelo e me chama.",
+        sub: "Algumas opções têm poucas unidades.",
+      }
+    }
+    if (hasDiscount) {
+      return {
+        main: "Me chama que eu confirmo a disponibilidade.",
+        sub: "Algumas opções estão com condição especial.",
       }
     }
     return {
-      badge: "DESTAQUES",
-      headline: "Ofertas e\nmelhores sinais.",
-      sub: "Destaques, descontos, brinde ou última unidade",
-      tags: [],
-      productName: primary.name,
-      price: priceStr,
-      basePrice: basePriceStr,
-      parcel,
-      detailLines: [],
-      urgencyLine: urgencyBodyLine(strategy.urgencyLevel, primary.quantity),
-      ctaMain: null,
-      ctaSub: null,
-      vitrineProducts: buildVitrineItems(featuredFacts),
+      main: "Escolha o modelo e me chama.",
+      sub: "Me chama e eu te mando as condições de cada modelo.",
     }
   }
 
-  const subMap: Record<ObjectiveKey, string> = {
-    sell_fast: "Especificações:",
-    generate_desire: "Todos os detalhes:",
-    bundle_gift: primary.gifts ? `Incluso: ${primary.gifts}` : "Especificações:",
-    trust_proof: "Verificado:",
-    new_arrival: "Lote recente:",
-    reactivate_lead: "Ainda disponível:",
+  // SINGLE PRODUCT: "última unidade" is unambiguous.
+  if (primary.quantity <= 1) {
+    return { main: "Última unidade nessa condição.", sub: "Me chama para reservar." }
+  }
+  if (hasDiscount) {
+    return { main: "Condição especial disponível.", sub: "Me chama que eu vejo se ainda está disponível." }
+  }
+  if (hasVariation) return { main: "Gostou desse modelo?", sub: "Me chama para confirmar a cor disponível." }
+  return { main: "Quer reservar esse modelo?", sub: "Me chama para reservar essa unidade." }
+}
+
+/** Highest installment count across the page. 0 when none configured. */
+function maxInstallmentCount(facts: ProductFacts[]): number {
+  return facts.reduce((max, f) => Math.max(max, f.installment?.count ?? 0), 0)
+}
+
+/**
+ * Deterministic benefit lines for the vitrine bottom block. Each line is
+ * derived ONLY from real fact data or generic-safe statements — never invents
+ * trade-in, delivery, entrada, warranty or installment that does not exist.
+ */
+function buildVitrineBenefits(
+  facts: ProductFacts[],
+  strategy: GeneralStrategy
+): string[] {
+  const lines: string[] = []
+
+  const maxParcel = maxInstallmentCount(facts)
+  if (maxParcel > 0) lines.push(`Parcelo em até ${maxParcel}x no cartão`)
+
+  // Warranty is NO LONGER a global benefit — it now renders per-card so each
+  // product shows its own real warranty. Do not infer/aggregate it here.
+
+  if (facts.some((f) => f.discount)) lines.push("Condição com desconto real")
+
+  const note = strategy.generalNote.trim()
+  if (note && lines.length < 4) lines.push(note)
+
+  // Generic-safe fillers (never claim trade-in/delivery/entrada).
+  const safeFillers = [
+    "Condições conferidas antes da publicação",
+    "Compra com orientação Nobretech",
+    "Me chama para confirmar disponibilidade",
+  ]
+  for (const filler of safeFillers) {
+    if (lines.length >= 3) break
+    if (!lines.includes(filler)) lines.push(filler)
   }
 
+  return lines.slice(0, 4)
+}
+
+const FOOTER_CTA_BY_OBJECTIVE: Record<ObjectiveKey, string> = {
+  sell_fast: "Me chama para reservar",
+  generate_desire: "Chama no direct agora",
+  bundle_gift: "Escolha o modelo e me chama",
+  trust_proof: "Confirma disponibilidade comigo",
+  new_arrival: "Chama no WhatsApp agora",
+  reactivate_lead: "Me chama que eu te ajudo",
+}
+
+/**
+ * Big footer CTA for vitrine stories. 1 product → product CTA; else general
+ * CTA; else a natural objective-based fallback. Subline uses ONLY real data.
+ */
+function buildVitrineFooterCta(
+  facts: ProductFacts[],
+  strategy: GeneralStrategy,
+  totalProducts: number
+): { main: string; sub: string | null } {
+  const primary = pickPrimary(facts)
+  const isSingleCampaign = totalProducts === 1
+  const main = (
+    (isSingleCampaign ? primary.productCta : "") ||
+    strategy.generalCta ||
+    FOOTER_CTA_BY_OBJECTIVE[strategy.objective]
+  ).trim()
+
+  let sub: string | null = null
+  if (isSingleCampaign && primary.disclosurePrice != null) {
+    const price = formatBRL(primary.disclosurePrice)
+    sub = primary.installment ? `${price} · ${primary.installment.text}` : price
+  } else {
+    const maxParcel = maxInstallmentCount(facts)
+    if (maxParcel > 0) sub = `Parcelo em até ${maxParcel}x no cartão`
+  }
+  return { main, sub }
+}
+
+
+// ─── Story generators (dynamic pagination) ───────────────────────────────────
+
+const OBJECTIVE_BADGE: Record<ObjectiveKey, string> = {
+  sell_fast: "DISPONÍVEL HOJE",
+  generate_desire: "OPORTUNIDADE",
+  bundle_gift: "KIT INCLUSO",
+  trust_proof: "CONFIANÇA",
+  new_arrival: "NOVO LOTE",
+  reactivate_lead: "RETOMADA",
+}
+
+interface VitrineCopy {
+  badge: string
+  headline: string
+  sub: string
+}
+
+/**
+ * Resolve headline/sub/badge per objective. Multi-page vitrines vary the
+ * headline so page 2+ does not repeat the page-1 framing verbatim.
+ */
+export function objectiveStoryCopy(
+  objective: ObjectiveKey,
+  page: number,
+  total: number,
+  totalProducts: number,
+  primary: ProductFacts
+): VitrineCopy {
+  const badge =
+    total > 1 ? `${OBJECTIVE_BADGE[objective]} · ${page}/${total}` : OBJECTIVE_BADGE[objective]
+
+  // Single product (1 vitrine, 1 product).
+  if (totalProducts === 1) {
+    const single: Record<ObjectiveKey, { headline: string; sub: string }> = {
+      sell_fast: { headline: "Disponível\nhoje", sub: `${primary.name} pronto para fechar.` },
+      generate_desire: {
+        headline: `Imagina você\ncom esse ${primary.name.split(" ")[0]}.`,
+        sub: "Selecionado com condição especial.",
+      },
+      bundle_gift: {
+        headline: primary.gifts ? "Já sai\ncom kit completo." : "Produto completo.\nSem surpresa depois.",
+        sub: primary.gifts ? `Inclui ${primary.gifts}.` : `${primary.name} disponível agora.`,
+      },
+      trust_proof: {
+        headline: "Compra segura\nNobretech",
+        sub: `${primary.name} conferido e com procedência garantida.`,
+      },
+      new_arrival: { headline: "Acabou\nde chegar", sub: `${primary.name} disponível agora.` },
+      reactivate_lead: { headline: "Ainda procurando?", sub: `Esse ${primary.name.split(" ")[0]} segue disponível.` },
+    }
+    return { badge, ...single[objective] }
+  }
+
+  // Page 1 of N (or single-page multi-product).
+  if (page === 1) {
+    const first: Record<ObjectiveKey, { headline: string; sub: string }> = {
+      sell_fast: {
+        headline: "Disponíveis\nhoje",
+        sub: total > 1 ? "Primeiras opções prontas para fechar." : "Condições prontas para fechar.",
+      },
+      generate_desire: {
+        headline: "Escolha\nsua experiência",
+        sub: "Selecionados com condição especial.",
+      },
+      bundle_gift: {
+        headline: "Já sai com\nkit completo",
+        sub: total > 1 ? "Primeiras opções com acessórios." : "Produtos com acessórios e condição pronta.",
+      },
+      trust_proof: {
+        headline: "Compra segura\nNobretech",
+        sub: total > 1 ? "Primeira leva conferida e disponível." : "Revisão, garantia e transparência.",
+      },
+      new_arrival: {
+        headline: "Acabou\nde chegar",
+        sub: total > 1 ? "Primeiras unidades do novo lote." : "Novas unidades disponíveis.",
+      },
+      reactivate_lead: {
+        headline: "Ainda procurando?",
+        sub: "Separei opções que fazem sentido pra você.",
+      },
+    }
+    return { badge, ...first[objective] }
+  }
+
+  // Page 2+ of N: continuation framing.
+  const cont: Record<ObjectiveKey, { headline: string; sub: string }> = {
+    sell_fast: { headline: "Mais opções\nno estoque", sub: "Separei o restante do lote." },
+    generate_desire: {
+      headline: "Mais condições\nselecionadas",
+      sub: "Continuação da vitrine de hoje.",
+    },
+    bundle_gift: {
+      headline: "Mais opções\npara fechar o kit",
+      sub: "Escolha o produto e eu confirmo o que entra junto.",
+    },
+    trust_proof: {
+      headline: "Mais conferidos\ne disponíveis",
+      sub: "Continuação da seleção segura.",
+    },
+    new_arrival: {
+      headline: "Mais novidades\ndo lote",
+      sub: "Continuação do lote recente.",
+    },
+    reactivate_lead: {
+      headline: "Mais opções\npra você",
+      sub: "Continuação das condições disponíveis.",
+    },
+  }
+  return { badge, ...cont[objective] }
+}
+
+function buildVitrineStory(
+  pageFacts: ProductFacts[],
+  totalProducts: number,
+  page: number,
+  total: number,
+  strategy: GeneralStrategy,
+  density: DensityMode
+): StoryData {
+  const primary = pageFacts.find((f) => f.isPrimary) ?? pageFacts[0]
+  const priceStr = primary.disclosurePrice != null ? formatBRL(primary.disclosurePrice) : null
+  const basePriceStr = primary.discount && primary.basePrice != null ? formatBRL(primary.basePrice) : null
+  const parcel = primary.installment?.text ?? null
+  const isMulti = pageFacts.length > 1
+  const { headline, sub, badge } = objectiveStoryCopy(
+    strategy.objective,
+    page,
+    total,
+    totalProducts,
+    primary
+  )
+  const label = total > 1 ? `Vitrine ${page}/${total}` : "Vitrine"
+  const footer = buildVitrineFooterCta(pageFacts, strategy, totalProducts)
+
+  // Always emit vitrineProducts so the client renders the unified vitrine
+  // layout (hero card when single, list when multi). Benefits + footer CTA
+  // are deterministic and fill the vertical space.
   return {
-    badge: primary.isPrimary && facts.length > 1 ? "PRINCIPAL" : "DETALHES",
-    headline: primary.name,
-    sub: subMap[strategy.objective],
-    tags: buildTags(primary),
+    kind: "vitrine",
+    label,
+    pageInfo: { page, total },
+    density,
+    badge,
+    headline,
+    sub,
+    tags: isMulti ? [] : buildTags(primary),
     productName: primary.name,
     price: priceStr,
     basePrice: basePriceStr,
     parcel,
-    detailLines: buildDetailLines(primary),
+    detailLines: isMulti ? [] : buildDetailLines(primary),
     urgencyLine: urgencyBodyLine(strategy.urgencyLevel, primary.quantity),
+    ctaMain: null,
+    ctaSub: null,
+    vitrineProducts: buildVitrineItems(pageFacts, strategy.objective),
+    benefits: buildVitrineBenefits(pageFacts, strategy),
+    footerCtaMain: footer.main,
+    footerCtaSub: footer.sub,
+  }
+}
+
+function buildHighlightStory(
+  facts: ProductFacts[],
+  strategy: GeneralStrategy
+): StoryData {
+  const primary = pickPrimary(facts)
+  const priceStr = primary.disclosurePrice != null ? formatBRL(primary.disclosurePrice) : null
+  const basePriceStr = primary.discount && primary.basePrice != null ? formatBRL(primary.basePrice) : null
+  const parcel = primary.installment?.text ?? null
+
+  // Short model name: drop parentheticals first so we never split "(11ª"
+  // and leave a dangling unclosed parenthesis.
+  const cleanName = (primary.copyTitle || primary.name)
+    .replace(/\s*\([^)]*\)\s*/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim()
+  const shortName = cleanName.split(" ").slice(0, 2).join(" ")
+  // Deep-dive bullets — the strongest real arguments, NOT a spec dump.
+  // Differs from the vitrine card (which is name + price + pills).
+  const argueLines: string[] = []
+  if (primary.battery_health != null) argueLines.push(`Bateria ${primary.battery_health}%`)
+  if (primary.grade) argueLines.push(conditionLabel(primary.grade))
+  if (primary.warrantyLabel) argueLines.push(primary.warrantyLabel)
+  if (primary.gifts) argueLines.push(`Já sai com ${primary.gifts}`)
+  if (primary.discount && primary.basePrice != null && primary.disclosurePrice != null) {
+    argueLines.push(`De ${formatBRL(primary.basePrice)} por ${formatBRL(primary.disclosurePrice)}`)
+  }
+  if (primary.quantity <= 1) argueLines.push("Última unidade nessa condição")
+  const detailLines = argueLines.filter(Boolean).slice(0, 5)
+
+  // Sub = short comma-joined summary of the top real arguments (not the
+  // product name, not a spec dump). Falls back to the commercial name.
+  const summaryParts = detailLines.slice(0, 3)
+  const highlightSub =
+    summaryParts.length === 0
+      ? buildStoryProductName(primary)
+      : summaryParts.length === 1
+      ? `${summaryParts[0]}.`
+      : `${summaryParts.slice(0, -1).join(", ")} e ${summaryParts[summaryParts.length - 1]}.`
+
+  const headlineMap: Record<ObjectiveKey, string> = {
+    sell_fast: `Por que esse\n${shortName} sai rápido?`,
+    generate_desire: `Por que esse\n${shortName} chama atenção?`,
+    bundle_gift: `${shortName}\njá sai completo`,
+    trust_proof: `${shortName}\nconferido de verdade`,
+    new_arrival: `${shortName}\nacabou de chegar`,
+    reactivate_lead: `Esse ${shortName}\nainda faz sentido`,
+  }
+
+  return {
+    kind: "highlight",
+    label: "Destaque",
+    badge: primary.isPrimary && facts.length > 1 ? "PRINCIPAL" : "DESTAQUE",
+    headline: headlineMap[strategy.objective],
+    sub: highlightSub,
+    tags: orderedVitrineTags(primary, strategy.objective),
+    productName: primary.name,
+    price: priceStr,
+    basePrice: basePriceStr,
+    parcel,
+    detailLines,
+    urgencyLine: null,
     ctaMain: null,
     ctaSub: null,
   }
 }
 
-function generateStory3(facts: ProductFacts[], strategy: GeneralStrategy): StoryData {
+function buildCtaStory(facts: ProductFacts[], strategy: GeneralStrategy): StoryData {
   const primary = pickPrimary(facts)
   const priceStr = primary.disclosurePrice != null ? formatBRL(primary.disclosurePrice) : null
   const parcel = primary.installment?.text ?? null
   const cta = contextualCta(facts, strategy)
 
-  const ctaMap: Record<ObjectiveKey, { main: string; sub: string }> = {
-    sell_fast: cta,
-    generate_desire: cta,
-    bundle_gift: cta,
-    trust_proof: cta,
-    new_arrival: cta,
-    reactivate_lead: cta,
-  }
-
   const warrantyTrustLine = primary.warrantyLabel || null
   const baseTrustLines: Record<ObjectiveKey, string[]> = {
-    sell_fast: ["Entrega rápida", "Nota fiscal"],
+    sell_fast: ["Disponibilidade confirmada no atendimento", "Condição conferida antes da reserva"],
     generate_desire: ["Produto original", "Suporte pós-venda"],
-    bundle_gift: primary.gifts ? ["Kit completo", "Sem gasto adicional", "Entrega junto"] : ["Produto conferido", "Nota fiscal"],
+    bundle_gift: primary.gifts ? ["Kit completo", "Sem gasto adicional"] : ["Produto conferido", "Condição explicada antes da compra"],
     trust_proof: ["Produto conferido", "Serial verificado", "Portal de compra incluso"],
     new_arrival: ["Lote recente", "Produto conferido"],
     reactivate_lead: ["Mesmo produto", "Disponível agora"],
   }
   const trustLines = warrantyTrustLine
-    ? { ...baseTrustLines, [strategy.objective]: [...baseTrustLines[strategy.objective], warrantyTrustLine] }
-    : baseTrustLines
+    ? [...baseTrustLines[strategy.objective], warrantyTrustLine]
+    : baseTrustLines[strategy.objective]
+
+  // Multi-product closing must NOT show a price/parcel — it belongs to one
+  // product and confuses which item it refers to.
+  const isSingle = facts.length === 1
 
   return {
+    kind: "cta",
+    label: "Fechamento",
     badge: "CONTATO",
-    headline: ctaMap[strategy.objective].main,
-    sub: ctaMap[strategy.objective].sub,
+    headline: cta.main,
+    sub: cta.sub,
     tags: [],
     productName: primary.name,
-    price: priceStr,
+    price: isSingle ? priceStr : null,
     basePrice: null,
-    parcel,
+    parcel: isSingle ? parcel : null,
     detailLines: [
       `${facts.length} ${facts.length === 1 ? "opção disponível" : "opções disponíveis"}`,
       facts.find((f) => f.discount)?.copyStrongPoint || primary.copyStrongPoint,
-      ...trustLines[strategy.objective],
+      ...trustLines,
     ].filter(Boolean).slice(0, 4),
     urgencyLine: null,
-    ctaMain: ctaMap[strategy.objective].main,
-    ctaSub: priceStr ? `${priceStr}${parcel ? ` · ${parcel}` : ""}` : null,
+    ctaMain: cta.main,
+    ctaSub: isSingle && priceStr ? `${priceStr}${parcel ? ` · ${parcel}` : ""}` : null,
   }
+}
+
+function shouldAutoAddHighlight(primary: ProductFacts, totalProducts: number): boolean {
+  if (totalProducts <= 1) return false
+  if (primary.discount) return true
+  if (primary.warrantyLabel) return true
+  if (primary.battery_health != null && primary.battery_health >= 95) return true
+  if (primary.quantity <= 1) return true
+  return false
+}
+
+function shouldAutoAddCta(totalProducts: number): boolean {
+  return totalProducts <= 3
+}
+
+export function buildDynamicStories(
+  facts: ProductFacts[],
+  strategy: GeneralStrategy
+): StoryData[] {
+  if (facts.length === 0) return []
+  // 1) Sort by objective-aware commercial weight, pick density, then paginate
+  //    by visual weight (rich cards take more room than simple accessories).
+  const sorted = sortProductsForVitrine(facts, strategy)
+  const density = pickDensityMode(sorted, strategy)
+  const pages = chunkProductsForVisualStories(sorted, density, strategy.objective)
+  const stories: StoryData[] = pages.map((pageFacts, i) =>
+    buildVitrineStory(pageFacts, sorted.length, i + 1, pages.length, strategy, density)
+  )
+
+  // 2) Highlight story — optional, controlled by toggle or auto-rule.
+  const primary = pickPrimary(sorted)
+  const wantHighlight = strategy.addHighlightStory == null
+    ? shouldAutoAddHighlight(primary, sorted.length)
+    : strategy.addHighlightStory
+  if (wantHighlight) stories.push(buildHighlightStory(sorted, strategy))
+
+  // 3) CTA story — optional. Default ON for ≤3 products, OFF for many products.
+  const wantCta = strategy.addCtaStory == null
+    ? shouldAutoAddCta(sorted.length)
+    : strategy.addCtaStory
+  if (wantCta) stories.push(buildCtaStory(sorted, strategy))
+
+  return stories
 }
 
 // ─── Carousel ────────────────────────────────────────────────────────────────
@@ -691,7 +1407,7 @@ function generateCarousel(facts: ProductFacts[], strategy: GeneralStrategy): Car
       body: "",
       badge: "VITRINE",
       detailLines: [],
-      vitrineItems: buildVitrineItems(facts),
+      vitrineItems: buildVitrineItems(facts, strategy.objective),
     })
   } else {
     const specLines = [
@@ -765,7 +1481,7 @@ function lineForProductWhatsApp(f: ProductFacts, index?: number): string[] {
   if (f.battery_health != null) lines.push(`🔋 Bateria ${f.battery_health}%`)
   const condition = whatsappConditionLine(f)
   if (condition) lines.push(condition)
-  if (f.warrantyLabel) lines.push(`📆 ${f.warrantyLabel}`)
+  if (f.warrantyLabel) lines.push(`🛡 ${f.warrantyLabel}`)
   if (f.discount && f.basePrice != null && f.disclosurePrice != null) {
     lines.push(`💰 De ~${formatBRL(f.basePrice)}~ por *${formatBRL(f.disclosurePrice)}*`)
   } else if (f.disclosurePrice != null) {
@@ -776,6 +1492,7 @@ function lineForProductWhatsApp(f: ProductFacts, index?: number): string[] {
   if (f.productNote && !f.productNote.toLocaleLowerCase("pt-BR").includes("ponto forte")) {
     lines.push(`📝 ${f.productNote}`)
   }
+  if (f.quantity <= 1) lines.push("⚡ 1 unidade disponível")
   return lines
 }
 
@@ -784,19 +1501,14 @@ function generateWhatsApp(facts: ProductFacts[], strategy: GeneralStrategy): str
   const isMulti = facts.length > 1
   const cta = (strategy.generalCta || "Me chama que eu vejo a disponibilidade pra você.").trim()
   const lines: string[] = []
-  const visibleFacts = facts.slice(0, facts.length > 2 ? 3 : facts.length)
 
   if (isMulti) {
-    lines.push("*Tenho essas opções disponíveis hoje na Nobretech:*")
+    lines.push("Tenho algumas opções disponíveis hoje na Nobretech:")
     lines.push("")
-    visibleFacts.forEach((f, i) => {
+    facts.forEach((f, i) => {
       lines.push(...lineForProductWhatsApp(f, i + 1))
       lines.push("")
     })
-    if (facts.length > visibleFacts.length) {
-      lines.push(`Tenho mais ${facts.length - visibleFacts.length} ${facts.length - visibleFacts.length === 1 ? "opção" : "opções"} no lote. Te mando as condições por modelo.`)
-      lines.push("")
-    }
   } else {
     lines.push("*Olha essa condição que entrou na Nobretech:*")
     lines.push("")
@@ -804,7 +1516,7 @@ function generateWhatsApp(facts: ProductFacts[], strategy: GeneralStrategy): str
     lines.push("")
   }
 
-  if (strategy.generalNote && facts.length <= 2) {
+  if (strategy.generalNote && facts.length <= 3) {
     lines.push(strategy.generalNote)
     lines.push("")
   }
@@ -907,7 +1619,7 @@ export function generateContent(
   strategy: GeneralStrategy
 ): GeneratedContent {
   if (drafts.length === 0) throw new Error("generateContent requires at least one product draft")
-  const facts = sortProductsForVitrine(drafts.map(buildProductFacts))
+  const facts = sortProductsForVitrine(drafts.map(buildProductFacts), strategy)
   const warnings: string[] = []
   const primary = pickPrimary(facts)
   if (strategy.urgencyLevel === "high" && primary.quantity > 3) {
@@ -917,12 +1629,24 @@ export function generateContent(
     if (f.disclosurePrice == null) warnings.push(`${f.name}: preço de divulgação não definido.`)
   })
 
+  const stories = buildDynamicStories(facts, strategy)
+  // Hard guardrail: every selected product must appear in some vitrine page.
+  // Match by stable inventory id — the displayed name is intentionally trimmed
+  // by buildStoryProductName, so name comparison would false-positive.
+  const idsInVitrine = new Set<string>()
+  stories
+    .filter((s) => s.kind === "vitrine")
+    .forEach((s) => {
+      s.vitrineProducts?.forEach((v) => idsInVitrine.add(v.productId))
+    })
+  facts.forEach((f) => {
+    if (!idsInVitrine.has(f.id)) {
+      warnings.push(`Produto não apareceu na vitrine: ${f.name}.`)
+    }
+  })
+
   return {
-    stories: [
-      generateStory1(facts, strategy),
-      generateStory2(facts, strategy),
-      generateStory3(facts, strategy),
-    ],
+    stories,
     carousel: generateCarousel(facts, strategy),
     whatsapp: generateWhatsApp(facts, strategy),
     instagram: generateInstagram(facts, strategy),

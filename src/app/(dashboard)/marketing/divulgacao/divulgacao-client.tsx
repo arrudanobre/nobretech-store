@@ -6,12 +6,15 @@ import {
   AlertTriangle,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ChevronUp,
   Copy,
   Crown,
   Download,
   Layers,
   Loader2,
+  Maximize2,
   Megaphone,
   MessageCircle,
   Package,
@@ -22,6 +25,7 @@ import {
   Sparkles,
   Star,
   Trash2,
+  X,
 } from "lucide-react"
 import { getProductAssetImageInfo } from "@/lib/product-assets"
 import { fetchProductImageMap, type ProductImageMap } from "@/lib/product-images"
@@ -43,11 +47,10 @@ import {
   type ProductDraft,
   type CampaignAngleSuggestion,
   type StoryData,
-  type StoryTag,
   type ToneKey,
   type UrgencyLevel,
-  type VitrineItem,
 } from "@/lib/marketing/copy-generator"
+import type { StoryPngResult } from "@/lib/marketing/story-renderer/story-png"
 import { cn } from "@/lib/utils"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -57,10 +60,47 @@ type CopyChannelTab = "whatsapp" | "instagram" | "stories" | "carousel" | "quick
 type CopiedKey = string | null
 type CopySource = "deterministic" | "ai"
 
+interface QuickProductCopy {
+  productId: string
+  title: string
+  text: string
+}
+
+type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "error" | "unavailable"
+
+interface LoadedDisclosureSession {
+  id: string
+  strategy: Partial<GeneralStrategy>
+  source: CopySource
+  products: Array<{
+    productId: string | null
+    isPrimary: boolean
+    isFeatured: boolean
+    basePrice: number | null
+    disclosurePrice: number | null
+    installmentCount: number
+    gifts: string
+    warrantyLabel: string
+    warrantySource: "inventory" | "manual" | null
+    productNote: string
+    productCta: string
+    copy: {
+      title?: unknown
+      description?: unknown
+      strongPoint?: unknown
+      objection?: unknown
+    }
+  }>
+  outputs: Record<string, { text: string; json: Record<string, unknown> | null; source: string }>
+  createdAt: string
+  updatedAt: string
+}
+
 interface ChannelCopyDraft {
-  storyHeadlines: [string, string, string]
-  storySubtitles: [string, string, string]
-  storyCta: string
+  /** Dynamic — length follows generated.stories.length. */
+  storyHeadlines: string[]
+  storySubtitles: string[]
+  storyCtas: string[]
   whatsapp: string
   instagram: string
   carouselTitles: string[]
@@ -69,9 +109,9 @@ interface ChannelCopyDraft {
 
 function emptyChannelCopyDraft(): ChannelCopyDraft {
   return {
-    storyHeadlines: ["", "", ""],
-    storySubtitles: ["", "", ""],
-    storyCta: "",
+    storyHeadlines: [],
+    storySubtitles: [],
+    storyCtas: [],
     whatsapp: "",
     instagram: "",
     carouselTitles: [],
@@ -104,501 +144,64 @@ function productAssetFor(product: MarketingProduct, productImages?: ProductImage
   })
 }
 
-// ─── Story canvas (dark 9:16, no Instagram chrome) ───────────────────────────
-
-const STORY_TAG_STYLES: Record<string, { bg: string; text: string }> = {
-  grade: { bg: "#1a2e1a", text: "#5aab3a" },
-  battery: { bg: "#1a1f2e", text: "#5a8fd4" },
-  stock: { bg: "#2e1a1a", text: "#d45a5a" },
-  new: { bg: "#2a1a2e", text: "#b05ad4" },
-  warranty_apple: { bg: "#1a2a2a", text: "#4ac4b0" },
-  warranty_nobretech: { bg: "#1f1a2e", text: "#8b6fd4" },
-  gift: { bg: "#2e241a", text: "#d48a35" },
-  installment: { bg: "#1a242e", text: "#55a7d8" },
-  color: { bg: "#222", text: "#d8d8d8" },
-}
-
-function StoryTagPill({ tag }: { tag: StoryTag }) {
-  const s = STORY_TAG_STYLES[tag.type] ?? { bg: "#222", text: "#888" }
-  return (
-    <span
-      style={{
-        background: s.bg,
-        color: s.text,
-        fontSize: 22,
-        fontWeight: 600,
-        padding: "6px 16px",
-        borderRadius: 40,
-        display: "inline-block",
-        whiteSpace: "nowrap",
-        fontFamily: "Inter, sans-serif",
-      }}
-    >
-      {tag.label}
-    </span>
-  )
-}
-
-function VitrineProductRow({ item }: { item: VitrineItem }) {
-  const cardBorder = item.hasDiscount ? "#D85A30" : item.isPrimary ? "#7a4a34" : "#2a2a2a"
-  const cardBg = item.hasDiscount ? "#1f1510" : item.isPrimary ? "#1a1715" : "#151515"
-
-  return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "1fr auto",
-        alignItems: "start",
-        padding: item.hasDiscount ? "22px 28px" : "18px 24px",
-        background: cardBg,
-        border: item.hasDiscount ? `3px solid ${cardBorder}` : `1.5px solid ${cardBorder}`,
-        borderRadius: 20,
-        gap: 18,
-        boxShadow: item.hasDiscount ? "0 18px 44px rgba(216,90,48,0.13)" : "none",
-      }}
-    >
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
-          {item.hasDiscount && (
-            <span
-              style={{
-                background: "#D85A30",
-                color: "#fff",
-                fontSize: 16,
-                fontWeight: 800,
-                padding: "4px 10px",
-                borderRadius: 999,
-                textTransform: "uppercase",
-                letterSpacing: "0.08em",
-              }}
-            >
-              Oferta
-            </span>
-          )}
-          {item.isPrimary && (
-            <span
-              style={{
-                background: "rgba(255,255,255,0.08)",
-                color: "#f7d9c9",
-                fontSize: 16,
-                fontWeight: 700,
-                padding: "4px 10px",
-                borderRadius: 999,
-              }}
-            >
-              Destaque
-            </span>
-          )}
-          {item.isFeatured && !item.hasDiscount && (
-            <span
-              style={{
-                background: "rgba(216,90,48,0.16)",
-                color: "#f1a37d",
-                fontSize: 16,
-                fontWeight: 800,
-                padding: "4px 10px",
-                borderRadius: 999,
-                textTransform: "uppercase",
-                letterSpacing: "0.08em",
-              }}
-            >
-              Destaque
-            </span>
-          )}
-        </div>
-        <div
-          style={{
-            fontSize: item.hasDiscount ? 32 : 29,
-            fontWeight: 700,
-            color: "#fff",
-            lineHeight: 1.12,
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
-          }}
-        >
-          {item.name}
-        </div>
-        {(item.storage || item.grade) && (
-          <div style={{ fontSize: 21, color: "#9a9a9a", marginTop: 8 }}>
-            {[item.storage, item.grade].filter(Boolean).join(" · ")}
-          </div>
-        )}
-        {item.tags.length > 0 && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 12 }}>
-            {item.tags.map((tag, i) => (
-              <span
-                key={i}
-                style={{
-                  background: STORY_TAG_STYLES[tag.type]?.bg ?? "#222",
-                  color: STORY_TAG_STYLES[tag.type]?.text ?? "#ddd",
-                  fontSize: 16,
-                  fontWeight: 700,
-                  padding: "4px 9px",
-                  borderRadius: 999,
-                  maxWidth: 260,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {tag.label}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-      <div style={{ textAlign: "right", flexShrink: 0 }}>
-        {item.basePrice && (
-          <div style={{ fontSize: 18, color: "#777" }}>
-            <span style={{ textDecoration: "line-through" }}>{item.basePrice}</span>
-          </div>
-        )}
-        {item.price && (
-          <div
-            style={{
-              fontSize: item.hasDiscount ? 44 : 36,
-              fontWeight: 800,
-              color: "#D85A30",
-              whiteSpace: "nowrap",
-              lineHeight: 1.02,
-            }}
-          >
-            {item.price}
-          </div>
-        )}
-        {item.parcel && (
-          <div style={{ fontSize: 19, color: "#e0b29c", marginTop: 6, fontWeight: 700 }}>
-            {item.parcel}
-          </div>
-        )}
-        {item.discountPercent != null && (
-          <div style={{ fontSize: 18, color: "#5aab3a", fontWeight: 800, marginTop: 6 }}>
-            -{item.discountPercent}%
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
+// ─── Story canvas (PNG-based — same image for preview, modal and export) ─────
 
 function StoryCanvas({
   story,
   index,
-  exportRef,
+  pngUrl,
+  scale = 0.16,
+  showLabel = true,
 }: {
   story: StoryData
   index: number
-  exportRef: (el: HTMLDivElement | null) => void
+  pngUrl: string | null
+  scale?: number
+  showLabel?: boolean
 }) {
-  const SCALE = 0.2
-  const storyLabels = ["Vitrine / Oferta", "Destaques / Ofertas", "CTA / Fechamento"]
-  const finalVitrine = index === 2 && story.vitrineProducts && story.vitrineProducts.length > 0
-
+  const pw = Math.round(1080 * scale)
+  const ph = Math.round(1920 * scale)
   return (
     <div className="flex flex-col items-center gap-2">
-      <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
-        Story {index + 1} — {storyLabels[index]}
-      </span>
-
+      {showLabel && (
+        <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+          Story {index + 1} — {story.label}
+        </span>
+      )}
       <div
         style={{
-          width: 216,
-          height: 384,
-          background: "#0d0d0d",
           borderRadius: 16,
           border: "3px solid #1a1a1a",
           overflow: "hidden",
-          position: "relative",
           flexShrink: 0,
+          width: pw,
+          height: ph,
+          background: "#0d0d0d",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
           boxShadow: "0 10px 30px -10px rgba(13,27,46,0.25)",
         }}
       >
-        <div
-          ref={exportRef}
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            width: 1080,
-            height: 1920,
-            background: "#0d0d0d",
-            transformOrigin: "top left",
-            transform: `scale(${SCALE})`,
-            display: "flex",
-            flexDirection: "column",
-            padding: "96px 56px 80px",
-            fontFamily: "Montserrat, Inter, sans-serif",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              marginBottom: 16,
-            }}
-          >
-            <span
-              style={{
-                fontSize: 32,
-                fontWeight: 700,
-                color: "#fff",
-                letterSpacing: "0.14em",
-                textTransform: "uppercase",
-              }}
-            >
-              NOBRETECH
-            </span>
-            <span
-              style={{
-                background: "#D85A30",
-                color: "#fff",
-                fontSize: 22,
-                fontWeight: 700,
-                padding: "8px 20px",
-                borderRadius: 40,
-                letterSpacing: "0.06em",
-                textTransform: "uppercase",
-              }}
-            >
-              {story.badge}
-            </span>
-          </div>
-
-          <div style={{ height: 1, background: "#222", marginBottom: 28 }} />
-
-          {finalVitrine ? (
-            <div
-              style={{
-                flex: 1,
-                display: "flex",
-                flexDirection: "column",
-                gap: 20,
-              }}
-            >
-              <div
-                style={{
-                  fontSize: 58,
-                  fontWeight: 800,
-                  color: "#fff",
-                  lineHeight: 1.08,
-                  whiteSpace: "pre-line",
-                }}
-              >
-                {story.ctaMain || story.headline}
-              </div>
-              <div style={{ fontSize: 27, color: "#d8b3a3", lineHeight: 1.25 }}>
-                {story.ctaSub || "Condições por modelo"}
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 14, flex: 1 }}>
-                {story.vitrineProducts?.map((item, i) => (
-                  <VitrineProductRow key={i} item={item} />
-                ))}
-              </div>
-              <div
-                style={{
-                  background: "#D85A30",
-                  borderRadius: 18,
-                  padding: "24px 30px",
-                  color: "#fff",
-                  fontSize: 32,
-                  fontWeight: 800,
-                  lineHeight: 1.15,
-                  textAlign: "center",
-                }}
-              >
-                {story.sub || "Me chama para ver disponibilidade agora."}
-              </div>
-            </div>
-          ) : index === 2 ? (
-            <div
-              style={{
-                flex: 1,
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                justifyContent: "center",
-                textAlign: "center",
-                gap: 32,
-              }}
-            >
-              <div
-                style={{
-                  fontSize: 88,
-                  fontWeight: 700,
-                  color: "#fff",
-                  lineHeight: 1.1,
-                  whiteSpace: "pre-line",
-                }}
-              >
-                {story.ctaMain || story.headline}
-              </div>
-
-              <div style={{ width: 60, height: 1, background: "#333" }} />
-
-              {story.detailLines.length > 0 && (
-                <div style={{ fontSize: 30, color: "#555", lineHeight: 2 }}>
-                  {story.detailLines.join("\n")}
-                </div>
-              )}
-
-              <div
-                style={{
-                  background: "#D85A30",
-                  borderRadius: 20,
-                  padding: "36px 48px",
-                  width: "100%",
-                }}
-              >
-                <div style={{ fontSize: 52, fontWeight: 700, color: "#fff", marginBottom: 8 }}>
-                  {story.sub}
-                </div>
-                {story.ctaSub && (
-                  <div style={{ fontSize: 28, fontWeight: 600, color: "rgba(255,255,255,0.9)" }}>
-                    {story.ctaSub}
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : story.vitrineProducts && story.vitrineProducts.length > 0 ? (
-            <>
-              <div
-                style={{
-                  fontSize: 68,
-                  fontWeight: 700,
-                  color: "#fff",
-                  lineHeight: 1.1,
-                  marginBottom: 8,
-                  whiteSpace: "pre-line",
-                }}
-              >
-                {story.headline}
-              </div>
-              <div style={{ fontSize: 28, color: "#888", marginBottom: 32 }}>{story.sub}</div>
-
-              <div style={{ display: "flex", flexDirection: "column", gap: 16, flex: 1 }}>
-                {story.vitrineProducts.map((item, i) => (
-                  <VitrineProductRow key={i} item={item} />
-                ))}
-              </div>
-
-              {story.urgencyLine && (
-                <div style={{ fontSize: 26, color: "#D85A30", fontWeight: 700, marginTop: 20 }}>
-                  {story.urgencyLine}
-                </div>
-              )}
-            </>
-          ) : (
-            <>
-              <div
-                style={{
-                  fontSize: 76,
-                  fontWeight: 700,
-                  color: "#fff",
-                  lineHeight: 1.15,
-                  marginBottom: 12,
-                  whiteSpace: "pre-line",
-                }}
-              >
-                {story.headline}
-              </div>
-              <div style={{ fontSize: 32, color: "#888", marginBottom: 32 }}>{story.sub}</div>
-
-              <div
-                style={{
-                  background: "#161616",
-                  border: index === 1 ? "2px solid #D85A30" : "2px solid #2a2a2a",
-                  borderRadius: 24,
-                  padding: "32px 36px",
-                  marginBottom: 20,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 18,
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "flex-start",
-                    justifyContent: "space-between",
-                    gap: 16,
-                  }}
-                >
-                  <div style={{ fontSize: 44, fontWeight: 700, color: "#fff", lineHeight: 1.2 }}>
-                    {story.productName}
-                  </div>
-                  {story.price && (
-                    <div style={{ textAlign: "right", flexShrink: 0 }}>
-                      {story.basePrice && (
-                        <div
-                          style={{
-                            fontSize: 28,
-                            color: "#777",
-                            textDecoration: "line-through",
-                          }}
-                        >
-                          {story.basePrice}
-                        </div>
-                      )}
-                      <div
-                        style={{ fontSize: 52, fontWeight: 700, color: "#fff", whiteSpace: "nowrap" }}
-                      >
-                        {story.price}
-                      </div>
-                      {story.parcel && (
-                        <div style={{ fontSize: 26, color: "#888", whiteSpace: "nowrap" }}>
-                          {story.parcel}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {story.tags.length > 0 && (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-                    {story.tags.map((t, i) => (
-                      <StoryTagPill key={i} tag={t} />
-                    ))}
-                  </div>
-                )}
-
-                {story.detailLines.length > 0 && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                    {story.detailLines.map((line, i) => (
-                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 16 }}>
-                        <div
-                          style={{
-                            width: 12,
-                            height: 12,
-                            borderRadius: "50%",
-                            background: "#D85A30",
-                            flexShrink: 0,
-                          }}
-                        />
-                        <span style={{ fontSize: 28, fontWeight: 600, color: "#c0b8e8" }}>
-                          {line}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {story.urgencyLine && (
-                <div style={{ fontSize: 28, color: "#D85A30", fontWeight: 700, marginTop: 8 }}>
-                  {story.urgencyLine}
-                </div>
-              )}
-            </>
-          )}
-        </div>
+        {pngUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={pngUrl}
+            width={pw}
+            height={ph}
+            alt={`Story ${index + 1}: ${story.label}`}
+            style={{ display: "block" }}
+            draggable={false}
+          />
+        ) : (
+          <Loader2 className="w-5 h-5 animate-spin text-gray-600" />
+        )}
       </div>
     </div>
   )
 }
 
+// Legacy constants kept for reference; actual rendering now in story-artboard.tsx.
 // ─── Carousel canvas ─────────────────────────────────────────────────────────
 
 function CarouselCanvas({ slide }: { slide: CarouselSlideVisual }) {
@@ -1161,7 +764,7 @@ function ProductCardEditor({
               </span>
             )}
           </div>
-          <h3 className="mt-2 truncate text-lg font-bold tracking-tight text-navy-900">{product.name}</h3>
+          <h3 className="mt-2 text-lg font-bold leading-tight tracking-tight text-navy-900">{product.name}</h3>
           <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-gray-500">
             {headerSummary.map((s, i) => (
               <span key={i} className="rounded-full border border-gray-100 bg-gray-50 px-2 py-1 font-semibold">
@@ -1181,18 +784,18 @@ function ProductCardEditor({
             )}
           </div>
 
-          <div className="mt-4 grid gap-2 sm:grid-cols-3">
+          <div className="mt-4 grid grid-cols-1 gap-2 min-[520px]:grid-cols-2 xl:grid-cols-3">
             <div className="rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-2">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Preço padrão</p>
-              <p className="mt-1 text-sm font-bold text-navy-900">{basePrice != null ? formatBRL(basePrice) : "A confirmar"}</p>
+              <p className="mt-1 break-all text-sm font-bold leading-tight text-navy-900">{basePrice != null ? formatBRL(basePrice) : "A confirmar"}</p>
             </div>
             <div className="rounded-xl border border-[#F0A080] bg-[#FFF7F3] px-3 py-2">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-[#A23E18]">Divulgação</p>
-              <p className="mt-1 text-base font-black text-[#D85A30]">{disclosurePrice != null ? formatBRL(disclosurePrice) : "A confirmar"}</p>
+              <p className="mt-1 break-all text-sm font-black leading-tight text-[#D85A30]">{disclosurePrice != null ? formatBRL(disclosurePrice) : "A confirmar"}</p>
             </div>
-            <div className="rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-2">
+            <div className="rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-2 min-[520px]:col-span-2 xl:col-span-1">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Parcelamento</p>
-              <p className="mt-1 text-sm font-bold text-navy-900">{installment?.text ?? "Sem parcelamento"}</p>
+              <p className="mt-1 break-all text-sm font-bold leading-tight text-navy-900">{installment?.text ?? "Sem parcelamento"}</p>
             </div>
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
@@ -1459,7 +1062,7 @@ function CopyButton({
   )
 }
 
-function buildQuickProductText(facts: ReturnType<typeof buildProductFacts>[]): string {
+function buildQuickProductCopies(facts: ReturnType<typeof buildProductFacts>[]): QuickProductCopy[] {
   return facts
     .map((f) => {
       const name = [f.name]
@@ -1472,7 +1075,7 @@ function buildQuickProductText(facts: ReturnType<typeof buildProductFacts>[]): s
       const lines: string[] = [`*${name.join(" ")}*`]
       if (f.battery_health != null) lines.push(`🔋 Bateria ${f.battery_health}%`)
       if (f.grade) lines.push(`✅ ${f.grade === "Lacrado" ? "Lacrado" : `Grade ${f.grade}, revisado pela Nobretech`}`)
-      if (f.warrantyLabel) lines.push(`📆 ${f.warrantyLabel}`)
+      if (f.warrantyLabel) lines.push(`🛡 ${f.warrantyLabel}`)
       if (f.discount && f.basePrice != null && f.disclosurePrice != null) {
         lines.push(`💰 De ~${formatBRL(f.basePrice)}~ por ${formatBRL(f.disclosurePrice)}`)
       } else if (f.disclosurePrice != null) {
@@ -1481,10 +1084,19 @@ function buildQuickProductText(facts: ReturnType<typeof buildProductFacts>[]): s
       if (f.installment) lines.push(`💳 Até ${f.installment.text}`)
       if (f.gifts) lines.push(`🎁 ${f.gifts}`)
       if (f.productNote) lines.push(`📝 ${f.productNote}`)
-      if (f.quantity <= 1) lines.push("⚡ Última unidade nessa condição")
+      if (f.quantity <= 1) lines.push("⚡ 1 unidade disponível")
       if (f.productCta) lines.push(f.productCta)
-      return lines.join("\n")
+      return {
+        productId: f.id,
+        title: name.join(" "),
+        text: lines.join("\n"),
+      }
     })
+}
+
+function buildQuickProductText(facts: ReturnType<typeof buildProductFacts>[]): string {
+  return buildQuickProductCopies(facts)
+    .map((item) => item.text)
     .join("\n\n")
 }
 
@@ -1506,6 +1118,9 @@ export function DivulgacaoClient() {
   const [generalCta, setGeneralCta] = useState("")
   const [generalNote, setGeneralNote] = useState("")
   const [angle, setAngle] = useState("")
+  // null = use smart default; true/false = user override.
+  const [addHighlightStory, setAddHighlightStory] = useState<boolean | null>(null)
+  const [addCtaStory, setAddCtaStory] = useState<boolean | null>(null)
 
   const [outputTab, setOutputTab] = useState<OutputTab>("stories")
   const [copied, setCopied] = useState<CopiedKey>(null)
@@ -1519,9 +1134,23 @@ export function DivulgacaoClient() {
   const [campaignAngle, setCampaignAngle] = useState<CampaignAngleSuggestion | null>(null)
   const [channelCopy, setChannelCopy] = useState<ChannelCopyDraft>(() => emptyChannelCopyDraft())
   const [canMobileShare, setCanMobileShare] = useState(false)
+  const [exportingStoryIndex, setExportingStoryIndex] = useState<number | null>(null)
+  const [selectedStoryIndex, setSelectedStoryIndex] = useState(0)
+  const [previewModalOpen, setPreviewModalOpen] = useState(false)
+  const [draftSaving, setDraftSaving] = useState(false)
+  const [draftLoading, setDraftLoading] = useState(false)
+  const [draftMessage, setDraftMessage] = useState<string | null>(null)
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle")
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null)
+  const [loadedDisclosure, setLoadedDisclosure] = useState<LoadedDisclosureSession | null>(null)
+  const [reuseSuggestion, setReuseSuggestion] = useState<LoadedDisclosureSession | null>(null)
 
-  const storyExportRefs = useRef<Array<HTMLDivElement | null>>([null, null, null])
+  // PNG results: one per story. Rebuilt whenever displayGenerated changes.
+  const [storyPngResults, setStoryPngResults] = useState<(StoryPngResult | null)[]>([])
+  const storyPngUrlsRef = useRef<string[]>([])
+  const exportingStoryRef = useRef(false)
   const skipStrategyResetRef = useRef(false)
+  const strategyDirtyReadyRef = useRef(false)
 
   const resetGeneratedCopy = useCallback(() => {
     setAIResult(null)
@@ -1531,6 +1160,11 @@ export function DivulgacaoClient() {
     setAISuggestionNotes([])
     setCampaignAngle(null)
     setChannelCopy(emptyChannelCopyDraft())
+  }, [])
+
+  const markUnsaved = useCallback(() => {
+    setSaveStatus((current) => current === "saving" ? current : "dirty")
+    setLastSavedAt(null)
   }, [])
 
   const productsById = useMemo(() => {
@@ -1566,6 +1200,16 @@ export function DivulgacaoClient() {
     loadProducts()
   }, [loadProducts])
 
+  // Close the expanded preview with ESC.
+  useEffect(() => {
+    if (!previewModalOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPreviewModalOpen(false)
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [previewModalOpen])
+
   useEffect(() => {
     const ids = draftStates.map((s) => s.productId)
     if (ids.length === 0) {
@@ -1593,6 +1237,7 @@ export function DivulgacaoClient() {
 
   const addProduct = useCallback((p: MarketingProduct) => {
     resetGeneratedCopy()
+    markUnsaved()
     setDraftStates((prev) => {
       if (prev.some((d) => d.productId === p.id)) return prev
       const isFirst = prev.length === 0
@@ -1628,17 +1273,28 @@ export function DivulgacaoClient() {
       }
       return [...prev, next]
     })
-  }, [resetGeneratedCopy])
+    fetch(`/api/marketing/disclosure-sessions/last?inventory_id=${encodeURIComponent(p.id)}`, { cache: "no-store" })
+      .then((res) => res.json())
+      .then((body) => {
+        if (body?.data) {
+          setReuseSuggestion(body.data as LoadedDisclosureSession)
+          setDraftMessage("Este produto já teve divulgação anterior. Você pode reaproveitar preço e textos se fizer sentido.")
+        }
+      })
+      .catch(() => undefined)
+  }, [markUnsaved, resetGeneratedCopy])
 
   const updateDraft = useCallback((id: string, patch: Partial<EditableDraftState>) => {
     if (Object.keys(patch).some((key) => key !== "expanded")) {
       resetGeneratedCopy()
+      markUnsaved()
     }
     setDraftStates((prev) => prev.map((d) => (d.productId === id ? { ...d, ...patch } : d)))
-  }, [resetGeneratedCopy])
+  }, [markUnsaved, resetGeneratedCopy])
 
   const removeDraft = useCallback((id: string) => {
     resetGeneratedCopy()
+    markUnsaved()
     setDraftStates((prev) => {
       const wasPrimary = prev.find((d) => d.productId === id)?.isPrimary
       const next = prev.filter((d) => d.productId !== id)
@@ -1647,17 +1303,19 @@ export function DivulgacaoClient() {
       }
       return next
     })
-  }, [resetGeneratedCopy])
+  }, [markUnsaved, resetGeneratedCopy])
 
   const makePrimary = useCallback((id: string) => {
     resetGeneratedCopy()
+    markUnsaved()
     setDraftStates((prev) => prev.map((d) => ({ ...d, isPrimary: d.productId === id })))
-  }, [resetGeneratedCopy])
+  }, [markUnsaved, resetGeneratedCopy])
 
   const toggleFeatured = useCallback((id: string) => {
     resetGeneratedCopy()
+    markUnsaved()
     setDraftStates((prev) => prev.map((d) => (d.productId === id ? { ...d, isFeatured: !d.isFeatured } : d)))
-  }, [resetGeneratedCopy])
+  }, [markUnsaved, resetGeneratedCopy])
 
   const drafts = useMemo<ProductDraft[]>(() => {
     return draftStates
@@ -1696,8 +1354,10 @@ export function DivulgacaoClient() {
       generalCta,
       generalNote,
       angle,
+      addHighlightStory,
+      addCtaStory,
     }),
-    [objective, channel, tone, urgencyLevel, generalCta, generalNote, angle]
+    [objective, channel, tone, urgencyLevel, generalCta, generalNote, angle, addHighlightStory, addCtaStory]
   )
 
   const deterministic = useMemo<GeneratedContent | null>(() => {
@@ -1720,8 +1380,11 @@ export function DivulgacaoClient() {
         ...story,
         headline: channelCopy.storyHeadlines[index] || story.headline,
         sub: channelCopy.storySubtitles[index] || story.sub,
-        ctaMain: index === 2 && channelCopy.storyCta ? channelCopy.storyCta : story.ctaMain,
-      })) as GeneratedContent["stories"],
+        ctaMain:
+          story.kind === "cta" && channelCopy.storyCtas[index]
+            ? channelCopy.storyCtas[index]
+            : story.ctaMain,
+      })),
       carousel: generated.carousel.map((slide, index) => ({
         ...slide,
         title: channelCopy.carouselTitles[index] || slide.title,
@@ -1730,14 +1393,57 @@ export function DivulgacaoClient() {
     }
   }, [channelCopy, generated])
 
+  // Keep the selected story index inside bounds after regeneration.
+  useEffect(() => {
+    const n = displayGenerated?.stories.length ?? 0
+    if (n > 0) setSelectedStoryIndex((v) => Math.min(v, n - 1))
+  }, [displayGenerated])
+
+  // Regenerate PNG previews whenever the effective stories change.
+  useEffect(() => {
+    storyPngUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
+    storyPngUrlsRef.current = []
+    setStoryPngResults([])
+
+    const stories = displayGenerated?.stories
+    if (!stories || stories.length === 0) return
+
+    let cancelled = false
+    import("@/lib/marketing/story-renderer/story-png")
+      .then(({ renderStoriesToPng }) => renderStoriesToPng(stories))
+      .then((results) => {
+        if (cancelled) {
+          results.forEach((r) => r && URL.revokeObjectURL(r.url))
+          return
+        }
+        storyPngUrlsRef.current = results.flatMap((r) => (r?.url ? [r.url] : []))
+        setStoryPngResults(results)
+      })
+      .catch((err) => {
+        console.error("[divulgacao] story PNG generation failed", err)
+        if (!cancelled) setStoryPngResults(stories.map(() => null))
+      })
+    return () => { cancelled = true }
+  }, [displayGenerated])
+
+  // Revoke object URLs on unmount.
+  useEffect(() => {
+    return () => { storyPngUrlsRef.current.forEach((url) => URL.revokeObjectURL(url)) }
+  }, [])
+
   // Reset AI overlay when key inputs change
   useEffect(() => {
     if (skipStrategyResetRef.current) {
       skipStrategyResetRef.current = false
       return
     }
+    if (!strategyDirtyReadyRef.current) {
+      strategyDirtyReadyRef.current = true
+      return
+    }
     resetGeneratedCopy()
-  }, [objective, channel, tone, urgencyLevel, generalCta, generalNote, angle, resetGeneratedCopy])
+    markUnsaved()
+  }, [objective, channel, tone, urgencyLevel, generalCta, generalNote, angle, addHighlightStory, addCtaStory, markUnsaved, resetGeneratedCopy])
 
   const facts = useMemo(() => drafts.map(buildProductFacts), [drafts])
   const selectedIds = useMemo(
@@ -1745,6 +1451,7 @@ export function DivulgacaoClient() {
     [draftStates]
   )
   const primaryFacts = facts.find((f) => f.isPrimary) ?? facts[0] ?? null
+  const quickProductCopies = useMemo(() => buildQuickProductCopies(facts), [facts])
   const quickProductText = useMemo(() => buildQuickProductText(facts), [facts])
 
   const handleCopy = useCallback((key: string, text: string) => {
@@ -1754,16 +1461,198 @@ export function DivulgacaoClient() {
     })
   }, [])
 
-  async function exportStory(index: number) {
-    const el = storyExportRefs.current[index]
-    if (!el) return
+  const applyDisclosureSession = useCallback((session: LoadedDisclosureSession) => {
+    const nextDrafts = session.products
+      .filter((item) => item.productId && productsById.has(item.productId))
+      .map<EditableDraftState>((item, index) => ({
+        productId: item.productId as string,
+        isPrimary: item.isPrimary || index === 0,
+        isFeatured: item.isFeatured,
+        basePriceText: formatBRLInputValue(item.basePrice),
+        disclosurePriceText: formatBRLInputValue(item.disclosurePrice),
+        installmentCount: Math.max(0, Math.min(18, item.installmentCount || 0)),
+        gifts: item.gifts || "",
+        warrantyLabel: item.warrantyLabel || "",
+        warrantySource: item.warrantySource,
+        copyTitle: typeof item.copy.title === "string" ? item.copy.title : "",
+        copyDescription: typeof item.copy.description === "string" ? item.copy.description : "",
+        copyStrongPoint: typeof item.copy.strongPoint === "string" ? item.copy.strongPoint : "",
+        copyObjection: typeof item.copy.objection === "string" ? item.copy.objection : "",
+        productNote: item.productNote || "",
+        productCta: item.productCta || "",
+        expanded: index === 0,
+      }))
+
+    if (nextDrafts.length === 0) {
+      setDraftMessage("A última divulgação não tem produtos disponíveis no estoque atual.")
+      return
+    }
+
+    if (!nextDrafts.some((draft) => draft.isPrimary)) {
+      nextDrafts[0] = { ...nextDrafts[0], isPrimary: true }
+    }
+
+    skipStrategyResetRef.current = true
+    if (session.strategy.objective) setObjective(session.strategy.objective as ObjectiveKey)
+    if (session.strategy.channel) setChannel(session.strategy.channel as ChannelKey)
+    if (session.strategy.tone) setTone(session.strategy.tone as ToneKey)
+    if (session.strategy.urgencyLevel) setUrgencyLevel(session.strategy.urgencyLevel as UrgencyLevel)
+    setAngle(session.strategy.angle ?? "")
+    setGeneralCta(session.strategy.generalCta ?? "")
+    setGeneralNote(session.strategy.generalNote ?? "")
+    const sessionStrategy = session.strategy as Record<string, unknown>
+    setAddHighlightStory(
+      sessionStrategy.addHighlightStory === true || sessionStrategy.addHighlightStory === false
+        ? (sessionStrategy.addHighlightStory as boolean)
+        : null
+    )
+    setAddCtaStory(
+      sessionStrategy.addCtaStory === true || sessionStrategy.addCtaStory === false
+        ? (sessionStrategy.addCtaStory as boolean)
+        : null
+    )
+    setDraftStates(nextDrafts)
+    setLoadedDisclosure(session)
+    setReuseSuggestion(null)
+    setAISource(session.source)
+    setCopySource(session.source)
+    setAIResult(null)
+    setCampaignAngle(null)
+    setAISuggestionNotes([])
+    setChannelCopy((prev) => ({
+      ...prev,
+      whatsapp: session.outputs.whatsapp?.text ?? "",
+      instagram: session.outputs.instagram?.text ?? "",
+      storyHeadlines: Array.isArray(session.outputs.stories?.json)
+        ? session.outputs.stories.json.map((story) => typeof story === "object" && story && "headline" in story ? String(story.headline ?? "") : "")
+        : prev.storyHeadlines,
+      storySubtitles: Array.isArray(session.outputs.stories?.json)
+        ? session.outputs.stories.json.map((story) => typeof story === "object" && story && "sub" in story ? String(story.sub ?? "") : "")
+        : prev.storySubtitles,
+      storyCtas: Array.isArray(session.outputs.stories?.json)
+        ? session.outputs.stories.json.map((story) => typeof story === "object" && story && "ctaMain" in story ? String(story.ctaMain ?? "") : "")
+        : prev.storyCtas,
+      carouselTitles: Array.isArray(session.outputs.carousel?.json)
+        ? session.outputs.carousel.json.map((slide) => typeof slide === "object" && slide && "title" in slide ? String(slide.title ?? "") : "")
+        : prev.carouselTitles,
+      carouselBodies: Array.isArray(session.outputs.carousel?.json)
+        ? session.outputs.carousel.json.map((slide) => typeof slide === "object" && slide && "body" in slide ? String(slide.body ?? "") : "")
+        : prev.carouselBodies,
+    }))
+    setSaveStatus("saved")
+    setLastSavedAt(new Date(session.updatedAt))
+    const changedPrices = session.products.some((item) => {
+      if (!item.productId || item.basePrice == null) return false
+      const current = productsById.get(item.productId)?.suggested_price
+      return current != null && Math.abs(current - item.basePrice) >= 0.01
+    })
+    setDraftMessage(
+      changedPrices
+        ? "Última divulgação carregada. Preço atual do estoque mudou em ao menos um produto; confirme antes de publicar."
+        : "Última divulgação carregada. Revise preços atuais antes de publicar."
+    )
+  }, [productsById])
+
+  async function saveDisclosureDraft() {
+    if (drafts.length === 0 || !displayGenerated) return
+    setDraftSaving(true)
+    setSaveStatus("saving")
+    setDraftMessage(null)
     try {
-      const { default: html2canvas } = await import("html2canvas")
-      const canvas = await html2canvas(el, { scale: 1, useCORS: true, backgroundColor: "#0d0d0d" })
-      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"))
-      if (!blob) throw new Error("Canvas não gerou imagem.")
+      const quickByProduct = new Map(quickProductCopies.map((item) => [item.productId, item.text]))
+      const payload = {
+        strategy,
+        source: copySource,
+        products: facts.map((fact) => ({
+          productId: fact.id,
+          isPrimary: fact.isPrimary,
+          isFeatured: fact.isFeatured,
+          basePrice: fact.basePrice,
+          disclosurePrice: fact.disclosurePrice,
+          discountAmount: fact.discount?.amount ?? null,
+          discountPercent: fact.discount?.percent ?? null,
+          installmentCount: fact.installment?.count ?? 0,
+          installmentAmount: fact.installment?.perInstallment ?? null,
+          installmentTotal: fact.installment?.total ?? null,
+          gifts: fact.gifts,
+          warrantyLabel: fact.warrantyLabel,
+          warrantySource: fact.warrantySource,
+          productNote: fact.productNote,
+          productCta: fact.productCta,
+          copy: {
+            title: fact.copyTitle,
+            description: fact.copyDescription,
+            strongPoint: fact.copyStrongPoint,
+            objection: fact.copyObjection,
+            productCta: fact.productCta,
+            storyWhatsappText: quickByProduct.get(fact.id) ?? "",
+          },
+        })),
+        outputs: {
+          whatsapp: { text: displayGenerated.whatsapp },
+          instagram: { text: displayGenerated.instagram },
+          quick: { text: quickProductText },
+          stories: { json: displayGenerated.stories },
+          carousel: { json: displayGenerated.carousel },
+        },
+      }
+      const res = await fetch("/api/marketing/disclosure-sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+      const body = await res.json().catch(() => null)
+      if (!res.ok || body?.error) {
+        setDraftMessage(body?.error?.message ?? "Não foi possível salvar o rascunho.")
+        setSaveStatus(res.status === 503 ? "unavailable" : "error")
+        return
+      }
+      const savedAt = new Date()
+      setLastSavedAt(savedAt)
+      setSaveStatus("saved")
+      setDraftMessage(`Divulgação salva às ${savedAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}.`)
+    } catch {
+      setDraftMessage("Falha de conexão ao salvar o rascunho.")
+      setSaveStatus("error")
+    } finally {
+      setDraftSaving(false)
+    }
+  }
+
+  async function loadLastDisclosure() {
+    if ((saveStatus === "dirty" || saveStatus === "error") && draftStates.length > 0) {
+      const ok = window.confirm("Você tem alterações não salvas. Carregar a última divulgação vai substituir os dados atuais. Deseja continuar?")
+      if (!ok) return
+    }
+    setDraftLoading(true)
+    setDraftMessage(null)
+    try {
+      const res = await fetch("/api/marketing/disclosure-sessions/last", { cache: "no-store" })
+      const body = await res.json().catch(() => null)
+      if (!res.ok || body?.error) {
+        setDraftMessage(body?.error?.message ?? "Não foi possível carregar a última divulgação.")
+        return
+      }
+      if (!body?.data) {
+        setDraftMessage("Nenhuma divulgação salva encontrada.")
+        return
+      }
+      applyDisclosureSession(body.data as LoadedDisclosureSession)
+    } catch {
+      setDraftMessage("Falha de conexão ao carregar a última divulgação.")
+    } finally {
+      setDraftLoading(false)
+    }
+  }
+
+  async function exportStory(index: number) {
+    const result = storyPngResults[index]
+    if (!result || exportingStoryRef.current) return
+    exportingStoryRef.current = true
+    setExportingStoryIndex(index)
+    try {
       const fileName = `nobretech-story-${index + 1}.png`
-      const file = new File([blob], fileName, { type: "image/png" })
+      const file = new File([result.blob], fileName, { type: "image/png" })
 
       if (
         typeof navigator !== "undefined" &&
@@ -1771,15 +1660,11 @@ export function DivulgacaoClient() {
         navigator.canShare({ files: [file] }) &&
         typeof navigator.share === "function"
       ) {
-        await navigator.share({
-          files: [file],
-          title: `Nobretech Story ${index + 1}`,
-          text: "Story pronto para compartilhar.",
-        })
+        await navigator.share({ files: [file] })
         return
       }
 
-      const url = URL.createObjectURL(blob)
+      const url = URL.createObjectURL(result.blob)
       const isMobile = window.matchMedia?.("(pointer: coarse)").matches ?? false
       if (isMobile) {
         window.open(url, "_blank", "noopener,noreferrer")
@@ -1794,7 +1679,10 @@ export function DivulgacaoClient() {
       a.click()
       URL.revokeObjectURL(url)
     } catch {
-      alert("Exportação falhou. O navegador pode estar bloqueando html2canvas neste contexto.")
+      alert("Exportação falhou.")
+    } finally {
+      exportingStoryRef.current = false
+      setExportingStoryIndex(null)
     }
   }
 
@@ -1802,6 +1690,14 @@ export function DivulgacaoClient() {
     if (drafts.length === 0) return
     setAILoading(true)
     setAIError(null)
+    const historySummary = loadedDisclosure
+      ? [
+          `Última divulgação salva em ${new Date(loadedDisclosure.updatedAt).toLocaleDateString("pt-BR")}.`,
+          loadedDisclosure.strategy.angle ? `Ângulo anterior: ${loadedDisclosure.strategy.angle}` : "",
+          loadedDisclosure.outputs.whatsapp?.text ? `WhatsApp anterior: ${loadedDisclosure.outputs.whatsapp.text.slice(0, 500)}` : "",
+          "Use histórico apenas como referência editorial; preços atuais vêm dos cards enviados agora.",
+        ].filter(Boolean).join("\n")
+      : ""
     try {
       const res = await fetch("/api/marketing/generate-copy", {
         method: "POST",
@@ -1826,6 +1722,7 @@ export function DivulgacaoClient() {
           })),
           strategy,
           useAI: true,
+          historySummary,
         }),
       })
       const body = await res.json().catch(() => null)
@@ -1848,20 +1745,18 @@ export function DivulgacaoClient() {
               copyObjection: typeof copy.objection === "string" ? copy.objection : draft.copyObjection,
             }
           }))
+          markUnsaved()
         }
         if (nextContent) {
+          const storiesArr: Array<{ headline?: string; sub?: string; ctaMain?: string }> = Array.isArray(
+            nextContent.stories
+          )
+            ? nextContent.stories
+            : []
           setChannelCopy({
-            storyHeadlines: [
-              nextContent.stories?.[0]?.headline || "",
-              nextContent.stories?.[1]?.headline || "",
-              nextContent.stories?.[2]?.headline || "",
-            ],
-            storySubtitles: [
-              nextContent.stories?.[0]?.sub || "",
-              nextContent.stories?.[1]?.sub || "",
-              nextContent.stories?.[2]?.sub || "",
-            ],
-            storyCta: nextContent.stories?.[2]?.ctaMain || "",
+            storyHeadlines: storiesArr.map((s) => s?.headline || ""),
+            storySubtitles: storiesArr.map((s) => s?.sub || ""),
+            storyCtas: storiesArr.map((s) => s?.ctaMain || ""),
             whatsapp: nextContent.whatsapp || "",
             instagram: nextContent.instagram || "",
             carouselTitles: Array.isArray(nextContent.carousel)
@@ -1879,7 +1774,12 @@ export function DivulgacaoClient() {
         setCampaignAngle(nextCampaignAngle)
         if (nextSource === "ai") {
           const suggestedAngle = typeof nextCampaignAngle?.mainHook === "string" ? nextCampaignAngle.mainHook.trim() : ""
-          const suggestedCta = typeof nextContent?.stories?.[2]?.ctaMain === "string" ? nextContent.stories[2].ctaMain.trim() : ""
+          const ctaStory = Array.isArray(nextContent?.stories)
+            ? (nextContent.stories as Array<{ kind?: string; ctaMain?: string | null }>).find(
+                (s) => s?.kind === "cta"
+              )
+            : undefined
+          const suggestedCta = typeof ctaStory?.ctaMain === "string" ? ctaStory.ctaMain.trim() : ""
           if ((!angle.trim() && suggestedAngle) || (!generalCta.trim() && suggestedCta)) {
             skipStrategyResetRef.current = true
             if (!angle.trim() && suggestedAngle) setAngle(suggestedAngle)
@@ -1888,6 +1788,8 @@ export function DivulgacaoClient() {
         }
         const offerAlerts = Array.isArray(body.data?.offerAlerts) ? body.data.offerAlerts : []
         setAISuggestionNotes(offerAlerts.length > 0 ? offerAlerts : Array.isArray(nextContent?.warnings) ? nextContent.warnings.filter((w: string) => w.startsWith("IA:")) : [])
+        const appliedMessage = offerAlerts.find((note: string) => /IA aplicada/i.test(note))
+        if (appliedMessage) setDraftMessage(appliedMessage)
         if (body.data?.aiError) setAIError(body.data.aiError)
       }
     } catch (err) {
@@ -1908,9 +1810,27 @@ export function DivulgacaoClient() {
 
   const urgencyHighWarning =
     urgencyLevel === "high" && primaryFacts != null && primaryFacts.quantity > 3
+  const saveStatusLabel =
+    saveStatus === "saving"
+      ? "Salvando..."
+      : saveStatus === "saved" && lastSavedAt
+      ? `Salvo às ${lastSavedAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`
+      : saveStatus === "error"
+      ? "Erro ao salvar"
+      : saveStatus === "unavailable"
+      ? "Persistência indisponível: migration pendente"
+      : "Não salvo"
+  const saveStatusClass =
+    saveStatus === "saved"
+      ? "border-success-200 bg-success-100 text-success-700"
+      : saveStatus === "error" || saveStatus === "unavailable"
+      ? "border-danger-200 bg-danger-100 text-danger-600"
+      : saveStatus === "saving"
+      ? "border-royal-200 bg-royal-50 text-royal-700"
+      : "border-gray-200 bg-white text-gray-600"
 
   return (
-    <div className="mx-auto max-w-[1480px] px-4 py-6 lg:px-6 lg:py-8">
+    <div className="mx-auto max-w-[1480px] px-4 pb-24 pt-6 lg:px-6 lg:pb-8 lg:pt-8">
       <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <div className="flex items-center gap-2.5">
@@ -1923,15 +1843,55 @@ export function DivulgacaoClient() {
             Crie stories, carrosséis e mensagens com IA a partir do estoque real.
           </p>
         </div>
-        {!loadingProducts && !errorProducts && (
-          <span className="inline-flex items-center gap-1.5 self-start rounded-full border border-gray-200 bg-white px-3 py-1 text-xs text-gray-600">
-            <Package className="h-3.5 w-3.5 text-royal-500" />
-            {products.length} {products.length === 1 ? "produto disponível" : "produtos disponíveis"}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold", saveStatusClass)}>
+            {saveStatus === "saving" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {saveStatusLabel}
           </span>
-        )}
+          <button
+            type="button"
+            onClick={loadLastDisclosure}
+            disabled={draftLoading || products.length === 0}
+            className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-600 hover:border-gray-300 hover:text-navy-900 disabled:cursor-not-allowed disabled:text-gray-300"
+          >
+            {draftLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            Carregar última
+          </button>
+          <button
+            type="button"
+            onClick={saveDisclosureDraft}
+            disabled={draftSaving || drafts.length === 0 || !displayGenerated}
+            className="inline-flex items-center gap-1.5 rounded-md bg-navy-900 px-3 py-2 text-xs font-semibold text-white hover:bg-navy-800 disabled:cursor-not-allowed disabled:bg-gray-200"
+          >
+            {draftSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            Salvar divulgação
+          </button>
+          {!loadingProducts && !errorProducts && (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1 text-xs text-gray-600">
+              <Package className="h-3.5 w-3.5 text-royal-500" />
+              {products.length} {products.length === 1 ? "produto disponível" : "produtos disponíveis"}
+            </span>
+          )}
+        </div>
       </header>
+      {draftMessage && (
+        <div className="mt-4 rounded-xl border border-royal-100 bg-white px-4 py-3 text-xs text-gray-700 shadow-sm">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <span>{draftMessage}</span>
+            {reuseSuggestion && (
+              <button
+                type="button"
+                onClick={() => applyDisclosureSession(reuseSuggestion)}
+                className="inline-flex items-center justify-center rounded-md border border-royal-200 bg-royal-50 px-3 py-1.5 text-xs font-semibold text-royal-700 hover:bg-royal-100"
+              >
+                Reaproveitar preço/textos
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
-      <div className="mt-6 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_410px]">
+      <div className="mt-6 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(420px,480px)]">
         {/* ── LEFT COLUMN ── */}
         <div className="space-y-5">
           {/* Card: Produtos da campanha */}
@@ -1960,16 +1920,20 @@ export function DivulgacaoClient() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setDraftStates((prev) => [...prev].sort((a, b) => {
-                    const ap = productsById.get(a.productId)
-                    const bp = productsById.get(b.productId)
-                    const ad = calculateDiscount(parseBRLInput(a.basePriceText) ?? ap?.suggested_price ?? null, parseBRLInput(a.disclosurePriceText) ?? ap?.suggested_price ?? null)
-                    const bd = calculateDiscount(parseBRLInput(b.basePriceText) ?? bp?.suggested_price ?? null, parseBRLInput(b.disclosurePriceText) ?? bp?.suggested_price ?? null)
-                    if (Boolean(ad) !== Boolean(bd)) return ad ? -1 : 1
-                    if (a.isFeatured !== b.isFeatured) return a.isFeatured ? -1 : 1
-                    if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1
-                    return 0
-                  }))}
+                  onClick={() => {
+                    resetGeneratedCopy()
+                    markUnsaved()
+                    setDraftStates((prev) => [...prev].sort((a, b) => {
+                      const ap = productsById.get(a.productId)
+                      const bp = productsById.get(b.productId)
+                      const ad = calculateDiscount(parseBRLInput(a.basePriceText) ?? ap?.suggested_price ?? null, parseBRLInput(a.disclosurePriceText) ?? ap?.suggested_price ?? null)
+                      const bd = calculateDiscount(parseBRLInput(b.basePriceText) ?? bp?.suggested_price ?? null, parseBRLInput(b.disclosurePriceText) ?? bp?.suggested_price ?? null)
+                      if (Boolean(ad) !== Boolean(bd)) return ad ? -1 : 1
+                      if (a.isFeatured !== b.isFeatured) return a.isFeatured ? -1 : 1
+                      if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1
+                      return 0
+                    }))
+                  }}
                   className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600"
                 >
                   <Layers className="h-3.5 w-3.5" />
@@ -2131,6 +2095,14 @@ export function DivulgacaoClient() {
                 onChange={setGeneralNote}
               />
 
+              <StoryAssemblyToggles
+                productCount={drafts.length}
+                addHighlightStory={addHighlightStory}
+                addCtaStory={addCtaStory}
+                onChangeHighlight={setAddHighlightStory}
+                onChangeCta={setAddCtaStory}
+              />
+
               <div className="border-t border-gray-100 pt-4 space-y-3">
                 <div className="rounded-xl border border-gray-100 bg-gray-50/70 p-3">
                   <div className="mb-3 flex items-start justify-between gap-3">
@@ -2177,24 +2149,31 @@ export function DivulgacaoClient() {
                           onClick={() => {
                             skipStrategyResetRef.current = true
                             setAngle(campaignAngle.mainHook)
+                            markUnsaved()
                           }}
                           className="rounded-md border border-royal-200 bg-white px-2 py-1 text-[10px] font-semibold text-royal-600 hover:bg-royal-50"
                         >
                           Aplicar ao ângulo
                         </button>
                       )}
-                      {generalCta.trim() && displayGenerated?.stories?.[2]?.ctaMain && generalCta.trim() !== displayGenerated.stories[2].ctaMain.trim() && (
-                        <button
-                          type="button"
-                          onClick={() => {
+                      {(() => {
+                        const ctaStory = displayGenerated?.stories.find((s) => s.kind === "cta")
+                        const suggested = ctaStory?.ctaMain?.trim() || ""
+                        if (!generalCta.trim() || !suggested || generalCta.trim() === suggested) return null
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => {
                             skipStrategyResetRef.current = true
-                            setGeneralCta(displayGenerated.stories[2].ctaMain || "")
+                            setGeneralCta(suggested)
+                            markUnsaved()
                           }}
-                          className="rounded-md border border-royal-200 bg-white px-2 py-1 text-[10px] font-semibold text-royal-600 hover:bg-royal-50"
-                        >
-                          Aplicar ao CTA
-                        </button>
-                      )}
+                            className="rounded-md border border-royal-200 bg-white px-2 py-1 text-[10px] font-semibold text-royal-600 hover:bg-royal-50"
+                          >
+                            Aplicar ao CTA
+                          </button>
+                        )
+                      })()}
                     </div>
                     <p className="mt-2 text-[11px] leading-relaxed text-gray-600">
                       {campaignAngle.commercialStrategy}
@@ -2304,6 +2283,7 @@ export function DivulgacaoClient() {
                       setAISuggestionNotes([])
                       setCampaignAngle(null)
                       setChannelCopy(emptyChannelCopyDraft())
+                      markUnsaved()
                     }}
                     className="rounded-md border border-gray-200 bg-white px-3 py-1.5 text-[10px] font-semibold text-gray-600 hover:border-gray-300 hover:text-navy-900"
                   >
@@ -2386,7 +2366,10 @@ export function DivulgacaoClient() {
                         rows={7}
                         className="mt-3 w-full resize-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs leading-relaxed text-navy-900 outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-100"
                         value={channelCopy.whatsapp || displayGenerated.whatsapp}
-                        onChange={(e) => setChannelCopy((prev) => ({ ...prev, whatsapp: e.target.value }))}
+                        onChange={(e) => {
+                          markUnsaved()
+                          setChannelCopy((prev) => ({ ...prev, whatsapp: e.target.value }))
+                        }}
                         placeholder="Texto WhatsApp"
                       />
                     )}
@@ -2395,50 +2378,72 @@ export function DivulgacaoClient() {
                         rows={7}
                         className="mt-3 w-full resize-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs leading-relaxed text-navy-900 outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-100"
                         value={channelCopy.instagram || displayGenerated.instagram}
-                        onChange={(e) => setChannelCopy((prev) => ({ ...prev, instagram: e.target.value }))}
+                        onChange={(e) => {
+                          markUnsaved()
+                          setChannelCopy((prev) => ({ ...prev, instagram: e.target.value }))
+                        }}
                         placeholder="Legenda Instagram"
                       />
                     )}
                     {copyChannelTab === "quick" && (
-                      <textarea
-                        rows={7}
-                        readOnly
-                        className="mt-3 w-full resize-none rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs leading-relaxed text-navy-900 outline-none"
-                        value={quickProductText}
+                      <QuickStoryCards
+                        compact
+                        copies={quickProductCopies}
+                        allText={quickProductText}
+                        copied={copied}
+                        onCopy={handleCopy}
                       />
                     )}
                     {copyChannelTab === "stories" && (
                       <div className="mt-3 space-y-2">
                         {displayGenerated.stories.map((story, index) => (
                           <details key={index} className="rounded-lg border border-gray-200 bg-gray-50 p-2" open={index === 0}>
-                            <summary className="cursor-pointer text-xs font-semibold text-navy-900">Story {index + 1}</summary>
+                            <summary className="cursor-pointer text-xs font-semibold text-navy-900">
+                              Story {index + 1} — {story.label}
+                            </summary>
                             <div className="mt-2 grid gap-2">
                               <input
                                 className="w-full rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs text-navy-900 outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-100"
                                 value={channelCopy.storyHeadlines[index] || story.headline}
-                                onChange={(e) => setChannelCopy((prev) => {
-                                  const headlines = [...prev.storyHeadlines] as [string, string, string]
-                                  headlines[index] = e.target.value
-                                  return { ...prev, storyHeadlines: headlines }
-                                })}
+                                onChange={(e) => {
+                                  markUnsaved()
+                                  setChannelCopy((prev) => {
+                                    const headlines = [...prev.storyHeadlines]
+                                    while (headlines.length <= index) headlines.push("")
+                                    headlines[index] = e.target.value
+                                    return { ...prev, storyHeadlines: headlines }
+                                  })
+                                }}
                                 placeholder={`Headline Story ${index + 1}`}
                               />
                               <input
                                 className="w-full rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs text-navy-900 outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-100"
                                 value={channelCopy.storySubtitles[index] || story.sub}
-                                onChange={(e) => setChannelCopy((prev) => {
-                                  const subtitles = [...prev.storySubtitles] as [string, string, string]
-                                  subtitles[index] = e.target.value
-                                  return { ...prev, storySubtitles: subtitles }
-                                })}
+                                onChange={(e) => {
+                                  markUnsaved()
+                                  setChannelCopy((prev) => {
+                                    const subtitles = [...prev.storySubtitles]
+                                    while (subtitles.length <= index) subtitles.push("")
+                                    subtitles[index] = e.target.value
+                                    return { ...prev, storySubtitles: subtitles }
+                                  })
+                                }}
                                 placeholder={`Subtítulo Story ${index + 1}`}
                               />
-                              {index === 2 && (
+                              {story.kind === "cta" && (
                                 <input
                                   className="w-full rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs text-navy-900 outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-100"
-                                  value={channelCopy.storyCta || story.ctaMain || ""}
-                                  onChange={(e) => setChannelCopy((prev) => ({ ...prev, storyCta: e.target.value }))}
-                                  placeholder="CTA Story 3"
+                                  value={channelCopy.storyCtas[index] || story.ctaMain || ""}
+                                  onChange={(e) => {
+                                    markUnsaved()
+                                    setChannelCopy((prev) => {
+                                      const ctas = [...prev.storyCtas]
+                                      while (ctas.length <= index) ctas.push("")
+                                      ctas[index] = e.target.value
+                                      return { ...prev, storyCtas: ctas }
+                                    })
+                                  }}
+                                  placeholder={`CTA do Story ${index + 1}`}
                                 />
                               )}
                             </div>
@@ -2455,22 +2460,28 @@ export function DivulgacaoClient() {
                               <input
                                 className="w-full rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs text-navy-900 outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-100"
                                 value={channelCopy.carouselTitles[index] || slide.title}
-                                onChange={(e) => setChannelCopy((prev) => {
-                                  const titles = [...prev.carouselTitles]
-                                  titles[index] = e.target.value
-                                  return { ...prev, carouselTitles: titles }
-                                })}
+                                onChange={(e) => {
+                                  markUnsaved()
+                                  setChannelCopy((prev) => {
+                                    const titles = [...prev.carouselTitles]
+                                    titles[index] = e.target.value
+                                    return { ...prev, carouselTitles: titles }
+                                  })
+                                }}
                                 placeholder={`Título slide ${index + 1}`}
                               />
                               <textarea
                                 rows={2}
                                 className="w-full resize-none rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs text-navy-900 outline-none focus:border-royal-500 focus:ring-2 focus:ring-royal-100"
                                 value={channelCopy.carouselBodies[index] || slide.body}
-                                onChange={(e) => setChannelCopy((prev) => {
-                                  const bodies = [...prev.carouselBodies]
-                                  bodies[index] = e.target.value
-                                  return { ...prev, carouselBodies: bodies }
-                                })}
+                                onChange={(e) => {
+                                  markUnsaved()
+                                  setChannelCopy((prev) => {
+                                    const bodies = [...prev.carouselBodies]
+                                    bodies[index] = e.target.value
+                                    return { ...prev, carouselBodies: bodies }
+                                  })
+                                }}
                                 placeholder={`Texto slide ${index + 1}`}
                               />
                             </div>
@@ -2568,33 +2579,89 @@ export function DivulgacaoClient() {
                 )}
 
                 {outputTab === "stories" && (
-                  <div className="bg-gradient-to-b from-gray-50 to-white p-5 lg:p-6 space-y-5">
-                    <div className="flex items-center justify-between text-[10px] font-medium uppercase tracking-widest text-gray-500">
-                      <span>
-                        Preview 9:16 — escala 20%
-                        {drafts.length > 1 && ` · ${drafts.length} produtos — vitrine no story 1`}
+                  <div className="bg-gradient-to-b from-gray-50 to-white p-5 lg:p-6 space-y-4">
+                    <div className="flex flex-col gap-2 text-[10px] font-medium tracking-wide text-gray-500 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                      <span className="normal-case">
+                        Miniatura 9:16
+                        {(() => {
+                          const vitrines = displayGenerated.stories.filter((s) => s.kind === "vitrine")
+                          if (drafts.length <= 1) return null
+                          const density = vitrines[0]?.density ?? "standard"
+                          const cap = density === "compact" ? 5 : density === "standard" ? 4 : 3
+                          return ` · ${drafts.length} produtos em ${vitrines.length} ${vitrines.length === 1 ? "vitrine" : "vitrines"} · até ${cap}/story (${density})`
+                        })()}
                       </span>
-                      <span>Sem chrome do Instagram</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedStoryIndex((v) =>
+                            Math.min(v, displayGenerated.stories.length - 1)
+                          )
+                          setPreviewModalOpen(true)
+                        }}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-md border border-navy-900/15 bg-navy-900 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-navy-900/90 transition-colors"
+                      >
+                        <Maximize2 className="w-3.5 h-3.5" />
+                        Ampliar preview
+                      </button>
                     </div>
-                    <div className="flex flex-wrap gap-5">
-                      {displayGenerated.stories.map((story, i) => (
-                        <div key={i} className="flex flex-col gap-2">
-                          <StoryCanvas
-                            story={story}
-                            index={i}
-                            exportRef={(el) => { storyExportRefs.current[i] = el }}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => exportStory(i)}
-                            className="inline-flex items-center justify-center gap-1.5 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-[11px] font-medium text-gray-600 hover:border-gray-300 hover:text-navy-900 transition-colors"
-                          >
-                            {canMobileShare ? <Share2 className="w-3 h-3" /> : <Download className="w-3 h-3" />}
-                            {canMobileShare ? `Compartilhar Story ${i + 1}` : `Exportar Story ${i + 1}`}
-                          </button>
-                        </div>
-                      ))}
+                    <div className="flex max-h-[52vh] flex-wrap gap-3 overflow-y-auto rounded-lg bg-white/40 p-3">
+                      {displayGenerated.stories.map((story, i) => {
+                        const active = selectedStoryIndex === i
+                        return (
+                          <div key={i} className="flex flex-col gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedStoryIndex(i)}
+                              onDoubleClick={() => {
+                                setSelectedStoryIndex(i)
+                                setPreviewModalOpen(true)
+                              }}
+                              title="Clique para selecionar · duplo clique para ampliar"
+                              className={cn(
+                                "rounded-2xl p-1 transition-all",
+                                active
+                                  ? "ring-2 ring-[#D85A30] ring-offset-2"
+                                  : "ring-1 ring-transparent hover:ring-gray-200"
+                              )}
+                            >
+                              <StoryCanvas
+                                story={story}
+                                index={i}
+                                scale={0.16}
+                                pngUrl={storyPngResults[i]?.url ?? null}
+                              />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={exportingStoryIndex !== null || !storyPngResults[i]}
+                              onClick={() => exportStory(i)}
+                              className="inline-flex min-h-8 items-center justify-center gap-1.5 rounded-md border border-gray-200 bg-white px-2.5 py-1 text-[10px] font-medium text-gray-600 hover:border-gray-300 hover:text-navy-900 transition-colors disabled:cursor-not-allowed disabled:text-gray-300"
+                            >
+                              {exportingStoryIndex === i ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : !storyPngResults[i] ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : canMobileShare ? (
+                                <Share2 className="w-3 h-3" />
+                              ) : (
+                                <Download className="w-3 h-3" />
+                              )}
+                              {exportingStoryIndex === i
+                                ? "Exportando..."
+                                : canMobileShare
+                                ? `Story ${i + 1}`
+                                : `Story ${i + 1}`}
+                            </button>
+                          </div>
+                        )
+                      })}
                     </div>
+                    <p className="text-[11px] text-gray-500">
+                      Miniaturas para visão geral. Use{" "}
+                      <span className="font-semibold text-navy-900">Ampliar preview</span> para
+                      revisar a arte em tamanho grande antes de exportar.
+                    </p>
                     <ExportNote />
                   </div>
                 )}
@@ -2668,10 +2735,9 @@ export function DivulgacaoClient() {
                 )}
 
                 {outputTab === "quick" && (
-                  <OutputBlock
-                    title="Story WhatsApp / texto rápido por produto"
-                    text={quickProductText}
-                    copyKey="quick"
+                  <QuickStoryCards
+                    copies={quickProductCopies}
+                    allText={quickProductText}
                     copied={copied}
                     onCopy={handleCopy}
                   />
@@ -2681,6 +2747,132 @@ export function DivulgacaoClient() {
           </div>
         </section>
       </div>
+
+      {previewModalOpen && displayGenerated && displayGenerated.stories.length > 0 && (() => {
+        const stories = displayGenerated.stories
+        const idx = Math.min(selectedStoryIndex, stories.length - 1)
+        const story = stories[idx]
+        const modalScale =
+          typeof window !== "undefined"
+            ? Math.min(
+                0.42,
+                (window.innerWidth * 0.9) / 1080,
+                (window.innerHeight * 0.74) / 1920
+              )
+            : 0.42
+        return (
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-black/85 p-4 backdrop-blur-sm"
+            onClick={() => setPreviewModalOpen(false)}
+          >
+            <div
+              className="flex w-full max-w-[680px] items-center justify-between text-white"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="text-sm font-semibold">
+                Story {idx + 1} / {stories.length} — {story.label}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPreviewModalOpen(false)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20 transition-colors"
+                aria-label="Fechar"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div
+              className="flex items-center gap-3"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                disabled={idx === 0}
+                onClick={() => setSelectedStoryIndex((v) => Math.max(0, v - 1))}
+                className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                aria-label="Story anterior"
+              >
+                <ChevronLeft className="h-5 w-5" />
+              </button>
+
+              <div className="overflow-auto">
+                {storyPngResults[idx]?.url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={storyPngResults[idx]!.url}
+                    width={Math.round(1080 * modalScale)}
+                    height={Math.round(1920 * modalScale)}
+                    alt={`Story ${idx + 1}: ${story.label}`}
+                    style={{ display: "block", borderRadius: 12 }}
+                    draggable={false}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      width: Math.round(1080 * modalScale),
+                      height: Math.round(1920 * modalScale),
+                      background: "#0d0d0d",
+                      borderRadius: 12,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Loader2 className="w-8 h-8 animate-spin text-gray-600" />
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                disabled={idx >= stories.length - 1}
+                onClick={() =>
+                  setSelectedStoryIndex((v) => Math.min(stories.length - 1, v + 1))
+                }
+                className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                aria-label="Próximo story"
+              >
+                <ChevronRight className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div
+              className="flex items-center gap-2"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                disabled={exportingStoryIndex !== null || !storyPngResults[idx]}
+                onClick={() => exportStory(idx)}
+                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[#D85A30] px-5 py-2 text-sm font-semibold text-white hover:bg-[#c44e28] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {exportingStoryIndex === idx ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : canMobileShare ? (
+                  <Share2 className="h-4 w-4" />
+                ) : (
+                  <Download className="h-4 w-4" />
+                )}
+                {exportingStoryIndex === idx
+                  ? "Exportando..."
+                  : canMobileShare
+                  ? `Compartilhar Story ${idx + 1}`
+                  : `Exportar Story ${idx + 1}`}
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewModalOpen(false)}
+                className="inline-flex min-h-10 items-center justify-center rounded-lg border border-white/25 px-5 py-2 text-sm font-medium text-white hover:bg-white/10 transition-colors"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
@@ -2846,14 +3038,181 @@ function OutputBlock({
   )
 }
 
+function QuickStoryCards({
+  copies,
+  allText,
+  copied,
+  onCopy,
+  compact = false,
+}: {
+  copies: QuickProductCopy[]
+  allText: string
+  copied: CopiedKey
+  onCopy: (key: string, text: string) => void
+  compact?: boolean
+}) {
+  return (
+    <div className={compact ? "mt-3 space-y-3" : "p-5 lg:p-6 space-y-4"}>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-[10px] font-medium uppercase tracking-widest text-gray-500">
+            Story WhatsApp / texto rápido por produto
+          </p>
+          <p className="mt-1 text-xs text-gray-500">
+            Cards prontos para copiar no celular, sem selecionar texto manualmente.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => onCopy("quick-all", allText)}
+          className={cn(
+            "inline-flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors",
+            copied === "quick-all"
+              ? "border-success-500 bg-success-100 text-success-600"
+              : "border-navy-900 bg-navy-900 text-white hover:bg-navy-800"
+          )}
+        >
+          {copied === "quick-all" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+          {copied === "quick-all" ? "Copiado" : "Copiar todos"}
+        </button>
+      </div>
+
+      <div className="space-y-2.5">
+        {copies.map((item, index) => (
+          <details
+            key={item.productId}
+            className="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm"
+            open={index === 0}
+          >
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3.5 py-3 text-sm font-semibold text-navy-900">
+              <span className="min-w-0 truncate">{item.title}</span>
+              <ChevronDown className="h-4 w-4 shrink-0 text-gray-400" />
+            </summary>
+            <div className="border-t border-gray-100 bg-gray-50/70 p-3.5">
+              <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-navy-900">
+                {item.text}
+              </pre>
+              <button
+                type="button"
+                onClick={() => onCopy(`quick-${item.productId}`, item.text)}
+                className={cn(
+                  "mt-3 inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors",
+                  copied === `quick-${item.productId}`
+                    ? "border-success-500 bg-success-100 text-success-600"
+                    : "border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:text-navy-900"
+                )}
+              >
+                {copied === `quick-${item.productId}` ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                {copied === `quick-${item.productId}` ? "Copiado" : "Copiar este produto"}
+              </button>
+            </div>
+          </details>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function ExportNote() {
   return (
     <div className="rounded-xl border border-gray-100 bg-gray-50/60 px-4 py-3">
       <p className="text-[11px] leading-relaxed text-gray-600">
-        <span className="font-medium text-navy-900">Exportação:</span> o botão exporta o preview via
-        html2canvas. Para 1080×1920 profissional, renderização server-side fica para V2. Os textos
-        refletem apenas dados reais do estoque.
+        <span className="font-medium text-navy-900">Exportação:</span> o botão gera uma arte PNG em
+        1080×1920 a partir de um canvas em tamanho real, não do preview reduzido. No celular, usa
+        compartilhamento nativo quando o navegador suporta arquivos.
       </p>
+    </div>
+  )
+}
+
+function ThreeWayToggle({
+  label,
+  description,
+  value,
+  autoLabel,
+  onChange,
+}: {
+  label: string
+  description: string
+  value: boolean | null
+  autoLabel: string
+  onChange: (v: boolean | null) => void
+}) {
+  const states: Array<{ key: "auto" | "on" | "off"; label: string; pressed: boolean }> = [
+    { key: "auto", label: `Automático (${autoLabel})`, pressed: value == null },
+    { key: "on", label: "Sempre", pressed: value === true },
+    { key: "off", label: "Nunca", pressed: value === false },
+  ]
+  return (
+    <div className="rounded-lg border border-gray-100 bg-gray-50/60 p-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-[11px] font-semibold text-navy-900">{label}</div>
+          <div className="text-[10px] text-gray-500">{description}</div>
+        </div>
+      </div>
+      <div className="mt-2 flex gap-1">
+        {states.map((s) => (
+          <button
+            key={s.key}
+            type="button"
+            onClick={() => onChange(s.key === "auto" ? null : s.key === "on")}
+            className={cn(
+              "flex-1 rounded-md border px-2 py-1 text-[10px] font-medium transition-colors",
+              s.pressed
+                ? "border-royal-500 bg-royal-100 text-royal-600"
+                : "border-gray-200 bg-white text-gray-500 hover:border-gray-300"
+            )}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function StoryAssemblyToggles({
+  productCount,
+  addHighlightStory,
+  addCtaStory,
+  onChangeHighlight,
+  onChangeCta,
+}: {
+  productCount: number
+  addHighlightStory: boolean | null
+  addCtaStory: boolean | null
+  onChangeHighlight: (next: boolean | null) => void
+  onChangeCta: (next: boolean | null) => void
+}) {
+  const vitrineCount = Math.max(1, Math.ceil(productCount / 3))
+  const highlightAuto = productCount > 1
+  const ctaAuto = productCount <= 3
+
+  return (
+    <div className="space-y-2">
+      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+        Stories adicionais
+      </p>
+      <p className="text-[10px] text-gray-500">
+        {productCount === 0
+          ? "Adicione produtos para configurar a sequência de stories."
+          : `${productCount} produto${productCount === 1 ? "" : "s"} → ${vitrineCount} story${vitrineCount === 1 ? "" : "s"} de vitrine (até 3 por story).`}
+      </p>
+      <ThreeWayToggle
+        label="Story de destaque do produto principal"
+        description="Adiciona um story focado no produto principal após as vitrines."
+        value={addHighlightStory}
+        autoLabel={highlightAuto ? "ligado se houver argumento forte" : "desligado para 1 produto"}
+        onChange={onChangeHighlight}
+      />
+      <ThreeWayToggle
+        label="Story final de CTA"
+        description="Adiciona um story de fechamento. Para muitos produtos, deixar desligado prioriza vitrines."
+        value={addCtaStory}
+        autoLabel={ctaAuto ? "ligado para até 3 produtos" : "desligado para >3 produtos"}
+        onChange={onChangeCta}
+      />
     </div>
   )
 }

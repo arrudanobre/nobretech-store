@@ -2,6 +2,7 @@ import "server-only"
 
 import {
   generateContent,
+  formatBRL,
   type GeneralStrategy,
   type GeneratedContent,
   type ProductDraft,
@@ -78,57 +79,76 @@ export function isMarketingAIConfigured(): boolean {
 }
 
 interface FactPayload {
-  general: GeneralStrategy
+  general: GeneralStrategy & { history_summary?: string | null }
+  /** Story plan the AI MUST honour: same length, same kind/page sequence. */
+  story_plan: Array<{
+    index: number
+    kind: "vitrine" | "highlight" | "cta" | "trust"
+    label: string
+    page?: number
+    total_pages?: number
+    /** "detailed" (3 max), "standard" (4 max), "compact" (5 max). */
+    density?: "detailed" | "standard" | "compact"
+    /** Default headline/sub the system would use if the AI does not improve it. */
+    deterministic_headline?: string
+    deterministic_subtitle?: string
+    product_ids: string[]
+  }>
   products: Array<{
-    id: string
+    product_id: string
     name: string
+    condition: string | null
     storage: string | null
     color: string | null
     grade: string | null
     battery_health: number | null
     quantity: number
-    base_price_brl: number | null
-    disclosure_price_brl: number | null
-    discount_amount_brl: number | null
+    base_price: number | null
+    disclosure_price: number | null
+    discount_amount: number | null
     discount_percent: number | null
-    installment: { count: number; per_installment_brl: number; total_brl: number; has_fee: boolean } | null
-    gifts: string | null
+    installment_count: number | null
+    installment_value: number | null
+    installment_total: number | null
+    installment_text: string | null
     warranty_label: string | null
-    warranty_source: "inventory" | "manual" | null
-    product_note: string | null
+    gift_text: string | null
+    commercial_note: string | null
     product_cta: string | null
     is_primary: boolean
     is_featured: boolean
   }>
 }
 
-function buildFactPayload(facts: ProductFacts[], strategy: GeneralStrategy): FactPayload {
+function buildFactPayload(
+  facts: ProductFacts[],
+  strategy: GeneralStrategy,
+  storyPlan: FactPayload["story_plan"],
+  historySummary?: string
+): FactPayload {
   return {
-    general: strategy,
+    general: { ...strategy, history_summary: historySummary?.trim() || null },
+    story_plan: storyPlan,
     products: facts.map((f) => ({
-      id: f.id,
+      product_id: f.id,
       name: f.name,
+      condition: f.grade,
       storage: f.storage,
       color: f.color,
       grade: f.grade,
       battery_health: f.battery_health,
       quantity: f.quantity,
-      base_price_brl: f.basePrice,
-      disclosure_price_brl: f.disclosurePrice,
-      discount_amount_brl: f.discount?.amount ?? null,
+      base_price: f.basePrice,
+      disclosure_price: f.disclosurePrice,
+      discount_amount: f.discount?.amount ?? null,
       discount_percent: f.discount?.percent ?? null,
-      installment: f.installment
-        ? {
-            count: f.installment.count,
-            per_installment_brl: Math.round(f.installment.perInstallment * 100) / 100,
-            total_brl: Math.round(f.installment.total * 100) / 100,
-            has_fee: f.installment.hasFee,
-          }
-        : null,
-      gifts: f.gifts || null,
+      installment_count: f.installment?.count ?? null,
+      installment_value: f.installment ? Math.round(f.installment.perInstallment * 100) / 100 : null,
+      installment_total: f.installment ? Math.round(f.installment.total * 100) / 100 : null,
+      installment_text: f.installment?.text ?? null,
       warranty_label: f.warrantyLabel || null,
-      warranty_source: f.warrantySource,
-      product_note: f.productNote || null,
+      gift_text: f.gifts || null,
+      commercial_note: f.productNote || null,
       product_cta: f.productCta || null,
       is_primary: f.isPrimary,
       is_featured: f.isFeatured,
@@ -157,26 +177,26 @@ const aiOutputSchema = {
         type: "object",
         additionalProperties: false,
         properties: {
-          inventory_id: { type: "string" },
+          product_id: { type: "string" },
           commercial_title: { type: "string", maxLength: 80 },
           short_pitch: { type: "string", maxLength: 180 },
-          main_selling_point: { type: "string", maxLength: 140 },
           trust_argument: { type: "string", maxLength: 140 },
-          urgency_argument: { type: "string", maxLength: 120 },
-          cta: { type: "string", maxLength: 110 },
-          story_card_line: { type: "string", maxLength: 130 },
+          urgency_line: { type: "string", maxLength: 120 },
+          cta_line: { type: "string", maxLength: 110 },
           whatsapp_line: { type: "string", maxLength: 180 },
+          instagram_line: { type: "string", maxLength: 180 },
+          story_whatsapp_text: { type: "string", maxLength: 520 },
         },
         required: [
-          "inventory_id",
+          "product_id",
           "commercial_title",
           "short_pitch",
-          "main_selling_point",
           "trust_argument",
-          "urgency_argument",
-          "cta",
-          "story_card_line",
           "whatsapp_line",
+          "instagram_line",
+          "urgency_line",
+          "cta_line",
+          "story_whatsapp_text",
         ],
       },
     },
@@ -186,12 +206,23 @@ const aiOutputSchema = {
       properties: {
         whatsapp_text: { type: "string", maxLength: 1000 },
         instagram_caption: { type: "string", maxLength: 900 },
-        story_1_headline: { type: "string", maxLength: 80 },
-        story_1_subtitle: { type: "string", maxLength: 100 },
-        story_2_headline: { type: "string", maxLength: 80 },
-        story_2_subtitle: { type: "string", maxLength: 100 },
-        story_3_headline: { type: "string", maxLength: 80 },
-        story_3_cta: { type: "string", maxLength: 120 },
+        stories: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              index: { type: "integer", minimum: 1, maximum: 24 },
+              kind: { type: "string", enum: ["vitrine", "highlight", "cta", "trust"] },
+              headline: { type: "string", maxLength: 90 },
+              subtitle: { type: "string", maxLength: 110 },
+              cta: { type: "string", maxLength: 140 },
+            },
+            required: ["index", "kind", "headline", "subtitle", "cta"],
+          },
+          minItems: 1,
+          maxItems: 24,
+        },
         carousel_slides: {
           type: "array",
           items: {
@@ -210,12 +241,7 @@ const aiOutputSchema = {
       required: [
         "whatsapp_text",
         "instagram_caption",
-        "story_1_headline",
-        "story_1_subtitle",
-        "story_2_headline",
-        "story_2_subtitle",
-        "story_3_headline",
-        "story_3_cta",
+        "stories",
         "carousel_slides",
       ],
     },
@@ -237,28 +263,30 @@ const SYSTEM_INSTRUCTIONS = [
   "Transforme fatos em argumentos comerciais fortes. Não liste dados friamente.",
   "Use APENAS os fatos enviados em FACTS. Não invente preço, garantia, estoque, brinde, bateria, parcelamento, condição, prazo de entrega, kit ou cor.",
   "Se mencionar número, preço, parcela, desconto, bateria, estoque ou garantia, use EXATAMENTE o valor enviado.",
-  "Exemplos de transformação: desconto de R$ 390 => 'caiu de R$ 2.490 para R$ 2.100'; bateria 100% => 'bateria 100%, difícil de achar nessa condição'; garantia Nobretech 6 meses => 'com garantia Nobretech de 6 meses para comprar com segurança'; quantity 1 => 'tenho só uma unidade nessa condição'; acessório => 'já ajuda a sair com o kit mais completo'.",
-  "Se um produto tiver disclosure_price_brl null, escreva preço como '[a confirmar]' e não crie preço.",
+  "Exemplos de transformação: desconto de R$ 390 => 'caiu de R$ 2.490 para R$ 2.100'; bateria 100% => 'bateria 100%, difícil de achar nessa condição'; warranty_label 'Garantia Apple 1 ano' => 'com Garantia Apple 1 ano'; quantity 1 => 'tenho só uma unidade nessa condição'; acessório => 'já ajuda a sair com o kit mais completo'.",
+  "Se um produto tiver disclosure_price null, escreva preço como '[a confirmar]' e não crie preço.",
   "Se discount_percent for null ou zero, NÃO use linguagem de desconto/promoção.",
-  "Se discount_percent existir, pode usar 'de/por' com base_price_brl e disclosure_price_brl exatos.",
-  "Parcelamento só pode ser citado se installment não for null e deve usar EXATAMENTE installment.text-equivalente: '${count}x de R$ ${per_installment_brl}'. Não some valores entre produtos.",
-  "Se gifts for null, não escreva 'kit incluso' nem brinde algum.",
-  "Garantia só pode ser citada se warranty_label existir. Não afirmar garantia Apple automaticamente.",
+  "Se discount_percent existir, pode usar 'de/por' com base_price e disclosure_price exatos.",
+  "Parcelamento só pode ser citado se installment_text existir e deve usar EXATAMENTE installment_text. Não some valores entre produtos.",
+  "Se gift_text for null, não escreva 'kit incluso' nem brinde algum.",
+  "Garantia só pode ser citada se warranty_label existir. Use exatamente warranty_label, sem trocar Apple por Nobretech ou Nobretech por Apple. Se warranty_label for null, não mencione garantia.",
   "Só fale 'última unidade' quando quantity for 1. Se quantity > 1, não use última unidade.",
   "Se item for acessório barato e houver iPhone/aparelho no conjunto, trate o acessório como complemento, não como oferta principal.",
   "Diferencie produto principal, produtos em destaque e acessório. O principal pode ser foco; destaque/oferta merece mais energia; acessório complementa o kit.",
   "Para múltiplos produtos: cada produto tem o próprio preço, parcelamento, brinde e observação. NUNCA somar preços como combo.",
-  "Preencha product_copies para CADA produto enviado. Esses campos são textos editáveis por produto e devem vender o argumento real de cada item.",
+  "Preencha product_copies para CADA produto enviado. Use product_id exatamente igual ao FACTS.products.product_id. Esses campos são textos editáveis por produto e devem vender o argumento real de cada item.",
   "WhatsApp deve ser curto, comercial e pronto para copiar: 1 produto até 10 linhas; 2 produtos até 16 linhas; mais produtos devem resumir e não virar catálogo gigante. Não inclua análise interna.",
   "Todos os campos devem ser concisos. Não escreva parágrafos longos no JSON. product_copies deve trazer frases curtas para UI, não relatório.",
   "Padrão de qualidade do WhatsApp: começar pelo melhor argumento real, explicar o conjunto em linguagem natural e fechar com uma ação simples. Exemplo de estilo: 'Esse iPhone 14 ficou bem interessante pelo conjunto: bateria 100%, Grade A, garantia Nobretech e ainda caiu de R$ 2.490 para R$ 2.290. Já vai com capa, fonte e película, então a pessoa sai com o kit pronto para usar. Tenho só uma unidade nessa condição. Se fizer sentido, eu já deixo reservado pra você.' Não copie sempre; use como referência de força comercial.",
   "Legenda Instagram deve ter gancho forte, lista/argumento dos produtos, confiança e CTA, com hashtags discretas.",
-  "Para story_card_line e whatsapp_line, escreva frases curtas e úteis por produto, adequadas para WhatsApp Stories/lista rápida. Use poucos emojis apenas quando fizer sentido no texto final gerado pelo sistema; não transforme em carnaval.",
-  "Stories: Story 1 headline comercial da campanha; Story 2 headline específica para ofertas/destaques ou confiança; Story 3 fechamento com CTA forte.",
+  "Para whatsapp_line, instagram_line e story_whatsapp_text, escreva textos úteis por produto. story_whatsapp_text deve ser pronto para copiar individualmente, com linhas de produto, condição, garantia somente quando warranty_label existir, preço/parcela somente quando existirem, estoque real e CTA curto.",
+  "Stories: o sistema envia FACTS.story_plan com a sequência exata de stories (vitrines paginadas + opcionais de destaque/CTA/confiança). Você DEVE retornar channel_copy.stories com EXATAMENTE o mesmo número de itens, na mesma ordem, com o mesmo `index` e `kind`. Cada item recebe headline, subtitle e cta curtos. Para `kind=vitrine` escreva headline/subtitle que cubram a página, respeitando o `density` informado: detailed = pode ter texto mais longo; standard = texto médio; compact = headline e subtitle curtos para não competir com a lista. Para `kind=highlight` foque no produto principal. Para `kind=cta` foque no fechamento. NUNCA omita um item, NUNCA esconda produto, NUNCA reduza a contagem de stories, NUNCA mude `density` ou `kind`.",
+  "Objetivo da campanha (FACTS.general.objective) deve mudar tom e ângulo: sell_fast = disponibilidade/urgência real; generate_desire = experiência e desejo; bundle_gift = kit/brinde como argumento principal; trust_proof = revisão, garantia, procedência; new_arrival = chegada/novidade; reactivate_lead = retomada consultiva sem pressão. Em vitrines com mais de uma página, NUNCA repita exatamente a mesma headline em todas as páginas; a página 1 abre o argumento e a página 2+ deve dar uma framing de continuação (ex: 'Mais opções', 'Continuação da seleção'). Se você não tiver nada melhor que `deterministic_headline`/`deterministic_subtitle`, devolva exatamente esses textos para que o sistema mantenha o fallback determinístico.",
   "offer_alerts devem ser úteis: exemplo 'O desconto do iPhone é o argumento mais forte.' ou 'O carregador deve entrar como complemento, não como oferta principal.'",
   "Nunca use frases genéricas proibidas: 'Tenho produtos prontos para venda', 'Posso esclarecer dúvidas', 'Confira nosso catálogo', 'Pergunte pelo produto', 'Seleção verificada', 'Produto de qualidade', 'Olá! Tenho dois produtos prontos para venda'.",
   "Pode usar poucos emojis no WhatsApp quando ajudarem a escanear: no máximo 1 emoji por linha e poucos emojis no total. Não use emojis em excesso. Não use exclamações duplas. Não invente '#hashtag' fora de Instagram.",
   "Se faltar dado relevante, escreva de forma neutra sem preencher lacunas com invenção.",
+  "Se FACTS.general.history_summary existir, use apenas como referência editorial para melhorar textos anteriores. Não reutilize preço antigo como preço atual; números atuais só podem vir dos produtos enviados em FACTS.products.",
   "Saída obrigatória: JSON estrito conforme schema. Português do Brasil.",
 ].join(" ")
 
@@ -286,6 +314,90 @@ function isUnsafeFinalCopy(text: string): boolean {
   return INTERNAL_LABEL_PATTERN.test(text) || GENERIC_COPY_PATTERN.test(text)
 }
 
+function productDisplayName(f: ProductFacts): string {
+  const parts = [f.name]
+  if (f.storage && !f.name.toLocaleLowerCase("pt-BR").includes(f.storage.toLocaleLowerCase("pt-BR"))) {
+    parts.push(f.storage)
+  }
+  if (f.color && !f.name.toLocaleLowerCase("pt-BR").includes(f.color.toLocaleLowerCase("pt-BR"))) {
+    parts.push(f.color)
+  }
+  return parts.join(" ")
+}
+
+function fallbackStoryWhatsappText(f: ProductFacts): string {
+  const lines: string[] = [`*${productDisplayName(f)}*`]
+  if (f.battery_health != null) lines.push(`🔋 Bateria ${f.battery_health}%`)
+  if (f.grade) lines.push(`✅ ${f.grade === "Lacrado" ? "Lacrado" : `Grade ${f.grade}, revisado pela Nobretech`}`)
+  if (f.warrantyLabel) lines.push(`🛡 ${f.warrantyLabel}`)
+  if (f.discount && f.basePrice != null && f.disclosurePrice != null) {
+    lines.push(`💰 De ~${formatBRL(f.basePrice)}~ por ${formatBRL(f.disclosurePrice)}`)
+  } else if (f.disclosurePrice != null) {
+    lines.push(`💰 ${formatBRL(f.disclosurePrice)}`)
+  }
+  if (f.installment) lines.push(`💳 Até ${f.installment.text}`)
+  if (f.gifts) lines.push(`🎁 ${f.gifts}`)
+  if (f.quantity <= 1) lines.push("⚡ 1 unidade disponível")
+  lines.push(f.productCta || "Me chama pra reservar.")
+  return lines.join("\n")
+}
+
+function fallbackProductCopy(f: ProductFacts): ProductCopySuggestion {
+  const title = f.copyTitle || productDisplayName(f)
+  const strongest = f.copyStrongPoint || [
+    f.discount ? "Condição com desconto real" : null,
+    f.warrantyLabel || null,
+    f.gifts ? `Inclui ${f.gifts}` : null,
+    f.battery_health != null ? `Bateria ${f.battery_health}%` : null,
+    f.grade || null,
+  ].filter(Boolean)[0] || "Disponível para consulta"
+  const cta = f.productCta || "Me chama pra reservar."
+  return {
+    productId: f.id,
+    title,
+    description: f.copyDescription || strongest,
+    strongPoint: strongest,
+    cta,
+    objection: f.copyObjection || (f.warrantyLabel ? f.warrantyLabel : ""),
+    shortPitch: f.copyDescription || strongest,
+    trustArgument: f.warrantyLabel || (f.grade ? `${f.grade} conferido pela Nobretech` : ""),
+    urgencyLine: f.quantity <= 1 ? "1 unidade disponível" : `${f.quantity} unidades disponíveis`,
+    whatsappLine: `${title}: ${strongest}.`,
+    instagramLine: `${title} — ${strongest}.`,
+    storyWhatsappText: fallbackStoryWhatsappText(f),
+  }
+}
+
+function hasForbiddenWarrantyClaim(text: string, facts: ProductFacts[]): boolean {
+  const lower = text.toLocaleLowerCase("pt-BR")
+  const mentionsWarranty = /garantia/.test(lower)
+  if (!mentionsWarranty) return false
+  const allowedLabels = facts.map((f) => f.warrantyLabel.trim()).filter(Boolean)
+  if (allowedLabels.length === 0) return true
+  const hasNobretechWarranty = allowedLabels.some((label) => /nobretech/i.test(label))
+  const hasAppleWarranty = allowedLabels.some((label) => /apple/i.test(label))
+  if (/garantia\s+nobretech/i.test(text) && !hasNobretechWarranty) return true
+  if (/garantia\s+apple/i.test(text) && !hasAppleWarranty) return true
+  return false
+}
+
+function isUnsafeProductCopy(copy: ProductCopySuggestion, fact: ProductFacts): boolean {
+  const text = [
+    copy.title,
+    copy.description,
+    copy.strongPoint,
+    copy.cta,
+    copy.objection,
+    copy.shortPitch,
+    copy.trustArgument,
+    copy.urgencyLine,
+    copy.whatsappLine,
+    copy.instagramLine,
+    copy.storyWhatsappText,
+  ].filter(Boolean).join("\n")
+  return hasForbiddenWarrantyClaim(text, [fact])
+}
+
 function compactLines(text: string, maxNonEmptyLines: number): string {
   const lines = text.split("\n")
   let count = 0
@@ -305,25 +417,26 @@ interface AIOutput {
     commercial_strategy: string
   }
   product_copies: Array<{
-    inventory_id: string
+    product_id: string
     commercial_title: string
     short_pitch: string
-    main_selling_point: string
     trust_argument: string
-    urgency_argument: string
-    cta: string
-    story_card_line: string
+    urgency_line: string
+    cta_line: string
     whatsapp_line: string
+    instagram_line: string
+    story_whatsapp_text: string
   }>
   channel_copy: {
     whatsapp_text: string
     instagram_caption: string
-    story_1_headline: string
-    story_1_subtitle: string
-    story_2_headline: string
-    story_2_subtitle: string
-    story_3_headline: string
-    story_3_cta: string
+    stories: Array<{
+      index: number
+      kind: "vitrine" | "highlight" | "cta" | "trust"
+      headline: string
+      subtitle: string
+      cta: string
+    }>
     carousel_slides: Array<{ title: string; body: string }>
   }
   offer_alerts: string[]
@@ -356,15 +469,15 @@ function validateAIOutput(value: unknown): AIOutput {
     }
     const c = copy as AIOutput["product_copies"][number]
     if (
-      typeof c.inventory_id !== "string" ||
+      typeof c.product_id !== "string" ||
       typeof c.commercial_title !== "string" ||
       typeof c.short_pitch !== "string" ||
-      typeof c.main_selling_point !== "string" ||
       typeof c.trust_argument !== "string" ||
-      typeof c.urgency_argument !== "string" ||
-      typeof c.cta !== "string" ||
-      typeof c.story_card_line !== "string" ||
-      typeof c.whatsapp_line !== "string"
+      typeof c.urgency_line !== "string" ||
+      typeof c.cta_line !== "string" ||
+      typeof c.whatsapp_line !== "string" ||
+      typeof c.instagram_line !== "string" ||
+      typeof c.story_whatsapp_text !== "string"
     ) {
       throw new MarketingAIError("invalid_schema", "Product copy output has invalid fields.")
     }
@@ -376,15 +489,25 @@ function validateAIOutput(value: unknown): AIOutput {
   const ch = channel as AIOutput["channel_copy"]
   if (
     typeof ch.whatsapp_text !== "string" ||
-    typeof ch.instagram_caption !== "string" ||
-    typeof ch.story_1_headline !== "string" ||
-    typeof ch.story_1_subtitle !== "string" ||
-    typeof ch.story_2_headline !== "string" ||
-    typeof ch.story_2_subtitle !== "string" ||
-    typeof ch.story_3_headline !== "string" ||
-    typeof ch.story_3_cta !== "string"
+    typeof ch.instagram_caption !== "string"
   ) {
     throw new MarketingAIError("invalid_schema", "AI channel_copy has invalid text fields.")
+  }
+  if (
+    !Array.isArray(ch.stories) ||
+    ch.stories.length === 0 ||
+    !ch.stories.every(
+      (s) =>
+        s &&
+        typeof s === "object" &&
+        typeof (s as { headline?: unknown }).headline === "string" &&
+        typeof (s as { subtitle?: unknown }).subtitle === "string" &&
+        typeof (s as { cta?: unknown }).cta === "string" &&
+        typeof (s as { index?: unknown }).index === "number" &&
+        typeof (s as { kind?: unknown }).kind === "string"
+    )
+  ) {
+    throw new MarketingAIError("invalid_schema", "AI stories array is invalid.")
   }
   if (
     !Array.isArray(ch.carousel_slides) ||
@@ -503,6 +626,7 @@ export interface GenerateOptions {
   drafts: ProductDraft[]
   strategy: GeneralStrategy
   useAI: boolean
+  historySummary?: string
 }
 
 export interface GenerateResult {
@@ -543,19 +667,27 @@ export async function generateMarketingContent(
         commercialStrategy: "Divulgar produtos com preço, condição e CTA sem alterar fatos comerciais.",
       },
       offerAlerts: [],
-      productCopies: deterministic.facts.map((f) => ({
-        productId: f.id,
-        title: f.copyTitle,
-        description: f.copyDescription,
-        strongPoint: f.copyStrongPoint,
-        cta: f.productCta,
-        objection: f.copyObjection,
-      })),
+      productCopies: deterministic.facts.map(fallbackProductCopy),
     }
   }
 
   const facts = deterministic.facts
-  const payload = buildFactPayload(facts, options.strategy)
+  const storyPlan: FactPayload["story_plan"] = deterministic.stories.map((s, i) => ({
+    index: i + 1,
+    kind: s.kind,
+    label: s.label,
+    page: s.pageInfo?.page,
+    total_pages: s.pageInfo?.total,
+    density: s.density,
+    deterministic_headline: s.headline,
+    deterministic_subtitle: s.sub,
+    product_ids: s.vitrineProducts
+      ? s.vitrineProducts.map((v) => v.productId)
+      : facts.find((f) => f.name === s.productName)
+      ? [facts.find((f) => f.name === s.productName)!.id]
+      : [],
+  }))
+  const payload = buildFactPayload(facts, options.strategy, storyPlan, options.historySummary)
 
   try {
     const ai = await callOpenAI(payload)
@@ -564,28 +696,34 @@ export async function generateMarketingContent(
     const maxWhatsappLines = facts.length <= 1 ? 10 : facts.length === 2 ? 16 : 18
     const merged: GeneratedContent = {
       ...deterministic,
-      whatsapp: isUnsafeFinalCopy(aiWhatsapp)
+      whatsapp: isUnsafeFinalCopy(aiWhatsapp) || hasForbiddenWarrantyClaim(aiWhatsapp, facts)
         ? deterministic.whatsapp
         : compactLines(aiWhatsapp, maxWhatsappLines),
-      instagram: isUnsafeFinalCopy(aiInstagram) ? deterministic.instagram : aiInstagram,
+      instagram: isUnsafeFinalCopy(aiInstagram) || hasForbiddenWarrantyClaim(aiInstagram, facts) ? deterministic.instagram : aiInstagram,
       stories: deterministic.stories.map((story, i) => {
-        const headline = i === 0
-          ? ai.channel_copy.story_1_headline
-          : i === 1
-          ? ai.channel_copy.story_2_headline
-          : ai.channel_copy.story_3_headline
-        const sub = i === 0
-          ? ai.channel_copy.story_1_subtitle
-          : i === 1
-          ? ai.channel_copy.story_2_subtitle
-          : story.sub
+        // Match by index when provided, otherwise fall back to position.
+        const aiStory =
+          ai.channel_copy.stories.find((s) => s.index === i + 1) ?? ai.channel_copy.stories[i]
+        if (!aiStory) return story
+        const aiHeadline = stripInternalLabels(aiStory.headline || "")
+        const aiSub = stripInternalLabels(aiStory.subtitle || "")
+        // Reject empty, label-poisoned, generic or pure "vitrine X/Y" headlines —
+        // those let the deterministic objective copy win instead.
+        const isPlaceholderHeadline =
+          !aiHeadline ||
+          /^vitrine\s*\d+\s*[\/\-]\s*\d+/i.test(aiHeadline) ||
+          isUnsafeFinalCopy(aiHeadline)
+        const isPlaceholderSub = !aiSub || isUnsafeFinalCopy(aiSub)
         return {
           ...story,
-          headline: stripInternalLabels(headline || "") || story.headline,
-          sub: stripInternalLabels(sub || "") || story.sub,
-          ctaMain: i === 2 ? stripInternalLabels(ai.channel_copy.story_3_cta) || story.ctaMain : story.ctaMain,
+          headline: isPlaceholderHeadline ? story.headline : aiHeadline,
+          sub: isPlaceholderSub ? story.sub : aiSub,
+          ctaMain:
+            story.kind === "cta"
+              ? stripInternalLabels(aiStory.cta || "") || story.ctaMain
+              : story.ctaMain,
         }
-      }) as GeneratedContent["stories"],
+      }),
       carousel: deterministic.carousel.map((slide, i) => {
         const aiSlide = ai.channel_copy.carousel_slides[i]
         if (!aiSlide) return slide
@@ -601,16 +739,44 @@ export async function generateMarketingContent(
         ...ai.offer_alerts.filter(Boolean).map((a) => `IA: ${a}`),
       ],
     }
-    const productCopies: ProductCopySuggestion[] = ai.product_copies.map((copy) => ({
-      productId: copy.inventory_id,
-      title: stripInternalLabels(copy.commercial_title),
-      description: stripInternalLabels(copy.short_pitch),
-      strongPoint: stripInternalLabels(copy.main_selling_point),
-      cta: stripInternalLabels(copy.cta),
-      objection: [stripInternalLabels(copy.trust_argument), stripInternalLabels(copy.urgency_argument)].filter(Boolean).join(" "),
-    }))
+    const aiCopiesByProduct = new Map(ai.product_copies.map((copy) => [copy.product_id, copy]))
+    let fallbackCopyCount = 0
+    const productCopies: ProductCopySuggestion[] = facts.map((fact) => {
+      const copy = aiCopiesByProduct.get(fact.id)
+      if (!copy) {
+        fallbackCopyCount += 1
+        return fallbackProductCopy(fact)
+      }
+      const candidate: ProductCopySuggestion = {
+        productId: copy.product_id,
+        title: stripInternalLabels(copy.commercial_title),
+        description: stripInternalLabels(copy.short_pitch),
+        strongPoint: stripInternalLabels(copy.trust_argument),
+        cta: stripInternalLabels(copy.cta_line),
+        objection: [stripInternalLabels(copy.trust_argument), stripInternalLabels(copy.urgency_line)].filter(Boolean).join(" "),
+        shortPitch: stripInternalLabels(copy.short_pitch),
+        trustArgument: stripInternalLabels(copy.trust_argument),
+        urgencyLine: stripInternalLabels(copy.urgency_line),
+        whatsappLine: stripInternalLabels(copy.whatsapp_line),
+        instagramLine: stripInternalLabels(copy.instagram_line),
+        storyWhatsappText: stripInternalLabels(copy.story_whatsapp_text),
+      }
+      if (isUnsafeProductCopy(candidate, fact)) {
+        fallbackCopyCount += 1
+        return fallbackProductCopy(fact)
+      }
+      return candidate
+    })
     return {
-      content: merged,
+      content: fallbackCopyCount > 0
+        ? {
+            ...merged,
+            warnings: [
+              ...merged.warnings,
+              `IA aplicada parcialmente: ${fallbackCopyCount} ${fallbackCopyCount === 1 ? "produto ficou" : "produtos ficaram"} com template.`,
+            ],
+          }
+        : merged,
       source: "ai",
       productCopies,
       campaignAngle: {
@@ -619,7 +785,12 @@ export async function generateMarketingContent(
         mainHook: ai.campaign_angle.main_hook.trim(),
         commercialStrategy: ai.campaign_angle.commercial_strategy.trim(),
       },
-      offerAlerts: ai.offer_alerts.filter(Boolean),
+      offerAlerts: [
+        ...ai.offer_alerts.filter(Boolean),
+        fallbackCopyCount > 0
+          ? `IA aplicada parcialmente: ${fallbackCopyCount} ${fallbackCopyCount === 1 ? "produto ficou" : "produtos ficaram"} com template.`
+          : `IA aplicada a ${facts.length} ${facts.length === 1 ? "produto" : "produtos"}.`,
+      ],
     }
   } catch (err) {
     logMarketingAIError(err)
@@ -635,14 +806,7 @@ export async function generateMarketingContent(
         commercialStrategy: "Divulgar produtos com preço, condição e CTA sem alterar fatos comerciais.",
       },
       offerAlerts: [],
-      productCopies: deterministic.facts.map((f) => ({
-        productId: f.id,
-        title: f.copyTitle,
-        description: f.copyDescription,
-        strongPoint: f.copyStrongPoint,
-        cta: f.productCta,
-        objection: f.copyObjection,
-      })),
+      productCopies: deterministic.facts.map(fallbackProductCopy),
     }
   }
 }

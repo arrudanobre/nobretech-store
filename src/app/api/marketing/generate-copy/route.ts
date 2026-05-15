@@ -107,6 +107,7 @@ export async function POST(req: Request) {
   const strategyRaw = (obj.strategy as Record<string, unknown>) ?? {}
   const draftsRaw = Array.isArray(obj.drafts) ? obj.drafts : []
   const useAI = Boolean(obj.useAI)
+  const historySummary = pickString(obj.historySummary, "").slice(0, 1200)
 
   const objective = VALID_OBJECTIVES.includes(strategyRaw.objective as ObjectiveKey)
     ? (strategyRaw.objective as ObjectiveKey)
@@ -121,6 +122,11 @@ export async function POST(req: Request) {
     ? (strategyRaw.urgencyLevel as UrgencyLevel)
     : "none"
 
+  function pickToggle(value: unknown): boolean | null {
+    if (value === true || value === false) return value
+    return null
+  }
+
   const strategy: GeneralStrategy = {
     objective,
     channel,
@@ -129,6 +135,8 @@ export async function POST(req: Request) {
     generalCta: pickString(strategyRaw.generalCta, ""),
     generalNote: pickString(strategyRaw.generalNote, ""),
     angle: pickString(strategyRaw.angle, ""),
+    addHighlightStory: pickToggle(strategyRaw.addHighlightStory),
+    addCtaStory: pickToggle(strategyRaw.addCtaStory),
   }
 
   const drafts: ProductDraft[] = []
@@ -173,7 +181,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const result = await generateMarketingContent({ drafts, strategy, useAI })
+    const result = await generateMarketingContent({ drafts, strategy, useAI, historySummary })
     return NextResponse.json({
       data: {
         content: result.content,
