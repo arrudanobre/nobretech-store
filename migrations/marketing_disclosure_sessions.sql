@@ -29,10 +29,19 @@ CREATE TABLE IF NOT EXISTS marketing_disclosure_sessions (
   general_cta     TEXT NULL,
   general_note    TEXT NULL,
   angle           TEXT NULL,
+  -- Story assembly toggles (3-way): NULL = Automático, TRUE = Sempre, FALSE = Nunca.
+  add_highlight_story BOOLEAN NULL,
+  add_cta_story       BOOLEAN NULL,
   ai_enabled      BOOLEAN NOT NULL DEFAULT FALSE,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Idempotente para tabelas já criadas em deploy anterior.
+ALTER TABLE marketing_disclosure_sessions
+  ADD COLUMN IF NOT EXISTS add_highlight_story BOOLEAN NULL;
+ALTER TABLE marketing_disclosure_sessions
+  ADD COLUMN IF NOT EXISTS add_cta_story BOOLEAN NULL;
 
 CREATE INDEX IF NOT EXISTS idx_mkt_disclosure_sessions_company
   ON marketing_disclosure_sessions(company_id, created_at DESC);
@@ -43,6 +52,7 @@ CREATE TABLE IF NOT EXISTS marketing_disclosure_items (
   company_id         UUID NOT NULL,
   inventory_id       UUID NULL,
   is_primary         BOOLEAN NOT NULL DEFAULT FALSE,
+  is_featured        BOOLEAN NOT NULL DEFAULT FALSE,
   base_price         NUMERIC(12,2) NULL,
   disclosure_price   NUMERIC(12,2) NULL,
   discount_amount    NUMERIC(12,2) NULL,
@@ -51,8 +61,12 @@ CREATE TABLE IF NOT EXISTS marketing_disclosure_items (
   installment_amount NUMERIC(12,2) NULL,
   installment_total  NUMERIC(12,2) NULL,
   gifts_text         TEXT NULL,
+  warranty_label     TEXT NULL,
+  warranty_source    TEXT NULL,
   product_note       TEXT NULL,
   product_cta        TEXT NULL,
+  copy_json          JSONB NULL,
+  display_order      INTEGER NOT NULL DEFAULT 0,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -80,7 +94,7 @@ CREATE INDEX IF NOT EXISTS idx_mkt_disclosure_outputs_session
 -- Reaproveitamento por produto: view auxiliar para pegar última disclosure por inventory_id.
 -- (Opcional. Pode ser removida sem impacto se não for usada.)
 CREATE OR REPLACE VIEW v_marketing_last_disclosure_by_inventory AS
-SELECT DISTINCT ON (inventory_id)
+SELECT DISTINCT ON (company_id, inventory_id)
   company_id,
   inventory_id,
   base_price,
@@ -89,12 +103,17 @@ SELECT DISTINCT ON (inventory_id)
   discount_percent,
   installment_count,
   installment_amount,
+  installment_total,
   gifts_text,
+  warranty_label,
+  warranty_source,
   product_note,
   product_cta,
+  copy_json,
+  display_order,
   updated_at
 FROM marketing_disclosure_items
 WHERE inventory_id IS NOT NULL
-ORDER BY inventory_id, updated_at DESC;
+ORDER BY company_id, inventory_id, updated_at DESC;
 
 COMMIT;
