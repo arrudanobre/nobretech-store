@@ -1,4 +1,4 @@
-import type { StoryData, VitrineItem } from "@/lib/marketing/copy-generator"
+import { formatVisualDiscount, type StoryData, type VitrineItem } from "@/lib/marketing/copy-generator"
 import {
   W, H, PAD_L, PAD_R, PAD_T, PAD_B,
   CONTENT_W, CARD_W, CARD_PAD_V, CARD_PAD_H,
@@ -241,7 +241,7 @@ function drawProductCard(
     // Discount percent
     if (hasDiscount && item.discountPercent != null) {
       const textY = rightY + DISCOUNT_FONT
-      const discText = `${Math.round(item.discountPercent)}% off`
+      const discText = `${formatVisualDiscount(item.discountPercent)} off`
       svg += svgText(discText, rightX, textY, DISCOUNT_FONT, { fill: DISCOUNT_COLOR, weight: 600, anchor: "end" })
     }
   }
@@ -366,7 +366,7 @@ function renderHighlight(story: StoryData): string {
     kitLine,
     price: story.price,
     basePrice: story.basePrice,
-    discountPercent: story.basePrice && story.price ? 1 : null,
+    discountPercent: story.discountPercent ?? null,
     parcel: story.parcel,
     tags: story.tags,
     warrantyLabel: warrantyLine,

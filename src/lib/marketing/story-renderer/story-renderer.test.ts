@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import {
   buildDynamicStories,
+  formatVisualDiscount,
+  getVisualDiscountPercent,
   type ProductFacts,
   type GeneralStrategy,
 } from "@/lib/marketing/copy-generator"
@@ -444,6 +446,101 @@ const realStoryCase: ProductFacts[] = [
   assert.ok(!/2\.649/.test(svg), "CTA SVG: iPad price must not appear")
   assert.ok(!/2\.900/.test(svg), "CTA SVG: iPhone price must not appear")
   assert.ok(svg.length > 200, "CTA SVG has content")
+}
+
+// ─── Test: visual discount below 5% is hidden everywhere ─────────────────────
+
+{
+  const smallDiscount = makeFact({
+    id: "small-discount",
+    name: "iPhone 15 Pro 128GB Natural Titanium",
+    grade: "A+",
+    battery_health: 88,
+    quantity: 1,
+    basePrice: 3799,
+    disclosurePrice: 3699,
+    discount: { amount: 100, percent: 3 },
+    isPrimary: true,
+  })
+  assert.equal(getVisualDiscountPercent(3799, 3699), null, "2.63% visual discount is hidden")
+
+  const stories = buildDynamicStories([smallDiscount], { ...BASE_STRATEGY, addHighlightStory: true })
+  const allSvg = stories.map((s) => renderStoryToSVG(s)).join("\n")
+  assert.ok(!/3% off/i.test(allSvg), "small discount must not render 3% off")
+  assert.ok(!/2\.6% off/i.test(allSvg), "small discount must not render 2.6% off")
+  assert.ok(!/1% off/i.test(allSvg), "small discount must not render 1% off")
+  assert.ok(!/% off/i.test(allSvg), "small discount must not render any off badge")
+  assert.ok(/3\.799,00/.test(allSvg) && /3\.699,00/.test(allSvg), "small discount keeps de/por prices")
+}
+
+// ─── Test: visual discount above 5% is consistent in vitrine and highlight ───
+
+{
+  const strongDiscount = makeFact({
+    id: "strong-discount",
+    name: "iPhone 14 128GB Roxo",
+    grade: "A",
+    battery_health: 93,
+    quantity: 1,
+    basePrice: 2490,
+    disclosurePrice: 2290,
+    // Intentional stale percent: visual output must recalculate from prices.
+    discount: { amount: 200, percent: 1 },
+    isPrimary: true,
+  })
+  const visual = getVisualDiscountPercent(2490, 2290)
+  assert.equal(visual, 8, "2490 → 2290 visual discount rounds to 8%")
+  assert.equal(formatVisualDiscount(visual!), "8%", "integer percent formats without decimal")
+
+  const stories = buildDynamicStories([strongDiscount], { ...BASE_STRATEGY, addHighlightStory: true })
+  const vitrineSvg = renderStoryToSVG(stories.find((s) => s.kind === "vitrine")!)
+  const highlightSvg = renderStoryToSVG(stories.find((s) => s.kind === "highlight")!)
+  const vitrineDiscounts = vitrineSvg.match(/\d+(?:\.\d)?% off/g) ?? []
+  const highlightDiscounts = highlightSvg.match(/\d+(?:\.\d)?% off/g) ?? []
+  assert.deepEqual(vitrineDiscounts, ["8% off"], `vitrine discount uses recalculated percent: ${vitrineDiscounts.join(",")}`)
+  assert.deepEqual(highlightDiscounts, ["8% off"], `highlight discount uses same percent: ${highlightDiscounts.join(",")}`)
+  assert.ok(!/1% off/.test(vitrineSvg + highlightSvg), "stale discount.percent is not rendered")
+}
+
+// ─── Test: highlight/card product names preserve commercial variants ─────────
+
+{
+  const iphone15Pro = makeFact({
+    id: "iphone15-pro",
+    name: "iPhone 15 Pro 128GB Natural Titanium",
+    grade: "A+",
+    battery_health: 88,
+    quantity: 1,
+    basePrice: 3799,
+    disclosurePrice: 3699,
+    discount: { amount: 100, percent: 3 },
+    isPrimary: true,
+  })
+  const stories = buildDynamicStories([iphone15Pro], { ...BASE_STRATEGY, addHighlightStory: true })
+  const highlightSvg = renderStoryToSVG(stories.find((s) => s.kind === "highlight")!)
+  assert.ok(/iPhone 15 Pro/.test(highlightSvg), "highlight keeps Pro in the visual name")
+  assert.ok(!/iPhone 15 sai rápido/.test(highlightSvg), "highlight never collapses iPhone 15 Pro to iPhone 15")
+  assert.ok(/128GB/.test(highlightSvg), "highlight card keeps storage")
+  assert.ok(/Natural|Titanium/.test(highlightSvg), "highlight card keeps color when present")
+}
+
+{
+  const iphone15ProMax = makeFact({
+    id: "iphone15-promax",
+    name: "iPhone 15 Pro Max 256GB Titânio Natural",
+    grade: "A+",
+    battery_health: 90,
+    quantity: 1,
+    basePrice: 5490,
+    disclosurePrice: 4990,
+    discount: { amount: 500, percent: 9.1 },
+    isPrimary: true,
+  })
+  const stories = buildDynamicStories([iphone15ProMax], { ...BASE_STRATEGY, addHighlightStory: true })
+  const highlightSvg = renderStoryToSVG(stories.find((s) => s.kind === "highlight")!)
+  assert.ok(/Pro Max/.test(highlightSvg), "highlight keeps Pro Max")
+  assert.ok(!/iPhone 15 sai rápido/.test(highlightSvg), "highlight never collapses iPhone 15 Pro Max to iPhone 15")
+  assert.ok(/256GB/.test(highlightSvg), "highlight card keeps storage for Pro Max")
 }
 
 console.log("story-renderer SVG tests passed")

@@ -181,6 +181,7 @@ export interface StoryData {
   productName: string
   price: string | null
   basePrice: string | null
+  discountPercent?: number | null
   parcel: string | null
   detailLines: string[]
   urgencyLine: string | null
@@ -288,6 +289,24 @@ export function calculateDiscount(basePrice: number | null, disclosurePrice: num
   return { amount, percent }
 }
 
+export function getVisualDiscountPercent(
+  basePrice: number | null | undefined,
+  disclosurePrice: number | null | undefined
+): number | null {
+  if (basePrice == null || disclosurePrice == null) return null
+  if (!isFinite(basePrice) || !isFinite(disclosurePrice)) return null
+  if (basePrice <= 0) return null
+  if (disclosurePrice >= basePrice) return null
+  const percent = ((basePrice - disclosurePrice) / basePrice) * 100
+  if (percent < 5) return null
+  return Math.round(percent * 10) / 10
+}
+
+export function formatVisualDiscount(percent: number): string {
+  const rounded = Math.round(percent * 10) / 10
+  return Number.isInteger(rounded) ? `${rounded}%` : `${rounded.toFixed(1)}%`
+}
+
 function includesToken(text: string | null | undefined, token: string | null | undefined): boolean {
   if (!text || !token) return false
   return text.toLocaleLowerCase("pt-BR").includes(token.toLocaleLowerCase("pt-BR"))
@@ -338,6 +357,28 @@ function buildStoryProductName(f: ProductFacts): string {
     })
   trimmed = kept.join(" ").replace(/\s{2,}/g, " ").trim()
   return trimmed
+}
+
+function buildHighlightProductName(f: ProductFacts): string {
+  const visualName = buildStoryProductName(f).replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s{2,}/g, " ").trim()
+  const words = visualName.split(" ").filter(Boolean)
+  if (words.length <= 2) return visualName
+
+  const first = words[0]?.toLocaleLowerCase("pt-BR")
+  const modelNumberIndex = words.findIndex((w, index) => index > 0 && /^\d/.test(w))
+  if (first === "iphone" && modelNumberIndex > 0) {
+    const kept = words.slice(0, modelNumberIndex + 1)
+    const afterModel = words.slice(modelNumberIndex + 1)
+    const firstModifier = afterModel[0]?.toLocaleLowerCase("pt-BR")
+    const secondModifier = afterModel[1]?.toLocaleLowerCase("pt-BR")
+    if (["pro", "plus", "air", "mini", "ultra", "max"].includes(firstModifier ?? "")) {
+      kept.push(afterModel[0])
+      if (firstModifier === "pro" && secondModifier === "max") kept.push(afterModel[1])
+    }
+    return kept.join(" ")
+  }
+
+  return words.slice(0, Math.min(3, words.length)).join(" ")
 }
 
 /**
@@ -914,7 +955,7 @@ function buildVitrineItems(facts: ProductFacts[], objective: ObjectiveKey): Vitr
     kitLine: buildKitLine(f),
     price: f.disclosurePrice != null ? formatBRL(f.disclosurePrice) : null,
     basePrice: f.discount && f.basePrice != null ? formatBRL(f.basePrice) : null,
-    discountPercent: f.discount?.percent ?? null,
+    discountPercent: getVisualDiscountPercent(f.basePrice, f.disclosurePrice),
     parcel: f.installment?.text ?? null,
     // Installment is shown under the price, never as a pill — strip it here.
     tags: orderedVitrineTags(f, objective),
@@ -1198,9 +1239,10 @@ function buildVitrineStory(
     headline,
     sub,
     tags: isMulti ? [] : buildTags(primary),
-    productName: primary.name,
+    productName: buildStoryProductName(primary),
     price: priceStr,
     basePrice: basePriceStr,
+    discountPercent: getVisualDiscountPercent(primary.basePrice, primary.disclosurePrice),
     parcel,
     detailLines: isMulti ? [] : buildDetailLines(primary),
     urgencyLine: urgencyBodyLine(strategy.urgencyLevel, primary.quantity),
@@ -1224,11 +1266,7 @@ function buildHighlightStory(
 
   // Short model name: drop parentheticals first so we never split "(11ª"
   // and leave a dangling unclosed parenthesis.
-  const cleanName = (primary.copyTitle || primary.name)
-    .replace(/\s*\([^)]*\)\s*/g, " ")
-    .replace(/\s{2,}/g, " ")
-    .trim()
-  const shortName = cleanName.split(" ").slice(0, 2).join(" ")
+  const shortName = buildHighlightProductName(primary)
   // Deep-dive bullets — the strongest real arguments, NOT a spec dump.
   // Differs from the vitrine card (which is name + price + pills).
   const argueLines: string[] = []
@@ -1268,9 +1306,10 @@ function buildHighlightStory(
     headline: headlineMap[strategy.objective],
     sub: highlightSub,
     tags: orderedVitrineTags(primary, strategy.objective),
-    productName: primary.name,
+    productName: buildStoryProductName(primary),
     price: priceStr,
     basePrice: basePriceStr,
+    discountPercent: getVisualDiscountPercent(primary.basePrice, primary.disclosurePrice),
     parcel,
     detailLines,
     urgencyLine: null,
