@@ -6,7 +6,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { SignOutButton } from "@clerk/nextjs"
 import { cn } from "@/lib/utils"
-import { BarChart3, Package, ShoppingCart, ShieldCheck, AlertTriangle, FileText, Users, Truck, DollarSign, Settings, Calculator, ListChecks, ChevronDown, Menu, X, LogOut, Mail, BrainCircuit, Megaphone, type LucideIcon } from "lucide-react"
+import { BarChart3, Package, ShoppingCart, ShieldCheck, AlertTriangle, FileText, Users, Truck, DollarSign, Settings, Calculator, ListChecks, ChevronDown, Menu, X, LogOut, Mail, BrainCircuit, Megaphone, FileSpreadsheet, type LucideIcon } from "lucide-react"
 import { useState, useEffect, createContext, useContext, useCallback } from "react"
 import { supabase } from "@/lib/supabase"
 import { canAccess, roleLabels, type PermissionKey, type UserRole } from "@/lib/permissions"
@@ -90,6 +90,7 @@ const staticNavItems: (Omit<NavItem, "badge"> & { badge?: { count?: number; defa
       { label: "Plano de DRE", href: "/financeiro/plano-dre", permission: "finance.dre" },
     ]
   },
+  { label: "Relatórios", href: "/financeiro/relatorios", icon: FileSpreadsheet, permission: "finance.view" },
   { label: "Laudos", href: "/historico", icon: FileText },
   { label: "Configurações", href: "/configuracoes", icon: Settings, permission: "settings.view" },
 ]
