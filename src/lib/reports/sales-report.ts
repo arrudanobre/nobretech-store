@@ -23,6 +23,10 @@ export type SalesReportSummary = {
   tradeInCreditTotal: number
   financialReceivedRevenue: number
   mainProductCostTotal: number
+  giftItemsCostTotal: number
+  upsellItemsCostTotal: number
+  upsellItemsRevenueTotal: number
+  upsellItemsProfitTotal: number
   additionalItemsCostTotal: number
   totalSaleCost: number
   productCostTotal: number
@@ -56,6 +60,10 @@ export type SalesReportLine = {
   expectedReceiptDate: string
   actualReceiptDate: string
   mainProductCost: number
+  giftItemsCost: number
+  upsellItemsCost: number
+  upsellItemsRevenue: number
+  upsellItemsProfit: number
   additionalItemsCost: number
   totalSaleCost: number
   productPurchaseCost: number
@@ -68,6 +76,7 @@ export type SalesReportLine = {
   tradeInReceivedProduct: string
   tradeInObservation: string
   linkedAdditionalItems: string
+  additionalItemsTypes: string
   notes: string
 }
 
@@ -247,7 +256,7 @@ function additionalItemsLabel(items: RawAdditionalItem[]) {
   if (valid.length === 0) return "—"
   return valid
     .map((item) => {
-      const type = item.type === "free" ? "Brinde" : "Adicional"
+      const type = item.type === "free" ? "Brinde" : item.type === "upsell" ? "Upsell" : "Adicional"
       const salePrice = toNumber(item.sale_price)
       const costPrice = toNumber(item.cost_price)
       const price = item.type === "upsell" && salePrice > 0 ? ` · venda ${formatBRLPlain(salePrice)}` : ""
@@ -255,6 +264,31 @@ function additionalItemsLabel(items: RawAdditionalItem[]) {
       return `${type}: ${item.name}${cost}${price}`
     })
     .join("; ")
+}
+
+function additionalItemsTypesLabel(items: RawAdditionalItem[]) {
+  const types = Array.from(new Set(items.map((item) => item.type === "free" ? "Brinde" : item.type === "upsell" ? "Upsell" : "Adicional")))
+  return types.length > 0 ? types.join(" + ") : "—"
+}
+
+function additionalItemsBreakdown(items: RawAdditionalItem[]) {
+  return items.reduce(
+    (totals, item) => {
+      const cost = toNumber(item.cost_price)
+      const sale = toNumber(item.sale_price)
+      if (item.type === "free") {
+        totals.giftCost += cost
+        return totals
+      }
+      if (item.type === "upsell") {
+        totals.upsellCost += cost
+        totals.upsellRevenue += sale
+        totals.upsellProfit += item.profit !== null && item.profit !== undefined ? toNumber(item.profit) : sale - cost
+      }
+      return totals
+    },
+    { giftCost: 0, upsellCost: 0, upsellRevenue: 0, upsellProfit: 0 }
+  )
 }
 
 function formatBRLPlain(value: number) {
@@ -654,6 +688,10 @@ export function mapSalesReportRows(rawRows: RawSaleRow[]) {
   let grossRevenue = 0
   let tradeInCreditTotal = 0
   let mainProductCostTotal = 0
+  let giftItemsCostTotal = 0
+  let upsellItemsCostTotal = 0
+  let upsellItemsRevenueTotal = 0
+  let upsellItemsProfitTotal = 0
   let additionalItemsCostTotal = 0
   let productCostTotal = 0
   let grossProfit = 0
@@ -664,6 +702,7 @@ export function mapSalesReportRows(rawRows: RawSaleRow[]) {
 
   for (const row of rawRows) {
     const additionalItems = row.additional_items || []
+    const additionalBreakdown = additionalItemsBreakdown(additionalItems)
     const payments = row.payments || []
     const saleValue = toNumber(row.sale_price)
     const totals = calcSaleTotals({
@@ -694,6 +733,10 @@ export function mapSalesReportRows(rawRows: RawSaleRow[]) {
     grossRevenue += saleValue
     tradeInCreditTotal += tradeInCredit
     mainProductCostTotal += mainProductCost
+    giftItemsCostTotal += additionalBreakdown.giftCost
+    upsellItemsCostTotal += additionalBreakdown.upsellCost
+    upsellItemsRevenueTotal += additionalBreakdown.upsellRevenue
+    upsellItemsProfitTotal += additionalBreakdown.upsellProfit
     additionalItemsCostTotal += additionalItemsCost
     productCostTotal += costTotal
     grossProfit += profit
@@ -725,6 +768,10 @@ export function mapSalesReportRows(rawRows: RawSaleRow[]) {
       expectedReceiptDate: expectedReceiptDate(payments, row.payment_due_date),
       actualReceiptDate: actualReceiptDate(payments),
       mainProductCost: roundCurrency(mainProductCost),
+      giftItemsCost: roundCurrency(additionalBreakdown.giftCost),
+      upsellItemsCost: roundCurrency(additionalBreakdown.upsellCost),
+      upsellItemsRevenue: roundCurrency(additionalBreakdown.upsellRevenue),
+      upsellItemsProfit: roundCurrency(additionalBreakdown.upsellProfit),
       additionalItemsCost: roundCurrency(additionalItemsCost),
       totalSaleCost: roundCurrency(costTotal),
       productPurchaseCost: roundCurrency(totals.custoPrincipal),
@@ -737,6 +784,7 @@ export function mapSalesReportRows(rawRows: RawSaleRow[]) {
       tradeInReceivedProduct: tradeInDeviceName(row) || "—",
       tradeInObservation: tradeInObservation(row, tradeInCredit),
       linkedAdditionalItems: additionalItemsLabel(additionalItems),
+      additionalItemsTypes: additionalItemsTypesLabel(additionalItems),
       notes: labelOrDash(row.notes),
     })
 
@@ -782,6 +830,10 @@ export function mapSalesReportRows(rawRows: RawSaleRow[]) {
       grossRevenue: roundCurrency(grossRevenue),
       tradeInCreditTotal: roundCurrency(tradeInCreditTotal),
       mainProductCostTotal: roundCurrency(mainProductCostTotal),
+      giftItemsCostTotal: roundCurrency(giftItemsCostTotal),
+      upsellItemsCostTotal: roundCurrency(upsellItemsCostTotal),
+      upsellItemsRevenueTotal: roundCurrency(upsellItemsRevenueTotal),
+      upsellItemsProfitTotal: roundCurrency(upsellItemsProfitTotal),
       additionalItemsCostTotal: roundCurrency(additionalItemsCostTotal),
       productCostTotal: roundCurrency(productCostTotal),
       grossProfit: roundCurrency(grossProfit),
@@ -810,6 +862,10 @@ export async function buildSalesReport(companyId: string, filters: SalesReportFi
     tradeInCreditTotal: mapped.totals.tradeInCreditTotal,
     financialReceivedRevenue: mapped.totals.totalReceived,
     mainProductCostTotal: mapped.totals.mainProductCostTotal,
+    giftItemsCostTotal: mapped.totals.giftItemsCostTotal,
+    upsellItemsCostTotal: mapped.totals.upsellItemsCostTotal,
+    upsellItemsRevenueTotal: mapped.totals.upsellItemsRevenueTotal,
+    upsellItemsProfitTotal: mapped.totals.upsellItemsProfitTotal,
     additionalItemsCostTotal: mapped.totals.additionalItemsCostTotal,
     totalSaleCost: mapped.totals.productCostTotal,
     productCostTotal: mapped.totals.productCostTotal,
@@ -819,7 +875,7 @@ export async function buildSalesReport(companyId: string, filters: SalesReportFi
     hasTradeIn: mapped.totals.hasTradeIn,
     hasAdditionalItemsCost: mapped.totals.hasAdditionalItemsCost,
     generatedAt: todayISO(),
-    methodologyNote: "Receita comercial vem de sales.sale_price uma vez por venda; trade-in é abatimento comercial e não entrada de caixa; brindes e adicionais vinculados compõem o custo real da venda.",
+    methodologyNote: "Receita comercial vem de sales.sale_price uma vez por venda; trade-in é abatimento comercial e não entrada de caixa; itens adicionais são decompostos por sales_additional_items.type sem somar receita de upsell novamente.",
   }
 
   return {
@@ -849,17 +905,21 @@ function addSummarySheet(workbook: ExcelJS.Workbook, report: SalesReportData) {
     { field: "Trade-in abatido", value: report.summary.tradeInCreditTotal },
     { field: "Receita financeira recebida", value: report.summary.financialReceivedRevenue },
     { field: "Custo dos produtos principais", value: report.summary.mainProductCostTotal },
-    { field: "Custo de brindes/adicionais", value: report.summary.additionalItemsCostTotal },
+    { field: "Custo de brindes", value: report.summary.giftItemsCostTotal },
+    { field: "Custo de upsells", value: report.summary.upsellItemsCostTotal },
+    { field: "Receita de upsells", value: report.summary.upsellItemsRevenueTotal },
+    { field: "Lucro de upsells", value: report.summary.upsellItemsProfitTotal },
+    { field: "Custo total de adicionais", value: report.summary.additionalItemsCostTotal },
     { field: "Custo total das vendas", value: report.summary.totalSaleCost },
     { field: "Lucro bruto comercial", value: report.summary.grossCommercialProfit },
     { field: "Margem média", value: `${report.summary.averageMargin.toFixed(2)}%` },
     { field: "Total pendente", value: report.summary.totalPending },
     { field: "Aviso de trade-in", value: report.summary.hasTradeIn ? "Há vendas com trade-in neste período. O valor abatido não representa entrada de caixa." : "Sem trade-in no período filtrado." },
-    { field: "Aviso de brindes/adicionais", value: report.summary.hasAdditionalItemsCost ? "Há vendas com brindes/adicionais neste período. Esses custos foram incluídos no custo total da venda." : "Sem custo de brindes/adicionais no período filtrado." },
+    { field: "Aviso de adicionais", value: report.summary.hasAdditionalItemsCost ? "Há vendas com brindes ou upsells neste período. Esses itens foram classificados pelo campo sales_additional_items.type." : "Sem custo de adicionais no período filtrado." },
     { field: "Data de geração", value: report.summary.generatedAt },
     { field: "Observação metodológica", value: report.summary.methodologyNote },
   ])
-  formatWorksheet(sheet, [3, 4, 5, 6, 7, 8, 9, 11])
+  formatWorksheet(sheet, [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14])
 }
 
 function addSalesSheet(workbook: ExcelJS.Workbook, report: SalesReportData) {
@@ -885,7 +945,13 @@ function addSalesSheet(workbook: ExcelJS.Workbook, report: SalesReportData) {
     { header: "Data prevista de recebimento", key: "expectedReceiptDate", width: 24 },
     { header: "Data real de recebimento", key: "actualReceiptDate", width: 22 },
     { header: "Custo do produto principal", key: "mainProductCost", width: 24 },
-    { header: "Custo de brindes/adicionais", key: "additionalItemsCost", width: 26 },
+    { header: "Itens adicionais vinculados", key: "linkedAdditionalItems", width: 44 },
+    { header: "Tipo dos adicionais", key: "additionalItemsTypes", width: 20 },
+    { header: "Custo de brindes", key: "giftItemsCost", width: 18 },
+    { header: "Custo de upsells", key: "upsellItemsCost", width: 18 },
+    { header: "Receita de upsells", key: "upsellItemsRevenue", width: 20 },
+    { header: "Lucro de upsells", key: "upsellItemsProfit", width: 18 },
+    { header: "Custo total de adicionais", key: "additionalItemsCost", width: 24 },
     { header: "Custo total da venda", key: "totalSaleCost", width: 22 },
     { header: "Custo de compra do produto", key: "productPurchaseCost", width: 24 },
     { header: "Frete/custo alocado", key: "allocatedFreightCost", width: 20 },
@@ -895,11 +961,10 @@ function addSalesSheet(workbook: ExcelJS.Workbook, report: SalesReportData) {
     { header: "Teve trade-in?", key: "hasTradeIn", width: 16 },
     { header: "Produto recebido no trade-in, se disponível", key: "tradeInReceivedProduct", width: 36 },
     { header: "Observação do trade-in", key: "tradeInObservation", width: 58 },
-    { header: "Brindes/adicionais vinculados", key: "linkedAdditionalItems", width: 44 },
     { header: "Observações", key: "notes", width: 44 },
   ]
   sheet.addRows(report.rows)
-  formatWorksheet(sheet, [9, 10, 11, 12, 13, 14, 20, 21, 22, 23, 24, 25, 26])
+  formatWorksheet(sheet, [9, 10, 11, 12, 13, 14, 20, 23, 24, 25, 26, 27, 28, 29, 30])
   sheet.getColumn("grossMarginPct").numFmt = "0.00%"
   sheet.eachRow((row, index) => {
     if (index > 1) {
@@ -938,6 +1003,8 @@ function addMethodologySheet(workbook: ExcelJS.Workbook) {
     { criterion: "Trade-in é abatimento comercial e não deve ser confundido com entrada de caixa." },
     { criterion: "Trade-in credit é abatimento comercial e não entrada de caixa. Por isso, o relatório separa valor bruto da venda, valor abatido em trade-in e valor financeiro recebido." },
     { criterion: "Brindes e acessórios entregues junto com a venda compõem o custo real da venda, mesmo quando não são cobrados separadamente do cliente." },
+    { criterion: "sales_additional_items.type = 'free' é Brinde; sales_additional_items.type = 'upsell' é Upsell." },
+    { criterion: "Receita de upsells é apresentada apenas para transparência. A receita bruta comercial já vem de sales.sale_price e não soma upsells novamente." },
     { criterion: "Recebimentos pendentes são separados de valores conciliados/recebidos." },
     { criterion: "financial_account_movements é a fonte para caixa conciliado quando há movimento vinculado." },
     { criterion: "A receita comercial é reconhecida uma vez por venda a partir de sales.sale_price; sale_payments e transactions detalham liquidação financeira." },

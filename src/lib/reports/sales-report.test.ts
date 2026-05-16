@@ -102,9 +102,16 @@ describe("mapSalesReportRows", () => {
 
     assert.equal(line.mainProductCost, 600)
     assert.equal(line.additionalItemsCost, 50)
+    assert.equal(line.giftItemsCost, 50)
+    assert.equal(line.upsellItemsCost, 0)
+    assert.equal(line.upsellItemsRevenue, 0)
+    assert.equal(line.upsellItemsProfit, 0)
+    assert.equal(line.additionalItemsTypes, "Brinde")
     assert.equal(line.totalSaleCost, 650)
     assert.equal(line.grossCommercialProfit, 350)
     assert.equal(report.totals.additionalItemsCostTotal, 50)
+    assert.equal(report.totals.giftItemsCostTotal, 50)
+    assert.equal(report.totals.upsellItemsCostTotal, 0)
     assert.equal(report.totals.productCostTotal, 650)
     assert.equal(report.totals.hasAdditionalItemsCost, true)
   })
@@ -166,6 +173,73 @@ describe("mapSalesReportRows", () => {
     assert.equal(report.totals.tradeInCreditTotal, 300)
     assert.equal(report.totals.totalReceived, 700)
     assert.equal(report.totals.productCostTotal, 650)
+  })
+
+  it("classifica adicional upsell como upsell com receita, custo e lucro próprios", () => {
+    const report = mapSalesReportRows([
+      saleRow({
+        sale_price: 1200,
+        net_amount: 1200,
+        additional_items: [
+          {
+            id: "upsell-1",
+            type: "upsell",
+            name: "iPhone 13 128GB Estelar",
+            cost_price: 300,
+            sale_price: 500,
+            profit: 200,
+          },
+        ],
+        payments: [
+          {
+            id: "payment-1",
+            payment_method: "pix",
+            amount: 1200,
+            status: "received",
+            due_date: "2026-05-16",
+            received_date: "2026-05-16",
+            financial_account_id: "account-1",
+            transaction_id: "transaction-1",
+            financial_account_name: "Conta teste",
+            transaction_status: "paid",
+            reconciled_at: "2026-05-16",
+            movement_id: "movement-1",
+          },
+        ],
+      }),
+    ])
+    const line = report.rows[0]
+
+    assert.equal(line.grossSaleValue, 1200)
+    assert.equal(line.upsellItemsRevenue, 500)
+    assert.equal(line.upsellItemsCost, 300)
+    assert.equal(line.upsellItemsProfit, 200)
+    assert.equal(line.giftItemsCost, 0)
+    assert.equal(line.additionalItemsTypes, "Upsell")
+    assert.match(line.linkedAdditionalItems, /^Upsell:/)
+    assert.equal(line.linkedAdditionalItems.includes("Brinde"), false)
+  })
+
+  it("não duplica receita de upsell quando sales.sale_price já inclui total da venda", () => {
+    const report = mapSalesReportRows([
+      saleRow({
+        sale_price: 1200,
+        net_amount: 1200,
+        additional_items: [
+          {
+            id: "upsell-1",
+            type: "upsell",
+            name: "Acessório pago",
+            cost_price: 200,
+            sale_price: 400,
+            profit: 200,
+          },
+        ],
+      }),
+    ])
+
+    assert.equal(report.totals.grossRevenue, 1200)
+    assert.equal(report.totals.upsellItemsRevenueTotal, 400)
   })
 
   it("não exibe número solto como data real em pagamento pendente", () => {

@@ -19,6 +19,10 @@ type SalesSummary = {
   tradeInCreditTotal: number
   financialReceivedRevenue: number
   mainProductCostTotal: number
+  giftItemsCostTotal: number
+  upsellItemsCostTotal: number
+  upsellItemsRevenueTotal: number
+  upsellItemsProfitTotal: number
   additionalItemsCostTotal: number
   totalSaleCost: number
   productCostTotal: number
@@ -43,12 +47,18 @@ type SalesPreviewRow = {
   tradeInCredit: number
   financialReceivedValue: number
   mainProductCost: number
+  giftItemsCost: number
+  upsellItemsCost: number
+  upsellItemsRevenue: number
+  upsellItemsProfit: number
   additionalItemsCost: number
   totalSaleCost: number
   productTotalCost: number
   grossCommercialProfit: number
   grossMarginPct: number
   hasTradeIn: string
+  linkedAdditionalItems: string
+  additionalItemsTypes: string
   paymentMethod: string
   receivingAccount: string
 }
@@ -86,6 +96,7 @@ type InventoryPreviewRow = {
   grossProfit: number
   grossMarginPct: number
   customer: string
+  saleExitType: string
   observations: string
 }
 
@@ -316,7 +327,11 @@ export default function RelatoriosPage() {
         ["Trade-in abatido", formatBRL(salesSummary.tradeInCreditTotal)],
         ["Receita financeira recebida", formatBRL(salesSummary.financialReceivedRevenue)],
         ["Custo produtos principais", formatBRL(salesSummary.mainProductCostTotal)],
-        ["Custo brindes/adicionais", formatBRL(salesSummary.additionalItemsCostTotal)],
+        ["Custo brindes", formatBRL(salesSummary.giftItemsCostTotal)],
+        ["Custo upsells", formatBRL(salesSummary.upsellItemsCostTotal)],
+        ["Receita upsells", formatBRL(salesSummary.upsellItemsRevenueTotal)],
+        ["Lucro upsells", formatBRL(salesSummary.upsellItemsProfitTotal)],
+        ["Custo adicionais", formatBRL(salesSummary.additionalItemsCostTotal)],
         ["Custo total das vendas", formatBRL(salesSummary.totalSaleCost ?? salesSummary.productCostTotal)],
         ["Lucro bruto comercial", formatBRL(salesSummary.grossCommercialProfit)],
         ["Margem média", `${salesSummary.averageMargin.toFixed(2)}%`],
@@ -452,7 +467,7 @@ export default function RelatoriosPage() {
           ) : null}
           {reportType === "sales" && salesSummary?.hasAdditionalItemsCost ? (
             <div className="mt-3 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-medium text-sky-800">
-              Há vendas com brindes/adicionais neste período. Esses custos foram incluídos no custo total da venda.
+              Há vendas com brindes ou upsells neste período. A classificação usa o campo técnico do item adicional.
             </div>
           ) : null}
         </div>
@@ -492,7 +507,7 @@ function SalesPreviewTable({ rows, loading, previewLimit, totalRows, generatedAt
         {generatedAt ? <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">Gerado em {formatDate(generatedAt)}</span> : null}
       </div>
       <div className="overflow-x-auto">
-        <table className="min-w-[1680px] w-full text-left text-sm">
+        <table className="min-w-[2140px] w-full text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase text-slate-500">
             <tr>
               <th className="px-4 py-3">Data</th>
@@ -504,7 +519,13 @@ function SalesPreviewTable({ rows, loading, previewLimit, totalRows, generatedAt
               <th className="px-4 py-3 text-right">Trade-in</th>
               <th className="px-4 py-3 text-right">Recebido</th>
               <th className="px-4 py-3 text-right">Custo produto</th>
+              <th className="px-4 py-3">Itens adicionais</th>
+              <th className="px-4 py-3">Tipo adicionais</th>
               <th className="px-4 py-3 text-right">Custo brindes</th>
+              <th className="px-4 py-3 text-right">Custo upsells</th>
+              <th className="px-4 py-3 text-right">Receita upsells</th>
+              <th className="px-4 py-3 text-right">Lucro upsells</th>
+              <th className="px-4 py-3 text-right">Custo adicionais</th>
               <th className="px-4 py-3 text-right">Custo total</th>
               <th className="px-4 py-3 text-right">Lucro comercial</th>
               <th className="px-4 py-3 text-right">Margem</th>
@@ -514,9 +535,9 @@ function SalesPreviewTable({ rows, loading, previewLimit, totalRows, generatedAt
           </thead>
           <tbody className="divide-y divide-slate-100">
             {loading ? (
-              <tr><td colSpan={15} className="px-4 py-10 text-center text-slate-500"><span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" />Carregando prévia...</span></td></tr>
+              <tr><td colSpan={21} className="px-4 py-10 text-center text-slate-500"><span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" />Carregando prévia...</span></td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={15} className="px-4 py-10 text-center text-slate-500">Nenhuma venda encontrada para os filtros atuais.</td></tr>
+              <tr><td colSpan={21} className="px-4 py-10 text-center text-slate-500">Nenhuma venda encontrada para os filtros atuais.</td></tr>
             ) : rows.map((row) => (
               <tr key={row.saleId} className="align-top hover:bg-slate-50/80">
                 <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-700">{formatDate(row.saleDate)}</td>
@@ -528,6 +549,12 @@ function SalesPreviewTable({ rows, loading, previewLimit, totalRows, generatedAt
                 <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-amber-700">{row.tradeInCredit > 0 ? formatBRL(row.tradeInCredit) : "—"}</td>
                 <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-emerald-700">{formatBRL(row.financialReceivedValue)}</td>
                 <td className="whitespace-nowrap px-4 py-3 text-right text-slate-600">{formatBRL(row.mainProductCost)}</td>
+                <td className="min-w-[260px] px-4 py-3 text-slate-600">{row.linkedAdditionalItems}</td>
+                <td className="px-4 py-3 text-slate-600">{row.additionalItemsTypes}</td>
+                <td className="whitespace-nowrap px-4 py-3 text-right text-slate-600">{formatBRL(row.giftItemsCost)}</td>
+                <td className="whitespace-nowrap px-4 py-3 text-right text-slate-600">{formatBRL(row.upsellItemsCost)}</td>
+                <td className="whitespace-nowrap px-4 py-3 text-right text-slate-600">{formatBRL(row.upsellItemsRevenue)}</td>
+                <td className={cn("whitespace-nowrap px-4 py-3 text-right font-semibold", row.upsellItemsProfit >= 0 ? "text-emerald-600" : "text-red-600")}>{formatBRL(row.upsellItemsProfit)}</td>
                 <td className="whitespace-nowrap px-4 py-3 text-right text-slate-600">{formatBRL(row.additionalItemsCost)}</td>
                 <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700">{formatBRL(row.totalSaleCost ?? row.productTotalCost)}</td>
                 <td className={cn("whitespace-nowrap px-4 py-3 text-right font-semibold", row.grossCommercialProfit >= 0 ? "text-emerald-600" : "text-red-600")}>{formatBRL(row.grossCommercialProfit)}</td>
@@ -568,6 +595,7 @@ function InventoryPreviewTable({ rows, loading, previewLimit, totalRows, generat
               <th className="px-4 py-3">Status atual</th>
               <th className="px-4 py-3 text-right">Dias</th>
               <th className="px-4 py-3">Venda</th>
+              <th className="px-4 py-3">Tipo de saída</th>
               <th className="px-4 py-3 text-right">Valor venda</th>
               <th className="px-4 py-3 text-right">Lucro</th>
               <th className="px-4 py-3 text-right">Margem</th>
@@ -577,9 +605,9 @@ function InventoryPreviewTable({ rows, loading, previewLimit, totalRows, generat
           </thead>
           <tbody className="divide-y divide-slate-100">
             {loading ? (
-              <tr><td colSpan={16} className="px-4 py-10 text-center text-slate-500"><span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" />Carregando prévia...</span></td></tr>
+              <tr><td colSpan={17} className="px-4 py-10 text-center text-slate-500"><span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" />Carregando prévia...</span></td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={16} className="px-4 py-10 text-center text-slate-500">Nenhum item encontrado para os filtros atuais.</td></tr>
+              <tr><td colSpan={17} className="px-4 py-10 text-center text-slate-500">Nenhum item encontrado para os filtros atuais.</td></tr>
             ) : rows.map((row) => (
               <tr key={row.inventoryId} className="align-top hover:bg-slate-50/80">
                 <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-700">{formatDate(row.entryDate)}</td>
@@ -593,6 +621,7 @@ function InventoryPreviewTable({ rows, loading, previewLimit, totalRows, generat
                 <td className="px-4 py-3 text-slate-600">{row.currentStatus}</td>
                 <td className="whitespace-nowrap px-4 py-3 text-right text-slate-600">{row.daysInStock}</td>
                 <td className="whitespace-nowrap px-4 py-3 text-slate-600">{row.saleDate ? formatDate(row.saleDate) : "—"}</td>
+                <td className="px-4 py-3 font-semibold text-slate-700">{row.saleExitType}</td>
                 <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-navy-900">{row.saleValue > 0 ? formatBRL(row.saleValue) : "—"}</td>
                 <td className={cn("whitespace-nowrap px-4 py-3 text-right font-semibold", row.grossProfit >= 0 ? "text-emerald-600" : "text-red-600")}>{row.saleDate ? formatBRL(row.grossProfit) : "—"}</td>
                 <td className="whitespace-nowrap px-4 py-3 text-right text-slate-600">{row.saleDate ? `${row.grossMarginPct.toFixed(2)}%` : "—"}</td>

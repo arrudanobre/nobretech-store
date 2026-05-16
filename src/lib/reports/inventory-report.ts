@@ -64,6 +64,7 @@ export type InventoryReportLine = {
   saleValue: number
   grossProfit: number
   grossMarginPct: number
+  saleExitType: string
   suggestedPrice: number
   idleCapital: number
   observations: string
@@ -120,6 +121,7 @@ type RawInventoryRow = {
   sale_value: string | number | null
   sale_customer_name: string | null
   sale_item_source: string | null
+  sale_additional_type: string | null
   additional_item_name: string | null
 }
 
@@ -278,6 +280,16 @@ function shouldIncludeLine(line: InventoryReportLine, filters: InventoryReportFi
   return Boolean(filters.status && filters.status !== "all")
 }
 
+function saleExitType(row: RawInventoryRow) {
+  if (row.sale_item_source === "main") return "Venda principal"
+  if (row.sale_item_source === "additional") {
+    if (row.sale_additional_type === "free") return "Brinde"
+    if (row.sale_additional_type === "upsell") return "Upsell"
+    return "Adicional"
+  }
+  return "—"
+}
+
 export function mapInventoryReportRows(rawRows: RawInventoryRow[], filters: InventoryReportFilters, today = todayISO()) {
   const rows = rawRows.map<InventoryReportLine>((row) => {
     const operationalItem: InventoryOperationalItem = {
@@ -336,6 +348,7 @@ export function mapInventoryReportRows(rawRows: RawInventoryRow[], filters: Inve
       saleValue: roundCurrency(saleValue),
       grossProfit: roundCurrency(grossProfit),
       grossMarginPct,
+      saleExitType: saleExitType(row),
       suggestedPrice: roundCurrency(toNumber(row.suggested_price)),
       idleCapital: operationalStock ? costs.totalCost : 0,
       observations: row.sale_item_source === "additional"
@@ -491,6 +504,7 @@ async function getRawInventory(companyId: string, filters: InventoryReportFilter
           s.sale_date::text AS sale_date,
           COALESCE(sai.sale_price, 0) AS sale_value,
           c.full_name AS customer_name,
+          sai.type AS additional_type,
           sai.name AS additional_item_name
         FROM sales_additional_items sai
         JOIN sales s ON s.id = sai.sale_id AND s.company_id = sai.company_id
@@ -542,6 +556,7 @@ async function getRawInventory(companyId: string, filters: InventoryReportFilter
           WHEN ads.sale_id IS NOT NULL THEN 'additional'
           ELSE NULL
         END AS sale_item_source,
+        ads.additional_type AS sale_additional_type,
         ads.additional_item_name
       FROM inventory i
       LEFT JOIN product_catalog pc ON pc.id = i.catalog_id
@@ -659,6 +674,7 @@ function addDetailedSheet(workbook: ExcelJS.Workbook, report: InventoryReportDat
     { header: "Valor de venda", key: "saleValue", width: 18 },
     { header: "Lucro bruto", key: "grossProfit", width: 18 },
     { header: "Margem %", key: "grossMarginPct", width: 14 },
+    { header: "Tipo de saída", key: "saleExitType", width: 18 },
     { header: "Dias em estoque", key: "daysInStock", width: 18 },
     { header: "Observações", key: "observations", width: 44 },
   ]
@@ -679,6 +695,7 @@ function addSoldSheet(workbook: ExcelJS.Workbook, report: InventoryReportData) {
     { header: "Valor de venda", key: "saleValue", width: 18 },
     { header: "Lucro bruto", key: "grossProfit", width: 18 },
     { header: "Margem %", key: "grossMarginPct", width: 14 },
+    { header: "Tipo de saída", key: "saleExitType", width: 18 },
     { header: "Dias em estoque", key: "daysInStock", width: 18 },
     { header: "Cliente", key: "customer", width: 28 },
     { header: "ID da venda", key: "saleId", width: 38 },
@@ -719,6 +736,7 @@ function addMethodologySheet(workbook: ExcelJS.Workbook) {
     { criterion: "Dias em estoque para vendidos = data da venda menos data de entrada." },
     { criterion: "Dias em estoque para itens não vendidos = data atual menos data de entrada." },
     { criterion: "Itens vendidos como adicionais/brindes são identificados por sales_additional_items.product_id quando há vínculo técnico." },
+    { criterion: "Tipo de saída usa sales_additional_items.type: free = Brinde; upsell = Upsell; item principal = Venda principal." },
     { criterion: "Brindes podem aparecer com venda R$ 0,00 e lucro bruto individual negativo, pois houve custo para a Nobretech sem cobrança separada do cliente." },
     { criterion: "O relatório é gerencial/contábil e deve ser validado pelo contador." },
   ])

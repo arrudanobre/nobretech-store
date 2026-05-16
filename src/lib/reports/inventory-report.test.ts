@@ -52,6 +52,7 @@ function inventoryRow(overrides: Partial<RawInventoryRow> = {}): RawInventoryRow
     sale_value: null,
     sale_customer_name: null,
     sale_item_source: null,
+    sale_additional_type: null,
     additional_item_name: null,
     ...overrides,
   }
@@ -181,5 +182,43 @@ describe("mapInventoryReportRows", () => {
     assert.equal(report.summary.inStockItems, 0)
     assert.equal(report.summary.inventoryCapital, 0)
     assert.equal(report.rows.every((row) => row.isOperationalStock === false), true)
+  })
+
+  it("item vendido via additional free aparece como Brinde", () => {
+    const report = mapInventoryReportRows([
+      inventoryRow({
+        sale_id: "sale-1",
+        sale_date: "2026-05-10",
+        sale_value: 0,
+        sale_item_source: "additional",
+        sale_additional_type: "free",
+        additional_item_name: "Película de brinde",
+      }),
+    ], filters, "2026-05-16")
+
+    assert.equal(report.rows[0].saleExitType, "Brinde")
+    assert.equal(report.rows[0].product, "Película de brinde")
+    assert.equal(report.rows[0].grossProfit, -1000)
+  })
+
+  it("item vendido via additional upsell aparece como Upsell", () => {
+    const report = mapInventoryReportRows([
+      inventoryRow({
+        catalog_model: "iPhone 13",
+        catalog_variant: "128GB",
+        catalog_storage: "128GB",
+        catalog_color: "Estelar",
+        sale_id: "sale-1",
+        sale_date: "2026-05-10",
+        sale_value: 2100,
+        sale_item_source: "additional",
+        sale_additional_type: "upsell",
+        additional_item_name: "iPhone 13 128GB Estelar",
+      }),
+    ], filters, "2026-05-16")
+
+    assert.equal(report.rows[0].saleExitType, "Upsell")
+    assert.equal(report.rows[0].product, "iPhone 13 128GB Estelar")
+    assert.notEqual(report.rows[0].saleExitType, "Brinde")
   })
 })
