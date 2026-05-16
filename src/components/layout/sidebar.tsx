@@ -3,7 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import Link from "next/link"
-import { usePathname } from "next/navigation"
+import { usePathname, useSearchParams } from "next/navigation"
 import { SignOutButton } from "@clerk/nextjs"
 import { cn } from "@/lib/utils"
 import { BarChart3, Package, ShoppingCart, ShieldCheck, AlertTriangle, FileText, Users, Truck, DollarSign, Settings, Calculator, ListChecks, ChevronDown, Menu, X, LogOut, Mail, BrainCircuit, Megaphone, FileSpreadsheet, type LucideIcon } from "lucide-react"
@@ -90,7 +90,16 @@ const staticNavItems: (Omit<NavItem, "badge"> & { badge?: { count?: number; defa
       { label: "Plano de DRE", href: "/financeiro/plano-dre", permission: "finance.dre" },
     ]
   },
-  { label: "Relatórios", href: "/financeiro/relatorios", icon: FileSpreadsheet, permission: "finance.view" },
+  {
+    label: "Relatórios",
+    href: "/financeiro/relatorios",
+    icon: FileSpreadsheet,
+    permission: "finance.view",
+    items: [
+      { label: "Financeiro", href: "/financeiro/relatorios?tipo=vendas" },
+      { label: "Relatório de Estoque", href: "/financeiro/relatorios?tipo=estoque" },
+    ],
+  },
   { label: "Laudos", href: "/historico", icon: FileText },
   { label: "Configurações", href: "/configuracoes", icon: Settings, permission: "settings.view" },
 ]
@@ -123,6 +132,12 @@ function filterNavItems(role: UserRole): NavItem[] {
       ...item,
       items: item.items?.filter((subItem) => !subItem.permission || canAccess(role, subItem.permission)),
     })) as NavItem[]
+}
+
+function hrefIsActive(href: string, pathname: string | null, search: string) {
+  const [path, query] = href.split("?")
+  if (pathname !== path) return false
+  return query ? search === query : true
 }
 
 export function NobretechLogoMark() {
@@ -159,6 +174,8 @@ export function NobretechLogoMark() {
 
 export function Sidebar({ currentUser }: { currentUser: DashboardUser }) {
   const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const currentSearch = searchParams.toString()
   const [collapsed, setCollapsed] = useState(false)
   const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({
     "/financeiro": pathname?.startsWith("/financeiro")
@@ -271,7 +288,7 @@ export function Sidebar({ currentUser }: { currentUser: DashboardUser }) {
                 {!collapsed && hasItems && isOpen && (
                   <ul className="mt-1 ml-9 space-y-1 pr-2">
 	                    {item.items!.map((subItem) => {
-	                      const isSubActive = pathname === subItem.href
+	                      const isSubActive = hrefIsActive(subItem.href, pathname, currentSearch)
                       const isSubItemDisabled = subItem.disabled === true
 	                      if (isSubItemDisabled) {
 	                        return (
@@ -322,6 +339,8 @@ export function Sidebar({ currentUser }: { currentUser: DashboardUser }) {
 
 export function MobileNav({ isOpen, onOpenChange, currentUser }: { isOpen: boolean; onOpenChange: (open: boolean) => void; currentUser: DashboardUser }) {
   const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const currentSearch = searchParams.toString()
   const isOrionPage = pathname?.startsWith("/orion")
   const { counts } = useBadgeCount()
   const brand = companyBrandParts(currentUser.companyName)
@@ -442,7 +461,7 @@ export function MobileNav({ isOpen, onOpenChange, currentUser }: { isOpen: boole
 	                              onClick={() => onOpenChange(false)}
 	                              className={cn(
                                 "block rounded-lg px-3 py-2 text-xs",
-                                pathname === subItem.href ? "bg-royal-50 text-royal-600 font-medium" : "text-gray-500 hover:bg-gray-50"
+                                hrefIsActive(subItem.href, pathname, currentSearch) ? "bg-royal-50 text-royal-600 font-medium" : "text-gray-500 hover:bg-gray-50"
                               )}
 	                            >
 	                              {subItem.label}
