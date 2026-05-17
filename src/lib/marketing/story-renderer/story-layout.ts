@@ -86,6 +86,31 @@ export const TAG_COLORS: Record<string, { bg: string; fg: string }> = {
   color:              { bg: "#222222", fg: "#d8d8d8" },
 }
 
+// ─── Template variant colours ─────────────────────────────────────────────────
+// Destaque Pesado
+export const DESTAQUE_ACCENT = "#D85A30"          // same orange, hero use
+export const DESTAQUE_NAME_COLOR = "#ffffff"
+
+// Oferta Relâmpago
+export const RELAMPAGO_BG = "#0c0500"             // very dark warm
+export const RELAMPAGO_CARD_BG = "#111111"
+export const RELAMPAGO_RED = "#d63f2f"
+export const RELAMPAGO_ACCENT = "#f16a3d"
+export const RELAMPAGO_CARD_BORDER = "#2a1c18"
+export const RELAMPAGO_BAND_BG = "#1a0d0a"
+
+// Premium
+export const PREMIUM_BG = "#080808"
+export const PREMIUM_CARD_BG = "#0e0e0e"
+export const PREMIUM_CARD_BORDER = "#1a1a1a"
+export const PREMIUM_NAME_COLOR = "#f0e6d3"       // warm cream
+export const PREMIUM_ACCENT = "#D85A30"
+export const PREMIUM_TEXT_SEC = "#999999"
+
+// Mosaico
+export const MOSAICO_CELL_GAP = 24
+export const MOSAICO_CELL_CORNER = 20
+
 // ─── Character-width estimators (Arial bold) ──────────────────────────────────
 // These are conservative approximations; slightly under-counting is safer (avoids overflow).
 const CHAR_W_NAME = 0.56      // bold, mixed

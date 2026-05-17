@@ -103,6 +103,122 @@ const iPhone13Midnight: ProductFacts = makeFact({
 
 const bothFacts = [iPad128Rosa, iPhone13Midnight]
 
+const visualValidationFacts: ProductFacts[] = [
+  makeFact({
+    id: "iphone13-rosa",
+    name: "iPhone 13",
+    storage: "128GB",
+    color: "Rosa",
+    grade: "Lacrado",
+    battery_health: 100,
+    quantity: 1,
+    basePrice: 2900,
+    disclosurePrice: 2799,
+    discount: { amount: 101, percent: 3.5 },
+    installment: { count: 18, text: "18x de R$ 184,39", perInstallment: 184.39, total: 3319.02, fee: 0, hasFee: false },
+    warrantyLabel: "Garantia Nobretech 6 meses",
+    warrantySource: "manual",
+    isPrimary: true,
+  }),
+  makeFact({
+    id: "iphone13-midnight-v2",
+    name: "iPhone 13",
+    storage: "128GB",
+    color: "Midnight",
+    grade: "Lacrado",
+    battery_health: 100,
+    quantity: 2,
+    basePrice: 2900,
+    disclosurePrice: 2900,
+    installment: { count: 18, text: "18x de R$ 191,05", perInstallment: 191.05, total: 3438.9, fee: 0, hasFee: false },
+    warrantyLabel: "Garantia Nobretech 6 meses",
+    warrantySource: "manual",
+  }),
+  makeFact({
+    id: "ipad11-prateado",
+    name: "iPad 11",
+    storage: "128GB",
+    color: "Prateado",
+    grade: "Lacrado",
+    battery_health: 100,
+    quantity: 1,
+    basePrice: 2750,
+    disclosurePrice: 2750,
+    warrantyLabel: "Garantia Apple 1 ano",
+    warrantySource: "inventory",
+  }),
+  makeFact({
+    id: "ipad11-rosa",
+    name: "iPad 11",
+    storage: "128GB",
+    color: "Rosa",
+    grade: "Lacrado",
+    battery_health: 100,
+    quantity: 1,
+    basePrice: 2750,
+    disclosurePrice: 2750,
+    warrantyLabel: "Garantia Apple 1 ano",
+    warrantySource: "inventory",
+  }),
+]
+
+const publicConditionFacts: ProductFacts[] = [
+  makeFact({
+    id: "seminovo-aplus",
+    name: "iPhone 13",
+    storage: "128GB",
+    color: "Rosa",
+    grade: "A+",
+    battery_health: 100,
+    quantity: 1,
+    basePrice: 2900,
+    disclosurePrice: 2799,
+    discount: { amount: 101, percent: 3.5 },
+    installment: { count: 18, text: "18x de R$ 184,39", perInstallment: 184.39, total: 3319.02, fee: 0, hasFee: false },
+    warrantyLabel: "Garantia Nobretech 6 meses",
+    warrantySource: "manual",
+    isPrimary: true,
+  }),
+  makeFact({
+    id: "lacrado-midnight",
+    name: "iPhone 13",
+    storage: "128GB",
+    color: "Midnight",
+    grade: "Lacrado",
+    battery_health: 100,
+    quantity: 1,
+    basePrice: 2900,
+    disclosurePrice: 2900,
+    installment: { count: 18, text: "18x de R$ 191,05", perInstallment: 191.05, total: 3438.9, fee: 0, hasFee: false },
+    warrantyLabel: "Garantia Nobretech 6 meses",
+    warrantySource: "manual",
+  }),
+  makeFact({
+    id: "seminovo-a",
+    name: "iPhone 14",
+    storage: "128GB",
+    grade: "A",
+    battery_health: 91,
+    quantity: 2,
+    basePrice: 3200,
+    disclosurePrice: 2990,
+    warrantyLabel: "Garantia Nobretech 6 meses",
+    warrantySource: "manual",
+  }),
+  makeFact({
+    id: "seminovo-b",
+    name: "iPhone 12",
+    storage: "128GB",
+    grade: "B-",
+    battery_health: 88,
+    quantity: 1,
+    basePrice: 2200,
+    disclosurePrice: 1990,
+    warrantyLabel: "Garantia Nobretech 6 meses",
+    warrantySource: "manual",
+  }),
+]
+
 const realStoryCase: ProductFacts[] = [
   makeFact({
     id: "real-iphone13",
@@ -500,6 +616,208 @@ const realStoryCase: ProductFacts[] = [
   assert.deepEqual(vitrineDiscounts, ["8% off"], `vitrine discount uses recalculated percent: ${vitrineDiscounts.join(",")}`)
   assert.deepEqual(highlightDiscounts, ["8% off"], `highlight discount uses same percent: ${highlightDiscounts.join(",")}`)
   assert.ok(!/1% off/.test(vitrineSvg + highlightSvg), "stale discount.percent is not rendered")
+}
+
+// ─── Template V2: Destaque Pesado hero product ───────────────────────────────
+
+{
+  const stories = buildDynamicStories(visualValidationFacts, BASE_STRATEGY)
+  const vitrine = stories.find((s) => s.kind === "vitrine")!
+  const svg = renderStoryToSVG({ ...vitrine, variant: "destaque" })
+  assert.ok(/iPhone 13/.test(svg), "destaque shows the primary product name")
+  assert.ok(/128GB/.test(svg), "destaque keeps product detail visible")
+  assert.ok(/R\$\s*2\.799,00/.test(svg), "destaque shows current price")
+  assert.ok(/R\$\s*2\.900,00/.test(svg), "destaque shows struck base price when there is a real drop")
+  assert.ok(/Lacrado/.test(svg), "destaque shows public condition as differentiator")
+  assert.ok(!/Bateria 100%|Bat\. 100%/.test(svg), "destaque hides battery for sealed products")
+  assert.ok(/Me chama/.test(svg), "destaque renders CTA")
+  assert.ok(/PRODUTO HERÓI/.test(svg), "destaque contains explicit hero structure")
+  assert.ok(/stroke="#242424"/.test(svg), "destaque connects product and price with a subtle divider")
+  assert.ok(!/Preço a confirmar/.test(svg), "destaque does not create an empty price block when product has price")
+}
+
+{
+  const stories = buildDynamicStories(visualValidationFacts, BASE_STRATEGY)
+  const vitrine = stories.find((s) => s.kind === "vitrine")!
+  const svg = renderStoryToSVG({ ...vitrine, variant: "destaque" })
+  const firstPrice = svg.search(/R\$\s*2\.799,00/)
+  const firstProduct = svg.indexOf("iPhone 13")
+  assert.ok(firstProduct >= 0 && firstProduct < firstPrice, "destaque does not show price before product name")
+}
+
+// ─── Template V2: Oferta Relâmpago restrained urgency ────────────────────────
+
+{
+  const stories = buildDynamicStories(visualValidationFacts, { ...BASE_STRATEGY, urgencyLevel: "high" })
+  const vitrine = stories.find((s) => s.kind === "vitrine")!
+  const svg = renderStoryToSVG({ ...vitrine, variant: "relampago" })
+  assert.ok(/OFERTA RELÂMPAGO/.test(svg), "relampago keeps a discreet urgency band")
+  assert.ok(/CONDIÇÃO RÁPIDA/.test(svg), "relampago adds offer hierarchy beyond classic cards")
+  assert.ok(/iPhone 13/.test(svg), "relampago does not hide product")
+  assert.ok(/R\$\s*2\.799,00/.test(svg), "relampago keeps price visible")
+  assert.ok(/Me chama/.test(svg), "relampago keeps CTA visible")
+  assert.ok(!/só hoje|so hoje|última chance/i.test(svg), "relampago does not invent false urgency")
+}
+
+// ─── Template V2: Premium keeps core data ────────────────────────────────────
+
+{
+  const stories = buildDynamicStories([visualValidationFacts[0]], BASE_STRATEGY)
+  const vitrine = stories.find((s) => s.kind === "vitrine")!
+  const classicSvg = renderStoryToSVG(vitrine)
+  const premiumSvg = renderStoryToSVG({ ...vitrine, variant: "premium" })
+  assert.ok(classicSvg.includes("iPhone 13"), "classic contains product")
+  assert.ok(premiumSvg.includes("iPhone 13"), "premium contains product")
+  assert.ok(/R\$\s*2\.799,00/.test(classicSvg), "classic contains price")
+  assert.ok(/R\$\s*2\.799,00/.test(premiumSvg), "premium contains price")
+  assert.ok(classicSvg.includes("Garantia Nobretech"), "classic contains warranty")
+  assert.ok(premiumSvg.includes("Garantia Nobretech"), "premium contains warranty")
+  assert.ok(classicSvg.includes("Me chama"), "classic contains CTA")
+  assert.ok(premiumSvg.includes("Me chama"), "premium contains CTA")
+}
+
+// ─── Public condition language: no technical grade in story SVGs ─────────────
+
+{
+  const stories = buildDynamicStories(publicConditionFacts, { ...BASE_STRATEGY, addHighlightStory: true })
+  const vitrines = stories.filter((s) => s.kind === "vitrine")
+  const vitrine = {
+    ...vitrines[0],
+    vitrineProducts: vitrines.flatMap((s) => s.vitrineProducts ?? []),
+  }
+  const variantSvgs = [
+    ...stories.map((story) => renderStoryToSVG(story)),
+    renderStoryToSVG({ ...vitrine, variant: "destaque" }),
+    renderStoryToSVG({ ...vitrine, variant: "relampago" }),
+    renderStoryToSVG({ ...vitrine, variant: "premium" }),
+    renderStoryToSVG({ ...vitrine, variant: "mosaico" }),
+  ].join("\n")
+
+  assert.ok(!/\bGrade\s*[A-C][+-]?\b/i.test(variantSvgs), "story SVGs never expose Grade A/A+/B/B-")
+  assert.ok(!/\bCondição\s*[A-C][+-]?\b/i.test(variantSvgs), "story SVGs never expose technical condition labels")
+  assert.ok(/Seminovo/.test(variantSvgs), "seminovo products render as Seminovo")
+  assert.ok(/Lacrado/.test(variantSvgs), "sealed products render as Lacrado")
+  assert.ok(/Bat\. 100%|Bateria 100%/.test(variantSvgs), "battery still appears")
+  assert.ok(/Garantia Nobretech/.test(variantSvgs), "warranty still appears")
+}
+
+{
+  const sealedProduct = makeFact({
+    id: "sealed-only",
+    name: "iPhone 13",
+    storage: "128GB",
+    color: "Midnight",
+    grade: "Lacrado",
+    battery_health: 100,
+    quantity: 1,
+    disclosurePrice: 2900,
+    warrantyLabel: "Garantia Apple 1 ano",
+    isPrimary: true,
+  })
+  const stories = buildDynamicStories([sealedProduct], { ...BASE_STRATEGY, addHighlightStory: true })
+  const vitrine = stories.find((s) => s.kind === "vitrine")!
+  const allSvg = [
+    ...stories.map((story) => renderStoryToSVG(story)),
+    renderStoryToSVG({ ...vitrine, variant: "destaque" }),
+    renderStoryToSVG({ ...vitrine, variant: "relampago" }),
+    renderStoryToSVG({ ...vitrine, variant: "premium" }),
+  ].join("\n")
+  assert.ok(/Lacrado/.test(allSvg), "sealed product keeps Lacrado public condition")
+  assert.ok(!/Bat\.\s*100%|Bateria\s*100%/.test(allSvg), "sealed product never renders battery in public story SVGs")
+  assert.ok(/R\$\s*2\.900,00/.test(allSvg), "sealed product keeps price")
+  assert.ok(/Garantia Apple/.test(allSvg), "sealed product keeps warranty")
+  assert.ok(/Me chama/.test(allSvg), "sealed product keeps CTA")
+}
+
+{
+  const usedProduct = makeFact({
+    id: "used-only",
+    name: "iPhone 13",
+    storage: "128GB",
+    color: "Rosa",
+    grade: "A+",
+    battery_health: 88,
+    quantity: 1,
+    disclosurePrice: 2799,
+    warrantyLabel: "Garantia Nobretech 6 meses",
+    isPrimary: true,
+  })
+  const stories = buildDynamicStories([usedProduct], BASE_STRATEGY)
+  const vitrineSvg = renderStoryToSVG(stories.find((s) => s.kind === "vitrine")!)
+  assert.ok(/Seminovo/.test(vitrineSvg), "used product renders Seminovo")
+  assert.ok(/Bat\.\s*88%|Bateria\s*88%/.test(vitrineSvg), "used product keeps real battery")
+  assert.ok(!/Grade\s*A\+/.test(vitrineSvg), "used product does not expose Grade A+")
+}
+
+// ─── Template V2: Mosaico 2x2 guards ─────────────────────────────────────────
+
+{
+  const stories = buildDynamicStories(visualValidationFacts, { ...BASE_STRATEGY, addHighlightStory: false })
+  const vitrines = stories.filter((s) => s.kind === "vitrine")
+  const vitrine = {
+    ...vitrines[0],
+    vitrineProducts: vitrines.flatMap((s) => s.vitrineProducts ?? []),
+  }
+  const svg = renderStoryToSVG({ ...vitrine, variant: "mosaico" })
+  assert.ok(svg.includes("iPhone 13"), "4-product mosaico contains iPhone")
+  assert.ok(svg.includes("iPad 11"), "4-product mosaico contains iPad")
+  assert.ok(/R\$\s*2\.799,00/.test(svg), "4-product mosaico contains discounted price")
+  assert.ok(/R\$\s*2\.900,00/.test(svg), "4-product mosaico contains full price")
+  assert.ok(/R\$\s*2\.750,00/.test(svg), "4-product mosaico contains iPad price")
+  assert.ok(!/>\+<|>\+/.test(svg), "4-product mosaico has no plus placeholder")
+  assert.ok(/Lacrado/.test(svg), "4-product mosaico shows sealed public condition")
+  assert.ok(!/Bat\.\s*100%|Bateria\s*100%/.test(svg), "4-product mosaico hides battery for sealed products")
+}
+
+{
+  const stories = buildDynamicStories(visualValidationFacts.slice(0, 3), { ...BASE_STRATEGY, addHighlightStory: false })
+  const vitrines = stories.filter((s) => s.kind === "vitrine")
+  const vitrine = {
+    ...vitrines[0],
+    vitrineProducts: vitrines.flatMap((s) => s.vitrineProducts ?? []),
+  }
+  const svg = renderStoryToSVG({ ...vitrine, variant: "mosaico" })
+  assert.ok(/width="952"/.test(svg), "3-product mosaico uses one wide filled card")
+  assert.ok(/3 opções disponíveis/.test(svg), "3-product mosaico has its own catalog headline")
+  assert.ok(/iPhone 13/.test(svg) && /iPad 11/.test(svg) && /R\$\s*2\.750,00/.test(svg), "3-product mosaico renders 3 filled cells")
+  assert.ok(!/>\+<|>\+/.test(svg), "3-product mosaico has no empty plus cell")
+}
+
+{
+  const stories = buildDynamicStories(publicConditionFacts.slice(0, 3), { ...BASE_STRATEGY, addHighlightStory: false })
+  const vitrines = stories.filter((s) => s.kind === "vitrine")
+  const vitrine = {
+    ...vitrines[0],
+    vitrineProducts: vitrines.flatMap((s) => s.vitrineProducts ?? []),
+  }
+  const svg = renderStoryToSVG({ ...vitrine, variant: "mosaico" })
+  assert.ok(/OFERTA/.test(svg), "mosaico flags discounted products with offer label")
+  assert.ok(/De R\$\s*2\.900,00/.test(svg), "mosaico shows struck previous price for real price drop")
+  assert.ok(/R\$\s*2\.799,00/.test(svg), "mosaico keeps current price strong")
+  assert.ok(/Seminovo/.test(svg), "mosaico shows public condition for used product")
+  assert.ok(/Bat\.\s*100%|Bateria\s*100%/.test(svg), "mosaico can keep battery for seminovo product")
+  assert.ok(!/3% off|3\.5% off/i.test(svg), "mosaico does not show weak percent discount")
+}
+
+{
+  const stories = buildDynamicStories(visualValidationFacts.slice(0, 2), { ...BASE_STRATEGY, addHighlightStory: false })
+  const vitrine = stories.find((s) => s.kind === "vitrine")!
+  const svg = renderStoryToSVG({ ...vitrine, variant: "mosaico" })
+  assert.ok(/NOBRETECH/.test(svg), "2-product mosaico fallback still renders")
+  assert.ok(!/>\+<|>\+/.test(svg), "2-product mosaico fallback has no plus placeholder")
+  assert.ok(!/width="464" height=/.test(svg), "2-product mosaico does not render 2x2 cells")
+}
+
+{
+  const stories = buildDynamicStories(visualValidationFacts, { ...BASE_STRATEGY, addHighlightStory: false })
+  const allSvg = stories.flatMap((story) => [
+    renderStoryToSVG(story),
+    renderStoryToSVG({ ...story, variant: "destaque" }),
+    renderStoryToSVG({ ...story, variant: "relampago" }),
+    renderStoryToSVG({ ...story, variant: "premium" }),
+  ]).join("\n")
+  assert.ok(!/menor preço do mercado/i.test(allSvg), "templates do not invent market-lowest-price claims")
+  assert.ok(!/IMEI verificado/i.test(allSvg), "templates do not invent IMEI verification")
 }
 
 // ─── Test: highlight/card product names preserve commercial variants ─────────

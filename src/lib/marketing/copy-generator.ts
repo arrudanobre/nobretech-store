@@ -172,6 +172,9 @@ export interface VitrineItem {
 
 export type StoryKind = "vitrine" | "highlight" | "cta" | "trust"
 
+/** Visual style applied on top of the story kind. Defaults to "classic". */
+export type StoryVariant = "classic" | "destaque" | "relampago" | "premium" | "mosaico"
+
 /**
  * Visual density of a vitrine story. Drives both how many products fit per
  * page (3/4/5) and how compactly each card renders. Picked from the product
@@ -182,6 +185,8 @@ export type DensityMode = "detailed" | "standard" | "compact"
 export interface StoryData {
   /** Logical role of this story slide. Drives label, layout, AI mapping. */
   kind: StoryKind
+  /** Visual template applied to this story. Overrides default layout when set. */
+  variant?: StoryVariant
   /** Label used by the UI (ex: "Vitrine 1/2", "Destaque", "Fechamento"). */
   label: string
   /** Pagination metadata when `kind === "vitrine"`. */
@@ -455,8 +460,7 @@ function buildHighlightProductName(f: ProductFacts): string {
  * in the name. Pure fact-derived, never invented.
  */
 function buildStoryProductSubtitle(f: ProductFacts): string {
-  if (f.grade && f.grade !== "Lacrado") return conditionLabel(f.grade)
-  if (f.grade === "Lacrado") return "Lacrado"
+  if (f.grade) return conditionLabel(f.grade)
   if (f.battery_health != null) return `Bateria ${f.battery_health}%`
   if (f.gifts) return "Com kit incluso"
   return "Disponível agora"
@@ -506,7 +510,7 @@ export function buildProductFacts(draft: ProductDraft): ProductFacts {
   const deterministicTitle = productDisplayName({ name: p.name, storage: p.storage, color: p.color })
   const deterministicDescription = [
     p.grade ? conditionLabel(p.grade) : null,
-    p.battery_health != null ? `bateria ${p.battery_health}%` : null,
+    p.grade !== "Lacrado" && p.battery_health != null ? `bateria ${p.battery_health}%` : null,
     draft.warrantyLabel.trim() || null,
     draft.gifts.trim() ? `com ${draft.gifts.trim()}` : null,
   ].filter(Boolean).join(", ")
@@ -514,7 +518,7 @@ export function buildProductFacts(draft: ProductDraft): ProductFacts {
     ? `desconto de ${formatBRL(discount.amount)}`
     : draft.gifts.trim()
     ? `kit incluso: ${draft.gifts.trim()}`
-    : p.battery_health != null
+    : p.grade !== "Lacrado" && p.battery_health != null
     ? `bateria ${p.battery_health}%`
     : p.grade
     ? conditionLabel(p.grade)
@@ -558,9 +562,9 @@ function compactWarrantyLabel(label: string): string {
 function buildTags(facts: ProductFacts): StoryTag[] {
   const tags: StoryTag[] = []
   if (facts.grade) {
-    tags.push({ type: "grade", label: facts.grade === "Lacrado" ? "Lacrado" : `Grade ${facts.grade}` })
+    tags.push({ type: "grade", label: conditionLabel(facts.grade) })
   }
-  if (facts.battery_health != null) {
+  if (!isSealedProduct(facts) && facts.battery_health != null) {
     tags.push({ type: "battery", label: `Bateria ${facts.battery_health}%`, shortLabel: `Bat. ${facts.battery_health}%` })
   }
   const commQty = effectiveQuantity(facts)
@@ -582,22 +586,25 @@ function buildTags(facts: ProductFacts): StoryTag[] {
 function conditionLabel(grade: string | null): string {
   if (!grade) return "Produto"
   if (grade === "Lacrado") return "Lacrado"
-  if (grade.startsWith("A")) return `Seminovo Grade ${grade}`
-  return `Condição ${grade}`
+  return "Seminovo"
+}
+
+function isSealedProduct(facts: ProductFacts): boolean {
+  return facts.grade === "Lacrado"
 }
 
 function whatsappConditionLine(f: ProductFacts): string | null {
   if (!f.grade) return null
   if (f.grade === "Lacrado") return "✅ Lacrado"
-  return `✅ Grade ${f.grade}, revisado pela Nobretech`
+  return "✅ Seminovo revisado pela Nobretech"
 }
 
 function buildDetailLines(facts: ProductFacts): string[] {
   const lines: string[] = []
   if (facts.storage) lines.push(facts.storage)
   if (facts.color) lines.push(`Cor: ${facts.color}`)
-  if (facts.battery_health != null) lines.push(`Bateria ${facts.battery_health}%`)
   if (facts.grade) lines.push(conditionLabel(facts.grade))
+  if (!isSealedProduct(facts) && facts.battery_health != null) lines.push(`Bateria ${facts.battery_health}%`)
   if (facts.warrantyLabel) lines.push(facts.warrantyLabel)
   if (facts.gifts) lines.push(`Kit: ${facts.gifts}`)
   if (facts.productNote) lines.push(facts.productNote)
@@ -1359,8 +1366,8 @@ function buildHighlightStory(
   // Deep-dive bullets — the strongest real arguments, NOT a spec dump.
   // Differs from the vitrine card (which is name + price + pills).
   const argueLines: string[] = []
-  if (primary.battery_health != null) argueLines.push(`Bateria ${primary.battery_health}%`)
   if (primary.grade) argueLines.push(conditionLabel(primary.grade))
+  if (!isSealedProduct(primary) && primary.battery_health != null) argueLines.push(`Bateria ${primary.battery_health}%`)
   if (primary.warrantyLabel) argueLines.push(primary.warrantyLabel)
   if (primary.gifts) argueLines.push(`Já sai com ${primary.gifts}`)
   if (primary.discount && primary.basePrice != null && primary.disclosurePrice != null) {
@@ -1561,12 +1568,12 @@ function generateCarousel(facts: ProductFacts[], strategy: GeneralStrategy): Car
       vitrineItems: buildVitrineItems(facts, strategy.objective),
     })
   } else {
-    const specLines = [
-      primary.storage,
-      primary.color && `Cor: ${primary.color}`,
-      primary.battery_health != null && `Bateria ${primary.battery_health}%`,
-      primary.grade && conditionLabel(primary.grade),
-    ].filter(Boolean) as string[]
+	    const specLines = [
+	      primary.storage,
+	      primary.color && `Cor: ${primary.color}`,
+	      primary.grade && conditionLabel(primary.grade),
+	      !isSealedProduct(primary) && primary.battery_health != null && `Bateria ${primary.battery_health}%`,
+	    ].filter(Boolean) as string[]
 
     slides.push({
       index: 2,
@@ -1629,9 +1636,9 @@ function lineForProductWhatsApp(f: ProductFacts, index?: number): string[] {
   const lines: string[] = []
   const prefix = index ? `${index}. ` : ""
   lines.push(`${prefix}*${productDisplayName(f)}*`)
-  if (f.battery_health != null) lines.push(`🔋 Bateria ${f.battery_health}%`)
   const condition = whatsappConditionLine(f)
   if (condition) lines.push(condition)
+  if (!isSealedProduct(f) && f.battery_health != null) lines.push(`🔋 Bateria ${f.battery_health}%`)
   if (f.warrantyLabel) lines.push(`🛡 ${f.warrantyLabel}`)
   if (f.discount && f.basePrice != null && f.disclosurePrice != null) {
     lines.push(`💰 De ~${formatBRL(f.basePrice)}~ por *${formatBRL(f.disclosurePrice)}*`)
@@ -1676,7 +1683,7 @@ function generateWhatsApp(facts: ProductFacts[], strategy: GeneralStrategy): str
   const closingParts: string[] = []
   if (strongest.discount || strongest.battery_health != null || strongest.warrantyLabel) {
     const reasons = [
-      strongest.battery_health != null ? `bateria ${strongest.battery_health}%` : null,
+      !isSealedProduct(strongest) && strongest.battery_health != null ? `bateria ${strongest.battery_health}%` : null,
       strongest.warrantyLabel,
       strongest.discount ? "desconto real" : null,
     ].filter(Boolean)

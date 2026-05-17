@@ -17,9 +17,14 @@ import {
   DIVIDER_COLOR, DISCOUNT_COLOR,
   WARRANTY_COLOR, KIT_COLOR,
   TAG_COLORS,
+  DESTAQUE_NAME_COLOR,
+  RELAMPAGO_BG, RELAMPAGO_CARD_BG, RELAMPAGO_RED, RELAMPAGO_ACCENT, RELAMPAGO_CARD_BORDER, RELAMPAGO_BAND_BG,
+  PREMIUM_BG, PREMIUM_CARD_BG, PREMIUM_CARD_BORDER, PREMIUM_NAME_COLOR, PREMIUM_ACCENT, PREMIUM_TEXT_SEC,
+  MOSAICO_CELL_GAP, MOSAICO_CELL_CORNER,
   wrapText, calcPillWidth,
   calcCardLayout,
   estimateTextWidth,
+  fitPriceFontSize,
 } from "./story-layout"
 
 // ─── SVG primitives ───────────────────────────────────────────────────────────
@@ -71,6 +76,67 @@ function svgText(
 
 function svgCircle(cx: number, cy: number, r: number, fill: string): string {
   return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}"/>`
+}
+
+function buildMosaicShortName(name: string): string {
+  return name
+    .replace(/\((?:[^)]*)\)/g, "")
+    .replace(/\b(geracao|geração)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+function firstTagLabel(item: VitrineItem, type: string): string | null {
+  const tag = item.tags.find((candidate) => candidate.type === type)
+  return tag?.shortLabel ?? tag?.label ?? null
+}
+
+function publicConditionLabel(item: VitrineItem): string | null {
+  if (item.subtitle?.toLowerCase().includes("lacrado")) return "Lacrado"
+  if (item.subtitle?.toLowerCase().includes("seminovo")) return "Seminovo"
+  return null
+}
+
+function primaryCellFeature(item: VitrineItem): string | null {
+  return (
+    publicConditionLabel(item) ||
+    firstTagLabel(item, "battery") ||
+    (item.warrantyLine?.toLowerCase().includes("apple") ? item.warrantyLine : null) ||
+    item.warrantyLine ||
+    firstTagLabel(item, "stock") ||
+    item.kitLine ||
+    item.subtitle ||
+    null
+  )
+}
+
+function compactFeatureLabel(text: string): string {
+  return text
+    .replace(/Bateria\s+/i, "Bat. ")
+    .replace(/Garantia Nobretech\s*/i, "Garantia Nob. ")
+    .replace(/Garantia Apple\s*/i, "Garantia Apple ")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+function mosaicSecondaryFeature(item: VitrineItem): string | null {
+  const battery = firstTagLabel(item, "battery")
+  if (battery && publicConditionLabel(item) === "Seminovo") return battery
+  if (item.warrantyLine?.toLowerCase().includes("apple")) return "Garantia Apple"
+  if (item.warrantyLine) return compactFeatureLabel(item.warrantyLine)
+  return firstTagLabel(item, "stock") || item.kitLine || null
+}
+
+function drawFeaturePill(text: string, x: number, y: number, maxWidth: number): string {
+  const clean = text.replace(/\s+/g, " ").trim()
+  if (!clean) return ""
+  const fontSize = 22
+  const label = clean.length > 28 ? `${clean.slice(0, 25).trim()}...` : clean
+  const w = Math.min(maxWidth, Math.max(148, estimateTextWidth(label, fontSize, 0.54) + 36))
+  return (
+    svgRect(x, y, w, 44, { fill: "#171717", stroke: "#2a2a2a", strokeW: 1, rx: 22 }) +
+    svgText(label, x + w / 2, y + 28, fontSize, { weight: 700, fill: TEXT_SECONDARY, anchor: "middle" })
+  )
 }
 
 // ─── Pill ─────────────────────────────────────────────────────────────────────
@@ -495,13 +561,557 @@ function renderCta(story: StoryData): string {
   return body
 }
 
+// ─── Template: Destaque Pesado ────────────────────────────────────────────────
+// Hero single-product layout. Giant name, bottom-anchored price block.
+
+function renderDestaquePesado(story: StoryData): string {
+  const { badge, headline, productName, price, basePrice, parcel, detailLines = [], ctaMain, footerCtaMain } = story
+  const heroItem = story.vitrineProducts?.find((item) => item.isPrimary) ?? story.vitrineProducts?.[0]
+  const heroName = heroItem?.name ?? productName
+  const heroPrice = heroItem?.price ?? price
+  const heroBasePrice = heroItem?.basePrice ?? basePrice
+  const heroParcel = heroItem?.parcel ?? parcel
+  const heroSubtitle = [
+    heroItem?.subtitle,
+    heroItem ? firstTagLabel(heroItem, "battery") : null,
+  ].filter(Boolean).join(" · ")
+  const heroPills = heroItem
+    ? [
+        heroItem.subtitle,
+        heroItem.warrantyLine,
+        heroItem.tags.find((tag) => tag.type === "battery")?.label,
+        heroItem.tags.find((tag) => tag.type === "stock")?.label,
+        heroItem.kitLine,
+      ].filter((line): line is string => Boolean(line))
+    : []
+  const featureLines = detailLines.length > 0 ? detailLines : heroPills
+
+  let body = ""
+  const { svg: headerSvg, bottomY: afterHeader } = drawHeader(badge || "DESTAQUE", PAD_T)
+  body += headerSvg
+
+  const ctaY = H - PAD_B - CTA_H
+  const heroHeadline =
+    /^Dispon/i.test(headline)
+      ? `${heroName.split(" ").slice(0, 2).join(" ")} pronto pra sair`
+      : headline || "Produto pronto pra sair"
+
+  const headlineFont = 68
+  const headlineLines = wrapText(heroHeadline, CONTENT_W, headlineFont, 2)
+  let y = afterHeader + 54 + headlineFont
+  for (const line of headlineLines) {
+    body += svgText(line, PAD_L, y, headlineFont, { weight: 900, fill: TEXT_PRIMARY })
+    y += 76
+  }
+
+  const stageY = y + 26
+  const stageH = Math.min(ctaY - stageY - 42, 980)
+  body += svgRect(PAD_L, stageY, CONTENT_W, stageH, { fill: "#111111", stroke: "#2b211d", strokeW: 1.8, rx: 40 })
+  body += svgRect(PAD_L, stageY, 10, stageH, { fill: ORANGE, rx: 5 })
+  body += svgRect(PAD_L + 34, stageY + 34, 158, 42, { fill: "#1a1a1a", stroke: "#343434", strokeW: 1, rx: 21 })
+  body += svgText("PRODUTO HERÓI", PAD_L + 113, stageY + 62, 18, { weight: 800, fill: TEXT_SECONDARY, anchor: "middle", letterSpacing: "1.2" })
+
+  const NAME_GIANT = 86
+  const NAME_LH = 96
+  const nameLines = wrapText(heroName || "Produto Nobretech", CONTENT_W - 96, NAME_GIANT, 3)
+  y = stageY + 104
+  for (const line of nameLines) {
+    body += svgText(line, PAD_L + 48, y + NAME_GIANT, NAME_GIANT, { weight: 900, fill: DESTAQUE_NAME_COLOR })
+    y += NAME_LH
+  }
+
+  if (heroSubtitle || story.sub) {
+    const subLines = wrapText(heroSubtitle || story.sub, CONTENT_W - 96, SUB_FONT + 2, 2)
+    y += 10
+    for (const line of subLines) {
+      body += svgText(line, PAD_L + 48, y + SUB_FONT + 2, SUB_FONT + 2, { fill: TEXT_SECONDARY, weight: 700 })
+      y += SUB_FONT + 16
+    }
+  }
+
+  const pillY = Math.min(y + 28, stageY + 500)
+  let pillX = PAD_L + 48
+  for (const line of featureLines.slice(0, 4)) {
+    const clean = line.replace(/^De R\$.*/i, "").trim()
+    if (!clean) continue
+    const pill = drawFeaturePill(clean, pillX, pillY, CONTENT_W - (pillX - PAD_L) - 48)
+    if (!pill) continue
+    body += pill
+    const width = Math.min(CONTENT_W, Math.max(148, estimateTextWidth(clean.slice(0, 28), 22, 0.54) + 36))
+    pillX += width + 12
+    if (pillX > PAD_L + CONTENT_W - 160) break
+  }
+
+  const priceBlockY = Math.min(
+    stageY + stageH - 300,
+    Math.max(pillY + 112, y + 70)
+  )
+  body += svgLine(PAD_L + 48, priceBlockY - 36, PAD_L + CONTENT_W - 48, priceBlockY - 36, { stroke: "#242424", strokeW: 1 })
+
+  if (!heroPrice) {
+    body += svgText("Preço a confirmar", PAD_L + 48, priceBlockY + 64, 56, { weight: 800, fill: TEXT_SECONDARY })
+  } else {
+    const priceFont = fitPriceFontSize(heroPrice, CONTENT_W - 96, 116)
+
+    if (heroBasePrice) {
+      const bpFont = 34
+      const bpY = priceBlockY + bpFont
+      body += svgText(heroBasePrice, PAD_L + 48, bpY, bpFont, { fill: TEXT_MUTED })
+      const bpW = estimateTextWidth(heroBasePrice, bpFont, 0.53)
+      body += svgLine(PAD_L + 48, bpY - bpFont * 0.4, PAD_L + 48 + bpW, bpY - bpFont * 0.4, { stroke: TEXT_MUTED, strokeW: 1.5, opacity: 0.7 })
+    }
+
+    const priceY = priceBlockY + (heroBasePrice ? 42 : 0) + priceFont + 8
+    body += svgText(heroPrice, PAD_L + 48, priceY, priceFont, { weight: 900, fill: ORANGE })
+
+    if (heroParcel) {
+      body += svgText(heroParcel, PAD_L + 52, priceY + PARCEL_FONT + 20, PARCEL_FONT + 4, { fill: TEXT_SECONDARY, weight: 700 })
+    }
+    if (story.discountPercent != null && story.discountPercent > 0) {
+      const discText = `${formatVisualDiscount(story.discountPercent)} off`
+      const discY = priceY + PARCEL_FONT + 20 + (heroParcel ? PARCEL_FONT + 8 : 0) + DISCOUNT_FONT + 8
+      body += svgText(discText, PAD_L + 52, discY, DISCOUNT_FONT + 2, { fill: DISCOUNT_COLOR, weight: 700 })
+    }
+  }
+
+  body += drawCtaButton(ctaMain ?? footerCtaMain ?? "Me chama e eu separo.", PAD_L, ctaY, CONTENT_W)
+
+  return body
+}
+
+// ─── Template: Oferta Relâmpago ───────────────────────────────────────────────
+// Urgency-first layout. Red urgency band, warm-dark background, red card borders.
+
+function renderOfertaRelampago(story: StoryData): string {
+  const { headline, sub, urgencyLine, benefits = [], footerCtaMain, vitrineProducts = [] } = story
+
+  let body = ""
+
+  // NOBRETECH header with "RELÂMPAGO" badge in red
+  const logoY = PAD_T + 40
+  body += svgText("NOBRETECH", PAD_L, logoY, LOGO_FONT, { weight: 800, letterSpacing: "4" })
+
+  const badgeText = "RELÂMPAGO"
+  const badgeW = Math.max(160, estimateTextWidth(badgeText, BADGE_FONT, 0.6) + 48)
+  const badgeTX = W - PAD_R - badgeW
+  const badgeTextX = badgeTX + badgeW / 2
+  const badgeTextY = PAD_T + 2 + BADGE_H / 2 + BADGE_FONT * 0.38
+  body += svgRect(badgeTX, PAD_T + 2, badgeW, BADGE_H, { fill: "#171717", stroke: RELAMPAGO_RED, strokeW: 1.5, rx: BADGE_H / 2 })
+  body += svgText(badgeText, badgeTextX, badgeTextY, BADGE_FONT, { weight: 800, fill: RELAMPAGO_ACCENT, anchor: "middle", letterSpacing: "1" })
+  body += svgLine(PAD_L, PAD_T + DIVIDER_Y_FROM_TOP, W - PAD_R, PAD_T + DIVIDER_Y_FROM_TOP, { stroke: "#241512", strokeW: 1 })
+
+  // Urgency band
+  const bandTop = PAD_T + DIVIDER_Y_FROM_TOP + 22
+  const bandH = 56
+  body += svgRect(0, bandTop, W, bandH, { fill: RELAMPAGO_BAND_BG })
+  const bandTextY = bandTop + bandH / 2 + 14
+  body += svgText("OFERTA RELÂMPAGO", W / 2, bandTextY, 24, { weight: 900, fill: RELAMPAGO_ACCENT, anchor: "middle", letterSpacing: "3" })
+
+  const headlineTop = bandTop + bandH + 20
+
+  // Headline
+  const headLines = wrapText(headline || "Condição rápida de hoje", CONTENT_W, 72, 2)
+  let y = headlineTop + 72
+  for (const line of headLines) {
+    body += svgText(line, PAD_L, y, 72, { weight: 900 })
+    y += 78
+  }
+  y -= 6
+  if (sub) {
+    y += 16
+    body += svgText(sub, PAD_L, y + SUB_FONT, SUB_FONT, { fill: TEXT_SECONDARY, weight: 600 })
+    y = y + SUB_FONT + 8
+  }
+  const cardsTop = y + 30
+  const heroItem = vitrineProducts[0]
+  let cy = cardsTop
+
+  if (heroItem) {
+    const heroH = vitrineProducts.length > 1 ? 470 : 610
+    body += svgRect(PAD_L, cy, CARD_W, heroH, { fill: RELAMPAGO_CARD_BG, stroke: RELAMPAGO_CARD_BORDER, strokeW: 1.5, rx: CARD_CORNER })
+    body += svgRect(PAD_L, cy, CARD_W, 8, { fill: RELAMPAGO_RED, rx: 4 })
+    body += svgText("CONDIÇÃO RÁPIDA", PAD_L + 42, cy + 60, 20, { weight: 900, fill: RELAMPAGO_ACCENT, letterSpacing: "1.4" })
+
+    const contentX = PAD_L + 42
+    const nameLines2 = wrapText(heroItem.name, 500, 54, 2)
+    let ly = cy + 96
+    for (const line of nameLines2) {
+      body += svgText(line, contentX, ly + 54, 54, { weight: 900 })
+      ly += 62
+    }
+    const feature = primaryCellFeature(heroItem)
+    if (feature) {
+      body += drawFeaturePill(compactFeatureLabel(feature), contentX, ly + 12, 360)
+    }
+
+    if (heroItem.price) {
+      const priceX = PAD_L + CARD_W - 44
+      let py = cy + 126
+      if (heroItem.basePrice) {
+        body += svgText(heroItem.basePrice, priceX, py, PRICE_STRUCK_FONT, { fill: TEXT_MUTED, anchor: "end" })
+        const approxW = estimateTextWidth(heroItem.basePrice, PRICE_STRUCK_FONT, 0.53)
+        body += svgLine(priceX - approxW, py - PRICE_STRUCK_FONT * 0.4, priceX, py - PRICE_STRUCK_FONT * 0.4, { stroke: TEXT_MUTED, strokeW: 1.5, opacity: 0.7 })
+        py += 34
+      }
+      const priceFont = fitPriceFontSize(heroItem.price, 330, 82)
+      body += svgText(heroItem.price, priceX, py + priceFont, priceFont, { weight: 900, fill: RELAMPAGO_ACCENT, anchor: "end" })
+      if (heroItem.parcel) {
+        body += svgText(heroItem.parcel, priceX, py + priceFont + PARCEL_FONT + 14, PARCEL_FONT, { fill: TEXT_SECONDARY, anchor: "end", weight: 700 })
+      }
+    }
+    cy += heroH
+  }
+
+  const secondary = vitrineProducts.slice(1, 3)
+  for (const item of secondary) {
+    cy += 18
+    const rowH = 150
+    body += svgRect(PAD_L, cy, CARD_W, rowH, { fill: "#101010", stroke: "#211815", strokeW: 1.2, rx: 24 })
+    const nameLines2 = wrapText(item.name, 480, 34, 2)
+    let ly = cy + 36
+    for (const line of nameLines2) {
+      body += svgText(line, PAD_L + 34, ly + 34, 34, { weight: 800 })
+      ly += 40
+    }
+    const feature = primaryCellFeature(item)
+    if (feature) body += svgText(compactFeatureLabel(feature), PAD_L + 34, cy + rowH - 24, 22, { fill: TEXT_SECONDARY, weight: 600 })
+    if (item.price) {
+      const priceFont = fitPriceFontSize(item.price, 280, 50)
+      body += svgText(item.price, PAD_L + CARD_W - 34, cy + 70, priceFont, { weight: 900, fill: RELAMPAGO_ACCENT, anchor: "end" })
+      if (item.parcel) {
+        body += svgText(item.parcel, PAD_L + CARD_W - 34, cy + 104, 20, { fill: TEXT_SECONDARY, anchor: "end", weight: 600 })
+      }
+    }
+    cy += rowH
+  }
+
+  // Urgency line
+  if (urgencyLine) {
+    cy += 24
+    body += svgText(urgencyLine, PAD_L, cy + META_FONT, META_FONT, { fill: RELAMPAGO_ACCENT, weight: 700 })
+    cy += META_FONT + 8
+  }
+
+  // Benefits + CTA
+  const ctaText = footerCtaMain ?? "Me chama agora!"
+  const ctaY = H - PAD_B - CTA_H
+  if (benefits.length > 0) {
+    const benefitLines = benefits.slice(0, 2)
+    const benefitsH = benefitLines.length * BENEFIT_LINE_H
+    const bY = ctaY - benefitsH - 34
+    let bby = bY
+    for (const line of benefitLines) {
+      body += svgCircle(PAD_L + BENEFIT_DOT, bby + BENEFIT_FONT * 0.65, BENEFIT_DOT, RELAMPAGO_RED)
+      body += svgText(line, PAD_L + BENEFIT_DOT * 2 + 10, bby + BENEFIT_FONT, BENEFIT_FONT, { fill: TEXT_SECONDARY })
+      bby += BENEFIT_LINE_H
+    }
+  }
+
+  // Red CTA button
+  const ctaTextY = ctaY + CTA_H / 2 + CTA_FONT * 0.38
+  body += svgRect(PAD_L, ctaY, CONTENT_W, CTA_H, { fill: RELAMPAGO_RED, rx: CTA_CORNER })
+  body += svgText(ctaText, PAD_L + CONTENT_W / 2, ctaTextY, CTA_FONT, { weight: 900, anchor: "middle" })
+
+  return body
+}
+
+// ─── Template: Premium ────────────────────────────────────────────────────────
+// Spacious, elegant. Warm cream product names, subtle borders, refined feel.
+
+function renderPremium(story: StoryData): string {
+  const { badge, headline, sub, urgencyLine, benefits = [], footerCtaMain, vitrineProducts = [] } = story
+
+  let body = ""
+
+  // Header — slim, no divider line color flash
+  const logoY = PAD_T + 40
+  body += svgText("NOBRETECH", PAD_L, logoY, LOGO_FONT + 2, { weight: 900, letterSpacing: "5" })
+
+  if (badge) {
+    const badgeText = badge.toUpperCase()
+    const badgeW = Math.max(132, estimateTextWidth(badgeText, BADGE_FONT, 0.6) + 44)
+    const badgeTX = W - PAD_R - badgeW
+    const badgeTextX = badgeTX + badgeW / 2
+    const badgeTextY = PAD_T + 2 + BADGE_H / 2 + BADGE_FONT * 0.38
+    body += svgRect(badgeTX, PAD_T + 2, badgeW, BADGE_H, { fill: "#1a1a1a", stroke: PREMIUM_ACCENT, strokeW: 1.5, rx: BADGE_H / 2 })
+    body += svgText(badgeText, badgeTextX, badgeTextY, BADGE_FONT, { weight: 700, fill: PREMIUM_ACCENT, anchor: "middle", letterSpacing: "1" })
+  }
+
+  body += svgLine(PAD_L, PAD_T + DIVIDER_Y_FROM_TOP, W - PAD_R, PAD_T + DIVIDER_Y_FROM_TOP, { stroke: "#1c1c1c", strokeW: 1 })
+
+  const headlineTop = PAD_T + DIVIDER_Y_FROM_TOP + 22
+
+  // Headline — slightly lighter weight for premium feel
+  const headLines = wrapText(headline, CONTENT_W, HEADLINE_FONT, 2)
+  let y = headlineTop + HEADLINE_FONT
+  for (const line of headLines) {
+    body += svgText(line, PAD_L, y, HEADLINE_FONT, { weight: 800 })
+    y += HEADLINE_LINE_H
+  }
+  y -= HEADLINE_LINE_H - HEADLINE_FONT
+  if (sub) {
+    y += SUB_GAP + 8
+    body += svgText(sub, PAD_L, y + SUB_FONT, SUB_FONT, { fill: PREMIUM_TEXT_SEC })
+    y = y + SUB_FONT + 8
+  }
+  const cardsTop = y + 40  // extra breathing room
+
+  // Cards — same layout, refined borders & cream names
+  let cy = cardsTop
+  const productCount = vitrineProducts.length
+  for (let i = 0; i < vitrineProducts.length; i++) {
+    const item = vitrineProducts[i]
+    if (i > 0) cy += CARD_GAP + 8  // more gap
+
+    const layout = calcCardLayout(item, { productCount })
+    const { height } = layout
+
+    body += svgRect(PAD_L, cy, CARD_W, height, { fill: PREMIUM_CARD_BG, stroke: PREMIUM_CARD_BORDER, strokeW: 1, rx: CARD_CORNER + 4 })
+
+    const innerTop = cy + CARD_PAD_V + 8
+    const contentX = PAD_L + CARD_PAD_H + 4
+    const innerH = height - CARD_PAD_V * 2
+
+    let lY = innerTop + Math.max(0, Math.round((innerH - layout.leftBlockH) / 2))
+    for (const line of layout.nameLines) {
+      body += svgText(line, contentX, lY + NAME_FONT, NAME_FONT, { weight: 800, fill: PREMIUM_NAME_COLOR })
+      lY += NAME_LINE_H
+    }
+    if (layout.hasSubtitle) {
+      lY += SUBTITLE_GAP
+      body += svgText(item.subtitle ?? "", contentX, lY + SUBTITLE_FONT, SUBTITLE_FONT, { fill: PREMIUM_TEXT_SEC, weight: 500 })
+      lY += SUBTITLE_FONT + 4
+    }
+    if (layout.hasPills) {
+      lY += PILL_GAP_TOP
+      let pillX = contentX
+      for (const tag of layout.pillsToShow) {
+        const label = tag.shortLabel ?? tag.label
+        const { svg: pillSvg, width: pw } = drawPill(pillX, lY, label, tag.type)
+        body += pillSvg
+        pillX += pw + PILL_BETWEEN
+      }
+    }
+
+    if (layout.showPrice && item.price) {
+      const rightX = contentX + LEFT_COL_W + COL_GAP + RIGHT_COL_W - 4
+      let rY = innerTop + Math.max(0, Math.round((innerH - layout.rightBlockH) / 2))
+      if (layout.hasBasePrice && item.basePrice) {
+        body += svgText(item.basePrice, rightX, rY + PRICE_STRUCK_FONT, PRICE_STRUCK_FONT, { fill: TEXT_MUTED, anchor: "end" })
+        const approxW = estimateTextWidth(item.basePrice, PRICE_STRUCK_FONT, 0.53)
+        const lineY = rY + PRICE_STRUCK_FONT * 0.6
+        body += svgLine(rightX - approxW, lineY, rightX, lineY, { stroke: TEXT_MUTED, strokeW: 1.5, opacity: 0.7 })
+        rY += PRICE_STRUCK_FONT + 6
+      }
+      body += svgText(item.price, rightX, rY + layout.priceFont, layout.priceFont, { weight: 900, fill: PREMIUM_ACCENT, anchor: "end" })
+      rY += layout.priceFont + 12
+      if (layout.hasParcel && item.parcel) {
+        body += svgText(item.parcel, rightX, rY + PARCEL_FONT, PARCEL_FONT, { fill: PREMIUM_TEXT_SEC, anchor: "end", weight: 500 })
+      }
+    }
+
+    cy += height
+  }
+
+  if (urgencyLine) {
+    cy += 28
+    body += svgText(urgencyLine, PAD_L, cy + META_FONT, META_FONT, { fill: PREMIUM_ACCENT, weight: 600 })
+    cy += META_FONT + 8
+  }
+
+  const ctaText = footerCtaMain ?? "Me chama para reservar"
+  const ctaY = H - PAD_B - CTA_H
+
+  if (benefits.length > 0) {
+    const benefitLines = benefits.slice(0, 3)
+    const bY = ctaY - benefitLines.length * BENEFIT_LINE_H - 34
+    let bby = bY
+    for (const line of benefitLines) {
+      body += svgCircle(PAD_L + BENEFIT_DOT, bby + BENEFIT_FONT * 0.65, BENEFIT_DOT, PREMIUM_ACCENT)
+      body += svgText(line, PAD_L + BENEFIT_DOT * 2 + 10, bby + BENEFIT_FONT, BENEFIT_FONT, { fill: PREMIUM_TEXT_SEC })
+      bby += BENEFIT_LINE_H
+    }
+  }
+
+  // Premium CTA — outlined + filled
+  body += svgRect(PAD_L, ctaY, CONTENT_W, CTA_H, { fill: "#0d0d0d", stroke: PREMIUM_ACCENT, strokeW: 2, rx: CTA_CORNER })
+  const ctaTextY = ctaY + CTA_H / 2 + CTA_FONT * 0.38
+  body += svgText(ctaText, PAD_L + CONTENT_W / 2, ctaTextY, CTA_FONT, { weight: 900, fill: PREMIUM_ACCENT, anchor: "middle" })
+
+  return body
+}
+
+// ─── Template: Mosaico 2×2 ────────────────────────────────────────────────────
+// Grid of up to 4 products. Each cell shows name + price. Good for variety.
+
+function renderMosaico(story: StoryData): string {
+  const { badge, headline, sub, footerCtaMain, vitrineProducts = [] } = story
+
+  let body = ""
+  const { svg: headerSvg, bottomY: headlineTop } = drawHeader(badge, PAD_T)
+  body += headerSvg
+
+  // Compact headline
+  const HL_FONT_SMALL = 58
+  const products = vitrineProducts.slice(0, 4)
+  const mosaicHeadline =
+    products.length >= 3
+      ? `${products.length} opções disponíveis`
+      : headline || "Escolha seu modelo"
+  const mosaicSub =
+    products.length >= 3
+      ? "Escolha seu modelo e chama para confirmar."
+      : sub
+  const headLines = wrapText(mosaicHeadline, CONTENT_W, HL_FONT_SMALL, 2)
+  let y = headlineTop + HL_FONT_SMALL
+  for (const line of headLines) {
+    body += svgText(line, PAD_L, y, HL_FONT_SMALL, { weight: 900 })
+    y += HL_FONT_SMALL + 10
+  }
+  if (mosaicSub) {
+    body += svgText(mosaicSub, PAD_L, y + SUB_FONT - 4, SUB_FONT - 4, { fill: TEXT_SECONDARY })
+    y += SUB_FONT + 16
+  }
+  const gridTop = y + 28
+
+  // Grid geometry
+  const CELL_GAP = MOSAICO_CELL_GAP
+  const CELL_W = Math.floor((CONTENT_W - CELL_GAP) / 2)
+  const ctaY = H - PAD_B - CTA_H
+  const GRID_H = ctaY - gridTop - 48  // available height for grid
+
+  const cellForIndex = (index: number): { x: number; y: number; w: number; h: number } => {
+    if (products.length === 3 && index === 2) {
+      return { x: PAD_L, y: gridTop + Math.floor(GRID_H * 0.52), w: CONTENT_W, h: Math.floor(GRID_H * 0.48) }
+    }
+    const topCellH = products.length === 3 ? Math.floor(GRID_H * 0.48) : Math.floor((GRID_H - CELL_GAP) / 2)
+    const col = index % 2
+    const row = Math.floor(index / 2)
+    return {
+      x: PAD_L + col * (CELL_W + CELL_GAP),
+      y: gridTop + row * (topCellH + CELL_GAP),
+      w: CELL_W,
+      h: topCellH,
+    }
+  }
+
+  for (let i = 0; i < products.length; i++) {
+    const item = products[i]
+    const cell = cellForIndex(i)
+
+    // Card bg
+    const hasBorder = item.isFeatured || item.isPrimary || item.hasDiscount
+    body += svgRect(cell.x, cell.y, cell.w, cell.h, {
+      fill: i === 2 && products.length === 3 ? "#131313" : CARD_BG,
+      stroke: hasBorder ? ORANGE : "#252525",
+      strokeW: hasBorder ? 2 : 1.5,
+      rx: MOSAICO_CELL_CORNER,
+    })
+
+    const wide = cell.w > CELL_W
+    const NAME_F = wide ? 42 : 34
+    const NAME_LH2 = wide ? 52 : 42
+	    const FEATURE_F = wide ? 24 : 22
+	    const PRICE_F = Math.min(wide ? 78 : 62, Math.max(36, fitPriceFontSize(item.price, cell.w - 48, wide ? 78 : 62)))
+
+	    const shortName = buildMosaicShortName(item.name)
+	    const nameLines2 = wrapText(shortName, cell.w - 44, NAME_F, 2)
+	    const condition = publicConditionLabel(item)
+	    const secondaryFeature = mosaicSecondaryFeature(item)
+	    const hasOffer = Boolean(item.basePrice && item.price)
+	    const hasSecondaryFeature = Boolean(secondaryFeature)
+	    const hasPrice = Boolean(item.price)
+	    const basePriceText = item.basePrice ? `De ${item.basePrice}` : null
+
+	    const contentH =
+	      22 +
+	      (hasOffer ? 38 : 0) +
+	      nameLines2.length * NAME_LH2 +
+	      (condition ? 34 : 0) +
+	      (basePriceText ? PRICE_STRUCK_FONT + 8 : 0) +
+	      (hasPrice ? PRICE_F + 24 : 0) +
+	      (hasSecondaryFeature ? 46 : 0)
+
+    const startY = cell.y + Math.max(26, Math.round((cell.h - contentH) / 2))
+    let ty = startY
+
+	    if (hasOffer) {
+	      const offerW = 112
+	      body += svgRect(cell.x + 22, ty, offerW, 32, { fill: ORANGE, rx: 16 })
+	      body += svgText("OFERTA", cell.x + 22 + offerW / 2, ty + 22, 17, { weight: 900, anchor: "middle", letterSpacing: "1.2" })
+	      ty += 42
+	    } else {
+	      body += svgText(`MODELO ${i + 1}`, cell.x + 22, ty + 18, 17, { weight: 800, fill: TEXT_MUTED, letterSpacing: "1.4" })
+	      ty += 34
+	    }
+
+	    for (const line of nameLines2) {
+	      body += svgText(line, cell.x + 22, ty + NAME_F, NAME_F, { weight: 800 })
+	      ty += NAME_LH2
+	    }
+
+	    if (condition) {
+	      body += svgText(condition, cell.x + 22, ty + 26, 24, { weight: 800, fill: condition === "Lacrado" ? "#5aab3a" : TEXT_SECONDARY })
+	      ty += 36
+	    }
+
+	    if (basePriceText) {
+	      ty += wide ? 6 : 2
+	      body += svgText(basePriceText, cell.x + 22, ty + PRICE_STRUCK_FONT, PRICE_STRUCK_FONT, { fill: TEXT_MUTED })
+	      const approxW = estimateTextWidth(basePriceText, PRICE_STRUCK_FONT, 0.53)
+	      const lineY = ty + PRICE_STRUCK_FONT * 0.6
+	      body += svgLine(cell.x + 22, lineY, cell.x + 22 + approxW, lineY, { stroke: TEXT_MUTED, strokeW: 1.5, opacity: 0.75 })
+	      ty += PRICE_STRUCK_FONT + 6
+	    }
+
+	    if (hasPrice && item.price) {
+	      ty += wide ? 8 : 4
+	      body += svgText(item.price, cell.x + 22, ty + PRICE_F, PRICE_F, { weight: 900, fill: ORANGE })
+	      ty += PRICE_F + 18
+	    }
+
+	    if (hasSecondaryFeature && secondaryFeature) {
+	      const featureText = compactFeatureLabel(secondaryFeature)
+	      const pillW = Math.min(cell.w - 44, Math.max(142, estimateTextWidth(featureText, FEATURE_F, 0.54) + 38))
+	      body += svgRect(cell.x + 22, ty, pillW, 44, { fill: "#181818", stroke: "#2b2b2b", strokeW: 1, rx: 22 })
+	      body += svgText(featureText, cell.x + 22 + pillW / 2, ty + 28, FEATURE_F, { fill: TEXT_SECONDARY, weight: 700, anchor: "middle" })
+    }
+  }
+
+  body += drawCtaButton(footerCtaMain ?? "Me chama para reservar", PAD_L, ctaY, CONTENT_W)
+
+  return body
+}
+
 // ─── Main renderer ────────────────────────────────────────────────────────────
 
 export function renderStoryToSVG(story: StoryData): string {
-  const bg = svgRect(0, 0, W, H, { fill: DARK_BG })
+  const variant = story.variant ?? "classic"
+  const canUseVitrineVariant = story.kind === "vitrine" && Boolean(story.vitrineProducts?.length)
+  const safeVariant =
+    variant === "mosaico" && (!canUseVitrineVariant || (story.vitrineProducts?.length ?? 0) < 3)
+      ? "premium"
+      : variant
+  const useVariant = canUseVitrineVariant || safeVariant === "destaque"
+
+  // Variant-specific backgrounds
+  let bgColor = DARK_BG
+  if (useVariant && safeVariant === "relampago") bgColor = RELAMPAGO_BG
+  else if (useVariant && safeVariant === "premium") bgColor = PREMIUM_BG
+
+  const bg = svgRect(0, 0, W, H, { fill: bgColor })
 
   let body: string
-  if (story.kind === "vitrine") {
+
+  if (useVariant && safeVariant === "destaque") {
+    body = renderDestaquePesado(story)
+  } else if (useVariant && safeVariant === "relampago") {
+    body = renderOfertaRelampago(story)
+  } else if (useVariant && safeVariant === "premium") {
+    body = renderPremium(story)
+  } else if (useVariant && safeVariant === "mosaico") {
+    body = renderMosaico(story)
+  } else if (story.kind === "vitrine") {
     body = renderVitrine(story)
   } else if (story.kind === "cta") {
     body = renderCta(story)

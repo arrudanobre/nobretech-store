@@ -277,7 +277,9 @@ const SYSTEM_INSTRUCTIONS = [
   "Preencha product_copies para CADA produto enviado. Use product_id exatamente igual ao FACTS.products.product_id. Esses campos são textos editáveis por produto e devem vender o argumento real de cada item.",
   "WhatsApp deve ser curto, comercial e pronto para copiar: 1 produto até 10 linhas; 2 produtos até 16 linhas; mais produtos devem resumir e não virar catálogo gigante. Não inclua análise interna.",
   "Todos os campos devem ser concisos. Não escreva parágrafos longos no JSON. product_copies deve trazer frases curtas para UI, não relatório.",
-  "Padrão de qualidade do WhatsApp: começar pelo melhor argumento real, explicar o conjunto em linguagem natural e fechar com uma ação simples. Exemplo de estilo: 'Esse iPhone 14 ficou bem interessante pelo conjunto: bateria 100%, Grade A, garantia Nobretech e ainda caiu de R$ 2.490 para R$ 2.290. Já vai com capa, fonte e película, então a pessoa sai com o kit pronto para usar. Tenho só uma unidade nessa condição. Se fizer sentido, eu já deixo reservado pra você.' Não copie sempre; use como referência de força comercial.",
+  "Padrão de qualidade do WhatsApp: começar pelo melhor argumento real, explicar o conjunto em linguagem natural e fechar com uma ação simples. Exemplo de estilo: 'Esse iPhone 14 ficou bem interessante pelo conjunto: seminovo, bateria 100%, garantia Nobretech e ainda caiu de R$ 2.490 para R$ 2.290. Já vai com capa, fonte e película, então a pessoa sai com o kit pronto para usar. Tenho só uma unidade nessa condição. Se fizer sentido, eu já deixo reservado pra você.' Não copie sempre; use como referência de força comercial.",
+  "Linguagem pública de condição: produto lacrado deve aparecer como 'Lacrado'; produto usado/seminovo deve aparecer como 'Seminovo'. Não escreva Grade A, Grade A+, Grade B, Grade B-, Grade C ou variações técnicas de grade em textos públicos.",
+  "Se o produto for Lacrado, não use bateria como argumento público, mesmo que battery_health seja 100. Para produto Seminovo, pode citar bateria quando o dado existir.",
   "Legenda Instagram deve ter gancho forte, lista/argumento dos produtos, confiança e CTA, com hashtags discretas.",
   "Para whatsapp_line, instagram_line e story_whatsapp_text, escreva textos úteis por produto. story_whatsapp_text deve ser pronto para copiar individualmente, com linhas de produto, condição, garantia somente quando warranty_label existir, preço/parcela somente quando existirem, estoque real e CTA curto.",
   "Stories: o sistema envia FACTS.story_plan com a sequência exata de stories (vitrines paginadas + opcionais de destaque/CTA/confiança). Você DEVE retornar channel_copy.stories com EXATAMENTE o mesmo número de itens, na mesma ordem, com o mesmo `index` e `kind`. Cada item recebe headline, subtitle e cta curtos. Para `kind=vitrine` escreva headline/subtitle que cubram a página, respeitando o `density` informado: detailed = pode ter texto mais longo; standard = texto médio; compact = headline e subtitle curtos para não competir com a lista. Para `kind=highlight` foque no produto principal. Para `kind=cta` foque no fechamento. NUNCA omita um item, NUNCA esconda produto, NUNCA reduza a contagem de stories, NUNCA mude `density` ou `kind`.",
@@ -327,8 +329,8 @@ function productDisplayName(f: ProductFacts): string {
 
 function fallbackStoryWhatsappText(f: ProductFacts): string {
   const lines: string[] = [`*${productDisplayName(f)}*`]
-  if (f.battery_health != null) lines.push(`🔋 Bateria ${f.battery_health}%`)
-  if (f.grade) lines.push(`✅ ${f.grade === "Lacrado" ? "Lacrado" : `Grade ${f.grade}, revisado pela Nobretech`}`)
+  if (f.grade) lines.push(`✅ ${f.grade === "Lacrado" ? "Lacrado" : "Seminovo revisado pela Nobretech"}`)
+  if (f.grade !== "Lacrado" && f.battery_health != null) lines.push(`🔋 Bateria ${f.battery_health}%`)
   if (f.warrantyLabel) lines.push(`🛡 ${f.warrantyLabel}`)
   if (f.discount && f.basePrice != null && f.disclosurePrice != null) {
     lines.push(`💰 De ~${formatBRL(f.basePrice)}~ por ${formatBRL(f.disclosurePrice)}`)
@@ -348,8 +350,9 @@ function fallbackProductCopy(f: ProductFacts): ProductCopySuggestion {
     f.discount ? "Condição com desconto real" : null,
     f.warrantyLabel || null,
     f.gifts ? `Inclui ${f.gifts}` : null,
-    f.battery_health != null ? `Bateria ${f.battery_health}%` : null,
-    f.grade || null,
+    f.grade === "Lacrado" ? "Lacrado" : null,
+    f.grade && f.grade !== "Lacrado" && f.battery_health != null ? `Bateria ${f.battery_health}%` : null,
+    f.grade && f.grade !== "Lacrado" ? "Seminovo" : null,
   ].filter(Boolean)[0] || "Disponível para consulta"
   const cta = f.productCta || "Me chama pra reservar."
   return {

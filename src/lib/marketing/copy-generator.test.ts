@@ -556,7 +556,7 @@ function vitrineItem0(facts: ProductFacts[], strategy: GeneralStrategy) {
 }
 
 {
-  // Subtitle does NOT duplicate storage/color/grade already in name.
+  // Public story subtitle shows customer language, not internal grade.
   const f = makeFact({
     id: "s",
     name: "iPhone 14",
@@ -568,7 +568,8 @@ function vitrineItem0(facts: ProductFacts[], strategy: GeneralStrategy) {
     isPrimary: true,
   })
   const v = vitrineItem0([f], BASE_STRATEGY)
-  assert.equal(v.subtitle, "Seminovo Grade A", `subtitle = ${v.subtitle}`)
+  assert.equal(v.subtitle, "Seminovo", `subtitle = ${v.subtitle}`)
+  assert.ok(!/Grade/i.test(v.subtitle), "subtitle must not expose internal grade")
   assert.ok(!v.subtitle.includes("128GB"), "subtitle no storage dup")
   assert.ok(!v.subtitle.includes("Meia-noite"), "subtitle no color dup")
 }
@@ -578,6 +579,84 @@ function vitrineItem0(facts: ProductFacts[], strategy: GeneralStrategy) {
   const f = makeFact({ id: "c", name: "Capa iPhone 14 Preta", grade: "Lacrado" })
   const v = vitrineItem0([f], BASE_STRATEGY)
   assert.equal(v.subtitle, "Lacrado")
+}
+
+{
+  // Public story data never exposes technical grades as customer-facing labels.
+  const facts = [
+    makeFact({
+      id: "grade-a-plus",
+      name: "iPhone 13",
+      storage: "128GB",
+      color: "Rosa",
+      grade: "A+",
+      battery_health: 100,
+      warrantyLabel: "Garantia Nobretech 6 meses",
+      isPrimary: true,
+    }),
+    makeFact({ id: "grade-a", name: "iPhone 14", grade: "A" }),
+    makeFact({ id: "grade-b", name: "iPhone 12", grade: "B" }),
+    makeFact({ id: "grade-b-minus", name: "iPhone 11", grade: "B-" }),
+  ]
+  const stories = buildDynamicStories(facts, { ...BASE_STRATEGY, addHighlightStory: true })
+  const publicText = stories.flatMap((story) => [
+    story.headline,
+    story.sub,
+    story.productName,
+    ...(story.detailLines ?? []),
+    ...(story.tags ?? []).map((tag) => tag.label),
+    ...(story.vitrineProducts ?? []).flatMap((item) => [
+      item.name,
+      item.subtitle,
+      item.warrantyLine,
+      item.kitLine,
+      item.price,
+      ...(item.tags ?? []).map((tag) => tag.label),
+    ]),
+  ]).filter(Boolean).join(" | ")
+
+  assert.ok(!/\bGrade\s*[A-C][+-]?\b/i.test(publicText), `public story text must not expose grade: ${publicText}`)
+  assert.ok(!/\bCondição\s*[A-C][+-]?\b/i.test(publicText), `public story text must not expose technical condition: ${publicText}`)
+  assert.ok(/Seminovo/.test(publicText), "seminovo public condition appears")
+  assert.ok(/Bateria 100%|Bat\. 100%/.test(publicText), "battery remains in public story data")
+  assert.ok(/Garantia Nobretech/.test(publicText), "warranty remains in public story data")
+}
+
+{
+  // Sealed products keep condition, but do not use battery as a public argument.
+  const sealed = makeFact({
+    id: "sealed-battery",
+    name: "iPhone 13",
+    storage: "128GB",
+    color: "Midnight",
+    grade: "Lacrado",
+    battery_health: 100,
+    warrantyLabel: "Garantia Apple 1 ano",
+    isPrimary: true,
+  })
+  const used = makeFact({
+    id: "used-battery",
+    name: "iPhone 13",
+    storage: "128GB",
+    color: "Rosa",
+    grade: "A+",
+    battery_health: 88,
+    warrantyLabel: "Garantia Nobretech 6 meses",
+  })
+  const stories = buildDynamicStories([sealed, used], { ...BASE_STRATEGY, addHighlightStory: true })
+  const sealedItem = stories.flatMap((story) => story.vitrineProducts ?? []).find((item) => item.productId === "sealed-battery")
+  const usedItem = stories.flatMap((story) => story.vitrineProducts ?? []).find((item) => item.productId === "used-battery")
+  assert.ok(sealedItem, "sealed item appears in story data")
+  assert.ok(usedItem, "used item appears in story data")
+  assert.equal(sealedItem!.subtitle, "Lacrado", "sealed product shows Lacrado")
+  assert.ok(!sealedItem!.tags.some((tag) => tag.type === "battery" || /Bat\.|Bateria/i.test(tag.label)), "sealed product has no battery pill")
+  assert.equal(usedItem!.subtitle, "Seminovo", "used product shows Seminovo")
+  assert.ok(usedItem!.tags.some((tag) => tag.type === "battery" && /88%/.test(tag.label)), "seminovo product keeps real battery")
+
+  const highlight = stories.find((story) => story.kind === "highlight")
+  assert.ok(highlight, "highlight story exists")
+  assert.ok(highlight!.detailLines.every((line) => !/Bateria\s*100%|Bat\.\s*100%/i.test(line)), "sealed highlight does not use battery")
+  assert.ok(highlight!.detailLines.some((line) => /Lacrado/i.test(line)), "sealed highlight keeps condition")
 }
 
 {
@@ -1206,7 +1285,7 @@ function vitrineItem0(facts: ProductFacts[], strategy: GeneralStrategy) {
 }
 
 {
-  // 5. Product without relevant discount shows real differentials (battery, grade)
+  // 5. Product without relevant discount shows real public differentials (battery, condition)
   const f = makeFact({
     id: "no-disc",
     name: "iPhone 14",
@@ -1221,7 +1300,10 @@ function vitrineItem0(facts: ProductFacts[], strategy: GeneralStrategy) {
   assert.equal(v.discountPercent, null, "no relevant discount: discountPercent null")
   assert.ok(v.tags.some((t) => t.type === "battery"), "product without discount shows battery pill")
   assert.ok(v.tags.some((t) => t.type === "stock"), "quantity=1 shows last-unit pill")
-  assert.ok(v.tags.some((t) => t.type === "grade"), "grade pill present")
+  const conditionPill = v.tags.find((t) => t.type === "grade")
+  assert.ok(conditionPill, "condition pill present")
+  assert.equal(conditionPill!.label, "Seminovo", "public condition pill uses customer language")
+  assert.ok(!/Grade/i.test(conditionPill!.label), "condition pill does not expose internal grade")
 }
 
 {
