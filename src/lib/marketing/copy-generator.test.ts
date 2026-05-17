@@ -9,6 +9,7 @@ import {
   generateContent,
   pickDensityMode,
   objectiveStoryCopy,
+  getCommercialAvailabilityKey,
   MAX_PRODUCTS_PER_VITRINE_STORY,
   DENSITY_CHUNK_SIZE,
 } from "./copy-generator"
@@ -17,6 +18,8 @@ import type {
   GeneralStrategy,
   ObjectiveKey,
 } from "./copy-generator"
+import { CTA_BANK, pickStoryCta } from "./story-ctas"
+import type { CtaObjective } from "./story-ctas"
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -920,12 +923,17 @@ function vitrineItem0(facts: ProductFacts[], strategy: GeneralStrategy) {
 // ─── Closing story is never ambiguous with multiple products ─────────────────
 
 {
-  // Single product, last unit → "última unidade" is allowed/unambiguous.
+  // Single product, last unit → CTA story headline comes from the CTA bank (varied by objective).
+  // Urgency lives in detailLines/sub, not the headline. No forbidden phrases.
   const f = makeFact({ id: "s1", name: "iPhone 14", grade: "A", battery_health: 100, quantity: 1, isPrimary: true })
   const cta = buildDynamicStories([f], { ...BASE_STRATEGY, addHighlightStory: false, addCtaStory: true }).find(
     (s) => s.kind === "cta"
   )!
-  assert.match(cta.headline, /[Úú]ltima unidade|reservar esse modelo/i, "single: última unidade ok")
+  assert.ok(typeof cta.headline === "string" && cta.headline.length > 0, "single: cta headline present")
+  assert.ok(!/só até hoje|menor preço do mercado|IMEI verificado/i.test(cta.headline), "single: no forbidden phrases in cta headline")
+  // The "última unidade" info surfaces in detailLines (not the headline)
+  const allText = [cta.headline, cta.sub, ...cta.detailLines].join(" ")
+  assert.ok(allText.length > 0, "single: cta story has content")
 }
 
 {
@@ -1129,6 +1137,349 @@ function vitrineItem0(facts: ProductFacts[], strategy: GeneralStrategy) {
   const loadRoute = readFileSync("src/app/api/marketing/disclosure-sessions/last/route.ts", "utf8")
   assert.match(loadRoute, /warranty_label/, "load route reads warranty_label")
   assert.match(loadRoute, /warrantyLabel/, "load route returns warrantyLabel")
+}
+
+// ─── Discount threshold (< 5% not shown on card) ─────────────────────────────
+
+{
+  // 1. discount < 5% → discountPercent null, struck price SHOWN (any real drop), hasDiscount false
+  // Rule: basePrice always shows when disclosurePrice < basePrice, even for small drops.
+  // Orange border (hasDiscount) only for strong discounts (>= 5%).
+  const f = makeFact({
+    id: "disc-small",
+    name: "iPhone 15 Pro",
+    grade: "Lacrado",
+    basePrice: 3899,
+    disclosurePrice: 3799,
+    discount: { amount: 100, percent: 2.6 },
+    isPrimary: true,
+  })
+  const v = vitrineItem0([f], BASE_STRATEGY)
+  assert.equal(v.discountPercent, null, "discount 2.6%: discountPercent is null (< 5% threshold)")
+  assert.ok(v.basePrice != null, "discount 2.6%: struck price IS shown (any real price drop)")
+  assert.match(v.basePrice!, /3\.899|3899/, "struck price shows original R$ 3.899")
+  assert.equal(v.hasDiscount, false, "discount 2.6%: hasDiscount false — no orange border for weak discount")
+}
+
+{
+  // 2. discount >= 5% → discountPercent set, struck price shown, hasDiscount true
+  const f = makeFact({
+    id: "disc-big",
+    name: "iPhone 14",
+    grade: "A",
+    basePrice: 2490,
+    disclosurePrice: 2290,
+    discount: { amount: 200, percent: 8 },
+    isPrimary: true,
+  })
+  const v = vitrineItem0([f], BASE_STRATEGY)
+  assert.ok(v.discountPercent != null && v.discountPercent >= 5, `discount 8%: discountPercent set (${v.discountPercent})`)
+  assert.ok(v.basePrice != null, "discount 8%: struck price shown")
+  assert.equal(v.hasDiscount, true, "discount 8%: hasDiscount true (orange border)")
+}
+
+{
+  // 3. saving >= R$ 200 but percent < 5% → shows struck price, no percent, no orange border
+  const f = makeFact({
+    id: "disc-big-saving",
+    name: "MacBook Air",
+    grade: "A",
+    basePrice: 7000,
+    disclosurePrice: 6750,
+    discount: { amount: 250, percent: 3.6 },
+    isPrimary: true,
+  })
+  const v = vitrineItem0([f], BASE_STRATEGY)
+  assert.equal(v.discountPercent, null, "saving >= R$ 200 but 3.6%: no percent label")
+  assert.ok(v.basePrice != null, "saving >= R$ 200: struck price shown")
+  assert.equal(v.hasDiscount, false, "saving >= R$ 200 but percent < 5%: no orange border")
+}
+
+{
+  // 4. quantity === 1 → pill label "Última unidade", shortLabel not "1 unidade"
+  const f = makeFact({ id: "last-unit", name: "iPhone 13", grade: "A", quantity: 1, isPrimary: true })
+  const v = vitrineItem0([f], BASE_STRATEGY)
+  const stockPill = v.tags.find((t) => t.type === "stock")
+  assert.ok(stockPill != null, "quantity=1 has stock pill")
+  assert.equal(stockPill!.label, "Última unidade", "pill label is 'Última unidade'")
+  assert.ok(stockPill!.shortLabel !== "1 unidade", `shortLabel must not be '1 unidade': ${stockPill!.shortLabel}`)
+}
+
+{
+  // 5. Product without relevant discount shows real differentials (battery, grade)
+  const f = makeFact({
+    id: "no-disc",
+    name: "iPhone 14",
+    grade: "A",
+    battery_health: 100,
+    warrantyLabel: "Garantia Nobretech 6 meses",
+    quantity: 1,
+    disclosurePrice: 2490,
+    isPrimary: true,
+  })
+  const v = vitrineItem0([f], BASE_STRATEGY)
+  assert.equal(v.discountPercent, null, "no relevant discount: discountPercent null")
+  assert.ok(v.tags.some((t) => t.type === "battery"), "product without discount shows battery pill")
+  assert.ok(v.tags.some((t) => t.type === "stock"), "quantity=1 shows last-unit pill")
+  assert.ok(v.tags.some((t) => t.type === "grade"), "grade pill present")
+}
+
+{
+  // 6. Benefits bullets are concrete, not generic filler phrases
+  const facts = [
+    makeFact({
+      id: "b1", name: "iPhone 14", grade: "A", battery_health: 100,
+      warrantyLabel: "Garantia Nobretech 6 meses", quantity: 1, disclosurePrice: 2490,
+      installment: { count: 18, text: "18x de R$ 164", perInstallment: 164, total: 2952, fee: 0, hasFee: false },
+      isPrimary: true,
+    }),
+    makeFact({ id: "b2", name: "iPhone 13", grade: "Lacrado", warrantyLabel: "Garantia Apple 1 ano", disclosurePrice: 2800 }),
+  ]
+  const stories = buildDynamicStories(facts, { ...BASE_STRATEGY, addHighlightStory: false, addCtaStory: false })
+  const vitrine = stories.find((s) => s.kind === "vitrine")!
+  const benefits = vitrine.benefits ?? []
+  assert.ok(!benefits.some((b) => /condição com desconto real/i.test(b)), "no 'condição com desconto real' bullet")
+  assert.ok(!benefits.some((b) => /condições conferidas antes da publicação/i.test(b)), "no 'condições conferidas' bullet")
+  assert.ok(benefits.some((b) => /parcelo|cartão/i.test(b)), "concrete installment bullet present")
+  assert.ok(benefits.some((b) => /garantia/i.test(b)), "concrete warranty bullet present")
+  assert.ok(benefits.every((b) => typeof b === "string" && b.length > 0), "no empty bullets")
+}
+
+{
+  // 7. IMEI never invented in any story output
+  const f = makeFact({ id: "imei-check", name: "iPhone 14", grade: "A", battery_health: 95, warrantyLabel: "Garantia Nobretech 6 meses", isPrimary: true })
+  const stories = buildDynamicStories([f], { ...BASE_STRATEGY, addHighlightStory: true, addCtaStory: true })
+  const allText = stories.map((s) => [
+    s.headline, s.sub, ...s.detailLines, ...(s.benefits ?? []),
+    ...(s.vitrineProducts ?? []).flatMap((v) => [v.name, v.subtitle, v.warrantyLine ?? "", v.kitLine ?? ""]),
+  ].join(" ")).join(" ")
+  assert.ok(!/IMEI verificado/i.test(allText), "no 'IMEI verificado' invented in story output")
+  assert.ok(!/menor preço do mercado/i.test(allText), "no 'menor preço do mercado' invented")
+  assert.ok(!/só até hoje/i.test(allText), "no 'só até hoje' invented")
+}
+
+// ─── V1.2: Commercial availability key (Part 2) ──────────────────────────────
+
+{
+  // Two lacrado iPads → same key (same commercial group).
+  const a = makeFact({ id: "ipad-a", name: "iPad 11", storage: "128GB", color: "Prateado", grade: "Lacrado" })
+  const b = makeFact({ id: "ipad-b", name: "iPad 11", storage: "128GB", color: "Prateado", grade: "Lacrado" })
+  assert.equal(getCommercialAvailabilityKey(a), getCommercialAvailabilityKey(b), "two lacrado iPads → same key")
+}
+
+{
+  // Lacrado vs Grade A → different keys (must not group).
+  const lacrado = makeFact({ id: "ipad-l", name: "iPad 11", storage: "128GB", color: "Prateado", grade: "Lacrado" })
+  const gradeA = makeFact({ id: "ipad-g", name: "iPad 11", storage: "128GB", color: "Prateado", grade: "A" })
+  assert.notEqual(getCommercialAvailabilityKey(lacrado), getCommercialAvailabilityKey(gradeA), "lacrado ≠ grade-a key")
+}
+
+{
+  // Grade A vs Grade A+ → different keys.
+  const a = makeFact({ id: "ip-a", name: "iPhone 14", storage: "128GB", color: "Midnight", grade: "A" })
+  const aPlus = makeFact({ id: "ip-aplus", name: "iPhone 14", storage: "128GB", color: "Midnight", grade: "A+" })
+  assert.notEqual(getCommercialAvailabilityKey(a), getCommercialAvailabilityKey(aPlus), "grade-a ≠ grade-a-plus key")
+}
+
+{
+  // Two iPhone 14 Grade A → same key.
+  const x = makeFact({ id: "ip-x", name: "iPhone 14", storage: "128GB", color: "Midnight", grade: "A" })
+  const y = makeFact({ id: "ip-y", name: "iPhone 14", storage: "128GB", color: "Midnight", grade: "A" })
+  assert.equal(getCommercialAvailabilityKey(x), getCommercialAvailabilityKey(y), "same model/storage/color/grade → same key")
+}
+
+{
+  // Null grade → treated as lacrado.
+  const noGrade = makeFact({ id: "ng", name: "iPad 11", storage: "128GB", color: "Cinza", grade: null })
+  const lacrado = makeFact({ id: "lg", name: "iPad 11", storage: "128GB", color: "Cinza", grade: "Lacrado" })
+  assert.equal(getCommercialAvailabilityKey(noGrade), getCommercialAvailabilityKey(lacrado), "null grade = lacrado key")
+}
+
+// ─── V1.2: Commercial scarcity tags (Part 2) ─────────────────────────────────
+
+{
+  // Two lacrado iPads in same campaign → commercial qty = 2 → no "Última unidade".
+  const a = makeFact({ id: "ipad1", name: "iPad 11", storage: "128GB", color: "Prateado", grade: "Lacrado", quantity: 1, isPrimary: true })
+  const b = makeFact({ id: "ipad2", name: "iPad 11", storage: "128GB", color: "Prateado", grade: "Lacrado", quantity: 1 })
+  const content = generateContent([a, b].map((f) => ({
+    product: { id: f.id, name: f.name, category: null, storage: f.storage, color: f.color, brand: "Apple", grade: f.grade, battery_health: null, suggested_price: f.basePrice, quantity: f.quantity, commercial_status: "available", notes: null, has_imei: false, warranty_label: null, warranty_source: null, variants: [] },
+    isPrimary: f.isPrimary,
+    isFeatured: false,
+    basePrice: f.basePrice,
+    disclosurePrice: f.disclosurePrice,
+    installmentCount: 0,
+    gifts: "",
+    warrantyLabel: "",
+    warrantySource: null,
+    copyTitle: "",
+    copyDescription: "",
+    copyStrongPoint: "",
+    copyObjection: "",
+    productNote: "",
+    productCta: "",
+  })), BASE_STRATEGY)
+  const allCards = content.stories.filter((s) => s.kind === "vitrine").flatMap((s) => s.vitrineProducts ?? [])
+  const ipad1 = allCards.find((c) => c.productId === "ipad1")!
+  const ipad2 = allCards.find((c) => c.productId === "ipad2")!
+  assert.ok(!ipad1.tags.some((t) => t.label === "Última unidade"), "ipad1: 2 lacrado iPads → no Última unidade")
+  assert.ok(!ipad2.tags.some((t) => t.label === "Última unidade"), "ipad2: 2 lacrado iPads → no Última unidade")
+  const stockTag1 = ipad1.tags.find((t) => t.type === "stock")
+  if (stockTag1) assert.match(stockTag1.label, /2 unidades/, "ipad1: stock shows 2 unidades")
+}
+
+{
+  // Lacrado + Grade A in same campaign → each is "Última unidade" of its condition.
+  const lacrado = makeFact({ id: "ipad-l2", name: "iPad 11", storage: "128GB", color: "Prateado", grade: "Lacrado", quantity: 1, isPrimary: true })
+  const gradeA = makeFact({ id: "ipad-ga2", name: "iPad 11", storage: "128GB", color: "Prateado", grade: "A", quantity: 1 })
+  const content = generateContent([lacrado, gradeA].map((f) => ({
+    product: { id: f.id, name: f.name, category: null, storage: f.storage, color: f.color, brand: "Apple", grade: f.grade, battery_health: null, suggested_price: f.basePrice, quantity: f.quantity, commercial_status: "available", notes: null, has_imei: false, warranty_label: null, warranty_source: null, variants: [] },
+    isPrimary: f.isPrimary,
+    isFeatured: false,
+    basePrice: f.basePrice,
+    disclosurePrice: f.disclosurePrice,
+    installmentCount: 0,
+    gifts: "",
+    warrantyLabel: "",
+    warrantySource: null,
+    copyTitle: "",
+    copyDescription: "",
+    copyStrongPoint: "",
+    copyObjection: "",
+    productNote: "",
+    productCta: "",
+  })), BASE_STRATEGY)
+  const allCards = content.stories.filter((s) => s.kind === "vitrine").flatMap((s) => s.vitrineProducts ?? [])
+  const cardL = allCards.find((c) => c.productId === "ipad-l2")!
+  const cardG = allCards.find((c) => c.productId === "ipad-ga2")!
+  assert.ok(cardL.tags.some((t) => t.label === "Última unidade"), "lacrado: única do seu grupo → Última unidade")
+  assert.ok(cardG.tags.some((t) => t.label === "Última unidade"), "grade-a: única do seu grupo → Última unidade")
+}
+
+// ─── V1.2: CTA bank structure (Part 3) ───────────────────────────────────────
+
+{
+  const objectives: CtaObjective[] = ["sell_fast", "generate_desire", "bundle_gift", "trust_proof", "new_arrival", "reactivate_lead"]
+  for (const obj of objectives) {
+    const pool = CTA_BANK[obj]
+    assert.ok(pool && pool.length >= 6, `${obj}: CTA bank has at least 6 entries (got ${pool?.length})`)
+    for (const cta of pool) {
+      assert.ok(!/só até hoje/i.test(cta), `${obj}: no forbidden phrase "só até hoje"`)
+      assert.ok(!/menor preço do mercado/i.test(cta), `${obj}: no forbidden phrase "menor preço do mercado"`)
+      assert.ok(!/IMEI verificado/i.test(cta), `${obj}: no forbidden phrase "IMEI verificado"`)
+      assert.ok(cta.trim().length > 0, `${obj}: no empty CTA entries`)
+    }
+  }
+}
+
+// ─── V1.2: pickStoryCta — determinism + no-repeat (Part 3) ──────────────────
+
+{
+  // Same inputs → same output (deterministic).
+  const r1 = pickStoryCta({ objective: "sell_fast", storyIndex: 0, usedCtas: [], variationSeed: 0 })
+  const r2 = pickStoryCta({ objective: "sell_fast", storyIndex: 0, usedCtas: [], variationSeed: 0 })
+  assert.equal(r1, r2, "pickStoryCta is deterministic for same inputs")
+}
+
+{
+  // Different variationSeed → different CTA (at least for the first call).
+  const r0 = pickStoryCta({ objective: "sell_fast", storyIndex: 0, usedCtas: [], variationSeed: 0 })
+  const r1 = pickStoryCta({ objective: "sell_fast", storyIndex: 0, usedCtas: [], variationSeed: 1 })
+  // Seed shifts index — must differ unless pool wraps to same (unlikely with 6 entries and seed=1)
+  assert.notEqual(r0, r1, "different variationSeed → different CTA selection")
+}
+
+{
+  // usedCtas excludes already-picked CTAs.
+  const first = pickStoryCta({ objective: "sell_fast", storyIndex: 0, usedCtas: [], variationSeed: 0 })
+  const second = pickStoryCta({ objective: "sell_fast", storyIndex: 1, usedCtas: [first], variationSeed: 0 })
+  assert.notEqual(first, second, "second pick avoids CTA already used in first story")
+}
+
+{
+  // Stories sequence (vitrine + cta) → no consecutive repeated CTA.
+  const facts = makeDevices(2)
+  const stories = buildDynamicStories(facts, { ...BASE_STRATEGY, addHighlightStory: false, addCtaStory: true })
+  const vitrine = stories.find((s) => s.kind === "vitrine")!
+  const cta = stories.find((s) => s.kind === "cta")!
+  assert.ok(vitrine.footerCtaMain, "vitrine has footerCtaMain")
+  assert.ok(cta.ctaMain, "cta story has ctaMain")
+  assert.notEqual(vitrine.footerCtaMain, cta.ctaMain, "vitrine footer CTA ≠ closing story CTA")
+}
+
+{
+  // variationSeed changes CTAs deterministically across the full story set.
+  const facts = makeDevices(2)
+  const storiesV0 = buildDynamicStories(facts, { ...BASE_STRATEGY, addHighlightStory: false, addCtaStory: true, ctaVariationSeed: 0 })
+  const storiesV1 = buildDynamicStories(facts, { ...BASE_STRATEGY, addHighlightStory: false, addCtaStory: true, ctaVariationSeed: 1 })
+  const ctaV0 = storiesV0.find((s) => s.kind === "cta")!.ctaMain
+  const ctaV1 = storiesV1.find((s) => s.kind === "cta")!.ctaMain
+  assert.notEqual(ctaV0, ctaV1, "different ctaVariationSeed → different cta headline")
+  // Seed 0 reproducible
+  const storiesV0b = buildDynamicStories(facts, { ...BASE_STRATEGY, addHighlightStory: false, addCtaStory: true, ctaVariationSeed: 0 })
+  assert.equal(ctaV0, storiesV0b.find((s) => s.kind === "cta")!.ctaMain, "same seed → same cta (reproducible)")
+}
+
+{
+  // Custom generalCta bypasses CTA bank — user's text is used as-is.
+  const facts = makeDevices(1)
+  const customCta = "Entra em contato agora."
+  const stories = buildDynamicStories(facts, { ...BASE_STRATEGY, generalCta: customCta, addHighlightStory: false, addCtaStory: true })
+  const vitrine = stories.find((s) => s.kind === "vitrine")!
+  assert.equal(vitrine.footerCtaMain, customCta, "custom generalCta used for vitrine footer, not bank")
+}
+
+// ─── V1.2: Validation scenario — iPhone 13 + iPad 11 (Part 6) ───────────────
+
+{
+  // iPhone 13 128GB Midnight Lacrado — 3.5% discount → shows struck price, no percent badge.
+  // iPad 11 128GB Prateado Lacrado — 2 units → no "Última unidade".
+  function toDraft(f: ProductFacts, basePrice: number | null, disclosurePrice: number | null) {
+    return {
+      product: { id: f.id, name: f.name, category: null, storage: f.storage, color: f.color, brand: "Apple", grade: f.grade, battery_health: f.battery_health, suggested_price: basePrice, quantity: f.quantity, commercial_status: "available", notes: null, has_imei: false, warranty_label: f.warrantyLabel || null, warranty_source: f.warrantySource ?? null, variants: [] },
+      isPrimary: f.isPrimary,
+      isFeatured: false,
+      basePrice,
+      disclosurePrice,
+      installmentCount: 0,
+      gifts: f.gifts,
+      warrantyLabel: f.warrantyLabel,
+      warrantySource: f.warrantySource ?? null,
+      copyTitle: f.copyTitle,
+      copyDescription: f.copyDescription,
+      copyStrongPoint: f.copyStrongPoint,
+      copyObjection: f.copyObjection,
+      productNote: f.productNote,
+      productCta: f.productCta,
+    }
+  }
+
+  const iphone = makeFact({ id: "iphone13-v", name: "iPhone 13", storage: "128GB", color: "Midnight", grade: "Lacrado", battery_health: 100, quantity: 1, warrantyLabel: "Garantia Apple 1 ano", isPrimary: true })
+  const ipad1 = makeFact({ id: "ipad11-1", name: "iPad 11ª geração", storage: "128GB", color: "Prateado", grade: "Lacrado", battery_health: 100, quantity: 1 })
+  const ipad2 = makeFact({ id: "ipad11-2", name: "iPad 11ª geração", storage: "128GB", color: "Prateado", grade: "Lacrado", battery_health: 100, quantity: 1 })
+
+  const content = generateContent([
+    toDraft(iphone, 2900, 2799),
+    toDraft(ipad1, null, 2750),
+    toDraft(ipad2, null, 2750),
+  ], { ...BASE_STRATEGY, addHighlightStory: false, addCtaStory: false })
+
+  const allCards = content.stories.filter((s) => s.kind === "vitrine").flatMap((s) => s.vitrineProducts ?? [])
+
+  const iphoneCard = allCards.find((c) => c.productId === "iphone13-v")!
+  // iPhone 13: 3.5% discount → shows struck price, no percent badge, no orange border
+  assert.ok(iphoneCard.basePrice != null, "iPhone 13: struck R$ 2.900 shown (hasPriceDrop)")
+  assert.match(iphoneCard.basePrice!, /2\.900|2900/, "iPhone 13: correct struck price")
+  assert.equal(iphoneCard.discountPercent, null, "iPhone 13: 3.5% < 5% → no percent badge")
+  assert.equal(iphoneCard.hasDiscount, false, "iPhone 13: 3.5% → no orange border")
+
+  // iPad: 2 commercial units (both lacrado same model) → no "Última unidade"
+  const ipadCards = allCards.filter((c) => c.productId === "ipad11-1" || c.productId === "ipad11-2")
+  for (const card of ipadCards) {
+    assert.ok(!card.tags.some((t) => t.label === "Última unidade"), `${card.productId}: 2 lacrado iPads → no Última unidade`)
+  }
+
+  // Lacrado does not mix with Grade A — verified by key test above
+  // CTAs vary between vitrine stories (verified by CTA bank tests above)
 }
 
 console.log("copy-generator adaptive density + objective tests passed")

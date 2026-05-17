@@ -1,4 +1,6 @@
 import { calculatePaymentPrice } from "@/lib/helpers"
+import { pickStoryCta } from "./story-ctas"
+import type { CtaObjective } from "./story-ctas"
 
 export type ObjectiveKey =
   | "sell_fast"
@@ -80,6 +82,11 @@ export interface GeneralStrategy {
    * prioritize vitrine pages. User can force on/off.
    */
   addCtaStory?: boolean | null
+  /**
+   * Incremented by the UI "Variar CTAs" button. Rotates CTA selection
+   * deterministically without changing any factual content.
+   */
+  ctaVariationSeed?: number
 }
 
 export interface InstallmentInfo {
@@ -119,6 +126,13 @@ export interface ProductFacts {
   productCta: string
   isPrimary: boolean
   isFeatured: boolean
+  /**
+   * Commercial available quantity for this product's equivalence group
+   * (same model + storage + color + condition). Set by generateContent from
+   * all campaign facts. Callers may supply it directly when known.
+   * Falls back to `quantity` (raw inventory count) when absent.
+   */
+  commercialAvailableQuantity?: number
 }
 
 export interface StoryTag {
@@ -305,6 +319,61 @@ export function getVisualDiscountPercent(
 export function formatVisualDiscount(percent: number): string {
   const rounded = Math.round(percent * 10) / 10
   return Number.isInteger(rounded) ? `${rounded}%` : `${rounded.toFixed(1)}%`
+}
+
+/** Normalize a string for use in a commercial availability key. */
+function normalizeKeySegment(s: string | null | undefined): string {
+  return (s ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+}
+
+/**
+ * Commercial equivalence key for scarcity grouping.
+ *
+ * Two campaign facts with the same key are treated as the same commercial
+ * product. IMEI/serial are never included — they live in `notes`, not in
+ * the structured fields used here.
+ *
+ * Condition buckets:
+ *   - sealed (grade null or "Lacrado") → "lacrado"
+ *   - used/refurbished               → "grade-{normalized}", e.g. "grade-a-plus"
+ *
+ * A+ and A are different keys. Lacrado and A are different keys.
+ */
+export function getCommercialAvailabilityKey(
+  fact: Pick<ProductFacts, "name" | "storage" | "color" | "grade">
+): string {
+  const model = normalizeKeySegment(fact.name)
+  const storage = normalizeKeySegment(fact.storage)
+  const color = normalizeKeySegment(fact.color)
+
+  let condition: string
+  if (!fact.grade || fact.grade === "Lacrado") {
+    condition = "lacrado"
+  } else {
+    const g = fact.grade
+      .toUpperCase()
+      .trim()
+      .replace(/\+/g, "-plus")
+      .replace(/-$/g, "-minus")
+    condition = `grade-${g.toLowerCase()}`
+  }
+
+  return [model, storage, color, condition].filter(Boolean).join("|")
+}
+
+/**
+ * Effective commercial quantity for scarcity display.
+ * Prefers `commercialAvailableQuantity` (campaign-level grouping) over
+ * raw `quantity` (single inventory record count).
+ */
+function effectiveQuantity(f: Pick<ProductFacts, "quantity" | "commercialAvailableQuantity">): number {
+  return f.commercialAvailableQuantity ?? f.quantity
 }
 
 function includesToken(text: string | null | undefined, token: string | null | undefined): boolean {
@@ -494,10 +563,11 @@ function buildTags(facts: ProductFacts): StoryTag[] {
   if (facts.battery_health != null) {
     tags.push({ type: "battery", label: `Bateria ${facts.battery_health}%`, shortLabel: `Bat. ${facts.battery_health}%` })
   }
-  if (facts.quantity <= 1) {
-    tags.push({ type: "stock", label: "Última unidade", shortLabel: "1 unidade" })
-  } else if (facts.quantity <= 3) {
-    tags.push({ type: "stock", label: `${facts.quantity} unidades` })
+  const commQty = effectiveQuantity(facts)
+  if (commQty <= 1) {
+    tags.push({ type: "stock", label: "Última unidade", shortLabel: "Última unid." })
+  } else if (commQty <= 3) {
+    tags.push({ type: "stock", label: `${commQty} unidades` })
   }
   if (facts.warrantyLabel) {
     const type = /apple/i.test(facts.warrantyLabel) ? "warranty_apple" : "warranty_nobretech"
@@ -531,8 +601,9 @@ function buildDetailLines(facts: ProductFacts): string[] {
   if (facts.warrantyLabel) lines.push(facts.warrantyLabel)
   if (facts.gifts) lines.push(`Kit: ${facts.gifts}`)
   if (facts.productNote) lines.push(facts.productNote)
-  if (facts.quantity <= 1) lines.push("Última unidade")
-  else if (facts.quantity <= 3) lines.push(`${facts.quantity} unidades`)
+  const dQty = effectiveQuantity(facts)
+  if (dQty <= 1) lines.push("Última unidade")
+  else if (dQty <= 3) lines.push(`${dQty} unidades`)
   return lines
 }
 
@@ -947,29 +1018,34 @@ function orderedVitrineTags(f: ProductFacts, objective: ObjectiveKey): StoryTag[
 }
 
 function buildVitrineItems(facts: ProductFacts[], objective: ObjectiveKey): VitrineItem[] {
-  return facts.map((f) => ({
-    productId: f.id,
-    name: buildStoryProductName(f),
-    subtitle: buildStoryProductSubtitle(f),
-    warrantyLine: buildWarrantyLine(f),
-    kitLine: buildKitLine(f),
-    price: f.disclosurePrice != null ? formatBRL(f.disclosurePrice) : null,
-    basePrice: f.discount && f.basePrice != null ? formatBRL(f.basePrice) : null,
-    discountPercent: getVisualDiscountPercent(f.basePrice, f.disclosurePrice),
-    parcel: f.installment?.text ?? null,
-    // Installment is shown under the price, never as a pill — strip it here.
-    tags: orderedVitrineTags(f, objective),
-    warrantyLabel: f.warrantyLabel || null,
-    gifts: f.gifts || null,
-    color: f.color,
-    hasDiscount: Boolean(f.discount),
-    isFeatured: f.isFeatured,
-    grade: f.grade,
-    storage: f.storage,
-    quantity: f.quantity,
-    isPrimary: f.isPrimary,
-    cardType: classifyCardType(f),
-  }))
+  return facts.map((f) => {
+    const visualPercent = getVisualDiscountPercent(f.basePrice, f.disclosurePrice)
+    // Show struck price whenever there is any real price drop, regardless of size.
+    // Strong visual emphasis (orange border / percent badge) only for >= 5% — see hasDiscount.
+    const hasPriceDrop = f.basePrice != null && f.disclosurePrice != null && f.disclosurePrice < f.basePrice
+    return {
+      productId: f.id,
+      name: buildStoryProductName(f),
+      subtitle: buildStoryProductSubtitle(f),
+      warrantyLine: buildWarrantyLine(f),
+      kitLine: buildKitLine(f),
+      price: f.disclosurePrice != null ? formatBRL(f.disclosurePrice) : null,
+      basePrice: hasPriceDrop && f.basePrice != null ? formatBRL(f.basePrice) : null,
+      discountPercent: visualPercent,
+      parcel: f.installment?.text ?? null,
+      tags: orderedVitrineTags(f, objective),
+      warrantyLabel: f.warrantyLabel || null,
+      gifts: f.gifts || null,
+      color: f.color,
+      hasDiscount: visualPercent != null,
+      isFeatured: f.isFeatured,
+      grade: f.grade,
+      storage: f.storage,
+      quantity: f.quantity,
+      isPrimary: f.isPrimary,
+      cardType: classifyCardType(f),
+    }
+  })
 }
 
 function contextualCta(facts: ProductFacts[], strategy: GeneralStrategy): { main: string; sub: string } {
@@ -977,7 +1053,7 @@ function contextualCta(facts: ProductFacts[], strategy: GeneralStrategy): { main
   const customCta = (strategy.generalCta || primary.productCta).trim()
   const isSingle = facts.length === 1
   const hasDiscount = facts.some((f) => f.discount)
-  const someUrgent = facts.some((f) => f.quantity <= 1)
+  const someUrgent = facts.some((f) => effectiveQuantity(f) <= 1)
   const hasVariation = Boolean(primary.color || primary.productNote.toLowerCase().includes("cor"))
 
   if (customCta) return { main: customCta, sub: "Me chama que eu te passo as condições." }
@@ -1004,7 +1080,7 @@ function contextualCta(facts: ProductFacts[], strategy: GeneralStrategy): { main
   }
 
   // SINGLE PRODUCT: "última unidade" is unambiguous.
-  if (primary.quantity <= 1) {
+  if (effectiveQuantity(primary) <= 1) {
     return { main: "Última unidade nessa condição.", sub: "Me chama para reservar." }
   }
   if (hasDiscount) {
@@ -1033,24 +1109,37 @@ function buildVitrineBenefits(
   const maxParcel = maxInstallmentCount(facts)
   if (maxParcel > 0) lines.push(`Parcelo em até ${maxParcel}x no cartão`)
 
-  // Warranty is NO LONGER a global benefit — it now renders per-card so each
-  // product shows its own real warranty. Do not infer/aggregate it here.
+  // Concrete warranty bullets from real data — never inferred or aggregated generically.
+  const nobretechFact = facts.find((f) => f.warrantyLabel && !/apple/i.test(f.warrantyLabel))
+  if (nobretechFact && lines.length < 4) {
+    const m = nobretechFact.warrantyLabel.match(/(\d+)\s*mes/i)
+    lines.push(m ? `Garantia Nobretech de ${m[1]} meses` : "Garantia Nobretech inclusa")
+  }
 
-  if (facts.some((f) => f.discount)) lines.push("Condição com desconto real")
+  if (facts.some((f) => /apple/i.test(f.warrantyLabel)) && lines.length < 4) {
+    lines.push("Garantia Apple inclusa")
+  }
+
+  if (facts.some((f) => f.grade && f.grade !== "Lacrado") && lines.length < 4) {
+    lines.push("Aparelhos revisados antes da entrega")
+  }
+
+  if (facts.some((f) => Boolean(f.gifts)) && lines.length < 4) {
+    lines.push("Brindes inclusos nos produtos selecionados")
+  }
+
+  if (facts.some((f) => effectiveQuantity(f) <= 1) && lines.length < 4) {
+    lines.push("Últimas unidades disponíveis")
+  }
+
+  if (facts.some((f) => getVisualDiscountPercent(f.basePrice, f.disclosurePrice) != null) && lines.length < 4) {
+    lines.push("Desconto real no preço")
+  }
 
   const note = strategy.generalNote.trim()
   if (note && lines.length < 4) lines.push(note)
 
-  // Generic-safe fillers (never claim trade-in/delivery/entrada).
-  const safeFillers = [
-    "Condições conferidas antes da publicação",
-    "Compra com orientação Nobretech",
-    "Me chama para confirmar disponibilidade",
-  ]
-  for (const filler of safeFillers) {
-    if (lines.length >= 3) break
-    if (!lines.includes(filler)) lines.push(filler)
-  }
+  if (lines.length < 3) lines.push("Me chama para confirmar disponibilidade")
 
   return lines.slice(0, 4)
 }
@@ -1245,7 +1334,7 @@ function buildVitrineStory(
     discountPercent: getVisualDiscountPercent(primary.basePrice, primary.disclosurePrice),
     parcel,
     detailLines: isMulti ? [] : buildDetailLines(primary),
-    urgencyLine: urgencyBodyLine(strategy.urgencyLevel, primary.quantity),
+    urgencyLine: urgencyBodyLine(strategy.urgencyLevel, effectiveQuantity(primary)),
     ctaMain: null,
     ctaSub: null,
     vitrineProducts: buildVitrineItems(pageFacts, strategy.objective),
@@ -1277,7 +1366,7 @@ function buildHighlightStory(
   if (primary.discount && primary.basePrice != null && primary.disclosurePrice != null) {
     argueLines.push(`De ${formatBRL(primary.basePrice)} por ${formatBRL(primary.disclosurePrice)}`)
   }
-  if (primary.quantity <= 1) argueLines.push("Última unidade nessa condição")
+  if (effectiveQuantity(primary) <= 1) argueLines.push("Última unidade nessa condição")
   const detailLines = argueLines.filter(Boolean).slice(0, 5)
 
   // Sub = short comma-joined summary of the top real arguments (not the
@@ -1386,7 +1475,7 @@ export function buildDynamicStories(
   const sorted = sortProductsForVitrine(facts, strategy)
   const density = pickDensityMode(sorted, strategy)
   const pages = chunkProductsForVisualStories(sorted, density, strategy.objective)
-  const stories: StoryData[] = pages.map((pageFacts, i) =>
+  const rawStories: StoryData[] = pages.map((pageFacts, i) =>
     buildVitrineStory(pageFacts, sorted.length, i + 1, pages.length, strategy, density)
   )
 
@@ -1395,15 +1484,38 @@ export function buildDynamicStories(
   const wantHighlight = strategy.addHighlightStory == null
     ? shouldAutoAddHighlight(primary, sorted.length)
     : strategy.addHighlightStory
-  if (wantHighlight) stories.push(buildHighlightStory(sorted, strategy))
+  if (wantHighlight) rawStories.push(buildHighlightStory(sorted, strategy))
 
   // 3) CTA story — optional. Default ON for ≤3 products, OFF for many products.
   const wantCta = strategy.addCtaStory == null
     ? shouldAutoAddCta(sorted.length)
     : strategy.addCtaStory
-  if (wantCta) stories.push(buildCtaStory(sorted, strategy))
+  if (wantCta) rawStories.push(buildCtaStory(sorted, strategy))
 
-  return stories
+  // 4) CTA variation: inject objective-specific CTAs from the bank.
+  //    Skipped when user has set a custom generalCta (preserve override).
+  //    Vitrine footer and closing story get varied texts — no two consecutive
+  //    stories repeat the same CTA.
+  if (!strategy.generalCta) {
+    const seed = strategy.ctaVariationSeed ?? 0
+    const usedCtas: string[] = []
+    return rawStories.map((story, index) => {
+      const obj = strategy.objective as CtaObjective
+      if (story.kind === "vitrine" && story.footerCtaMain) {
+        const cta = pickStoryCta({ objective: obj, storyIndex: index, usedCtas, variationSeed: seed })
+        usedCtas.push(cta)
+        return { ...story, footerCtaMain: cta }
+      }
+      if (story.kind === "cta") {
+        const cta = pickStoryCta({ objective: obj, storyIndex: index, usedCtas, variationSeed: seed })
+        usedCtas.push(cta)
+        return { ...story, headline: cta, ctaMain: cta }
+      }
+      return story
+    })
+  }
+
+  return rawStories
 }
 
 // ─── Carousel ────────────────────────────────────────────────────────────────
@@ -1531,7 +1643,7 @@ function lineForProductWhatsApp(f: ProductFacts, index?: number): string[] {
   if (f.productNote && !f.productNote.toLocaleLowerCase("pt-BR").includes("ponto forte")) {
     lines.push(`📝 ${f.productNote}`)
   }
-  if (f.quantity <= 1) lines.push("⚡ 1 unidade disponível")
+  if (effectiveQuantity(f) <= 1) lines.push("⚡ Última unidade disponível")
   return lines
 }
 
@@ -1572,8 +1684,8 @@ function generateWhatsApp(facts: ProductFacts[], strategy: GeneralStrategy): str
       closingParts.push(`${facts.length > 1 ? "O destaque" : "O destaque"} é o conjunto: ${reasons.join(", ")}.`)
     }
   }
-  if (primary.quantity <= 1) closingParts.push("Tenho só uma unidade nessa condição.")
-  else if (strategy.urgencyLevel !== "none") closingParts.push(urgencyWhatsAppLine(strategy.urgencyLevel, primary.quantity))
+  if (effectiveQuantity(primary) <= 1) closingParts.push("Tenho só uma unidade nessa condição.")
+  else if (strategy.urgencyLevel !== "none") closingParts.push(urgencyWhatsAppLine(strategy.urgencyLevel, effectiveQuantity(primary)))
   closingParts.push(cta)
   lines.push(closingParts.join(" "))
 
@@ -1658,10 +1770,28 @@ export function generateContent(
   strategy: GeneralStrategy
 ): GeneratedContent {
   if (drafts.length === 0) throw new Error("generateContent requires at least one product draft")
-  const facts = sortProductsForVitrine(drafts.map(buildProductFacts), strategy)
+  const rawFacts = sortProductsForVitrine(drafts.map(buildProductFacts), strategy)
+
+  // Compute commercial quantities: group by commercial equivalence key so that
+  // two identical lacrado iPads count as 2 units in the same group, while a
+  // lacrado iPad and a Grade-A iPad remain separate groups.
+  // Facts that already carry commercialAvailableQuantity (caller-supplied) are
+  // kept as-is; the rest are filled from the campaign's own product set.
+  const commercialGroups = new Map<string, number>()
+  rawFacts.forEach((f) => {
+    if (f.commercialAvailableQuantity != null) return
+    const key = getCommercialAvailabilityKey(f)
+    commercialGroups.set(key, (commercialGroups.get(key) ?? 0) + 1)
+  })
+  const facts = rawFacts.map((f) =>
+    f.commercialAvailableQuantity != null
+      ? f
+      : { ...f, commercialAvailableQuantity: commercialGroups.get(getCommercialAvailabilityKey(f)) ?? 1 }
+  )
+
   const warnings: string[] = []
   const primary = pickPrimary(facts)
-  if (strategy.urgencyLevel === "high" && primary.quantity > 3) {
+  if (strategy.urgencyLevel === "high" && effectiveQuantity(primary) > 3) {
     warnings.push("Urgência alta com estoque > 3 unidades pode parecer falsa escassez.")
   }
   facts.forEach((f) => {

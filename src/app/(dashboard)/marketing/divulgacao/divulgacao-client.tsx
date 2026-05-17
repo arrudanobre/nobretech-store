@@ -1121,6 +1121,7 @@ export function DivulgacaoClient() {
   // null = use smart default; true/false = user override.
   const [addHighlightStory, setAddHighlightStory] = useState<boolean | null>(null)
   const [addCtaStory, setAddCtaStory] = useState<boolean | null>(null)
+  const [ctaVariationSeed, setCtaVariationSeed] = useState(0)
 
   const [outputTab, setOutputTab] = useState<OutputTab>("stories")
   const [copied, setCopied] = useState<CopiedKey>(null)
@@ -1356,8 +1357,9 @@ export function DivulgacaoClient() {
       angle,
       addHighlightStory,
       addCtaStory,
+      ctaVariationSeed,
     }),
-    [objective, channel, tone, urgencyLevel, generalCta, generalNote, angle, addHighlightStory, addCtaStory]
+    [objective, channel, tone, urgencyLevel, generalCta, generalNote, angle, addHighlightStory, addCtaStory, ctaVariationSeed]
   )
 
   const deterministic = useMemo<GeneratedContent | null>(() => {
@@ -2396,6 +2398,16 @@ export function DivulgacaoClient() {
                     )}
                     {copyChannelTab === "stories" && (
                       <div className="mt-3 space-y-2">
+                        <div className="flex items-center justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setCtaVariationSeed((s) => s + 1)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-gray-600 transition-colors hover:border-royal-300 hover:text-royal-700"
+                            title="Troca os CTAs de todos os stories sem alterar preços ou dados"
+                          >
+                            Variar CTAs
+                          </button>
+                        </div>
                         {displayGenerated.stories.map((story, index) => (
                           <details key={index} className="rounded-lg border border-gray-200 bg-gray-50 p-2" open={index === 0}>
                             <summary className="cursor-pointer text-xs font-semibold text-navy-900">
