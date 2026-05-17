@@ -10,6 +10,7 @@ import { BarChart3, Package, ShoppingCart, ShieldCheck, AlertTriangle, FileText,
 import { useState, useEffect, createContext, useContext, useCallback } from "react"
 import { supabase } from "@/lib/supabase"
 import { canAccess, roleLabels, type PermissionKey, type UserRole } from "@/lib/permissions"
+import { NotificationBell } from "@/components/notifications/notification-bell"
 
 export interface NavItem {
   label: string
@@ -714,6 +715,7 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
                 {title}
               </h1>
               <div className="flex items-center gap-2">
+                <NotificationBell dark={isOrionPage} />
                 <UserHeader currentUser={currentUser} dark={isOrionPage} />
               </div>
             </div>

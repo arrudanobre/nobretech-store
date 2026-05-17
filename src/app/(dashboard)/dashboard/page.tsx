@@ -45,6 +45,7 @@ import {
   LabelList,
 } from "recharts"
 import Link from "next/link"
+import { OperationalAlertsCard } from "@/components/notifications/notification-bell"
 
 const CATEGORY_COLORS: Record<string, string> = {
   iPhone: "#3B82F6", // Royal Blue
@@ -875,6 +876,8 @@ export default function DashboardPage() {
           </div>
         </div>
       </section>
+
+      <OperationalAlertsCard />
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_1fr]">
         <div className="overflow-hidden rounded-2xl border border-gray-100 bg-gradient-to-br from-navy-950 via-navy-900 to-navy-800 text-white shadow-sm">
