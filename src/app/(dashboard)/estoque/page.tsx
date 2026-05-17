@@ -814,7 +814,7 @@ export default function InventoryPage() {
       {!loading && filtered.length > 0 && (
         <div className="w-full min-w-0 max-w-full overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
           <div className="block w-full max-w-full overflow-x-auto overscroll-x-contain">
-            <table className="w-[1450px] table-fixed">
+            <table className="w-[1545px] table-fixed">
               <colgroup>
                 <col style={{ width: 340 }} />
                 <col style={{ width: 100 }} />
@@ -825,8 +825,8 @@ export default function InventoryPage() {
                 <col style={{ width: 105 }} />
                 <col style={{ width: 110 }} />
                 <col style={{ width: 120 }} />
-                <col style={{ width: 110 }} />
-                <col style={{ width: 140 }} />
+                <col style={{ width: 135 }} />
+                <col style={{ width: 210 }} />
               </colgroup>
               <thead className="bg-gray-50 text-[10px] font-bold uppercase tracking-wider text-gray-500">
                 <tr className="border-b border-gray-100">
@@ -912,7 +912,7 @@ export default function InventoryPage() {
                           </div>
                         ) : <span className="text-gray-400">—</span>}
                       </td>
-                      <td className="px-4 py-3 align-middle">
+                      <td className="overflow-hidden px-4 py-3 align-middle">
                         <span className={cn("inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-bold", logistics === "in_transit" || logistics === "ordered" || logistics === "partially_received" ? "bg-royal-50 text-royal-700" : "bg-emerald-50 text-emerald-700")}>
                           {getInventoryTimingLabel(item)}
                         </span>

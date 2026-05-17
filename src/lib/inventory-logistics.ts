@@ -306,7 +306,8 @@ export function getInventoryPurchaseBatchTimingLabel(batch: InventoryPurchaseBat
   const days = daysBetween(today, batch.expected_arrival_date)
   if (days < 0) return `Atrasado ${Math.abs(days)} dia${Math.abs(days) === 1 ? "" : "s"}`
   if (days === 0) return "Hoje"
-  return `${batch.expected_arrival_date.split("-").reverse().join("/")} (${days} dia${days === 1 ? "" : "s"})`
+  const dateOnly = batch.expected_arrival_date.slice(0, 10)
+  return `${dateOnly.split("-").reverse().join("/")} (${days} dia${days === 1 ? "" : "s"})`
 }
 
 export function getInventoryPurchaseBatchValue(batch: InventoryPurchaseBatch): string {
