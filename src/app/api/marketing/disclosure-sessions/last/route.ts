@@ -4,6 +4,10 @@ export const dynamic = "force-dynamic"
 import { NextResponse } from "next/server"
 import { pool } from "@/lib/db"
 import { requireApiAuthContext } from "@/lib/auth-context"
+import {
+  supplierOfferRowToMarketingProduct,
+  type SupplierOfferRow,
+} from "@/lib/marketing/supplier-offer-mapper"
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -25,6 +29,23 @@ type SessionRow = {
 
 type ItemRow = {
   inventory_id: string | null
+  supplier_offer_id: string | null
+  source_type: string | null
+  so_model: string | null
+  so_category: string | null
+  so_storage: string | null
+  so_size: string | null
+  so_color: string | null
+  so_brand: string | null
+  so_condition: string | null
+  so_internal_grade: string | null
+  so_battery_health: number | string | null
+  so_warranty_label: string | null
+  so_supplier_price: number | string | null
+  so_suggested_sale_price: number | string | null
+  so_status: string | null
+  so_supplier_name: string | null
+  so_supplier_id: string | null
   is_primary: boolean
   is_featured: boolean
   base_price: string | number | null
@@ -69,17 +90,36 @@ function toNumber(value: string | number | null): number | null {
   return null
 }
 
-async function loadSession(companyId: string, sessionId: string) {
-  const [sessionResult, itemsResult, outputsResult] = await Promise.all([
-    pool.query<SessionRow>(
-      `SELECT id, objective, channel, tone, urgency_level, general_cta, general_note, angle,
-              add_highlight_story, add_cta_story, ai_enabled, created_at, updated_at
-       FROM marketing_disclosure_sessions
-       WHERE company_id = $1::uuid AND id = $2::uuid
-       LIMIT 1`,
+// Items query that joins supplier_offers so supplier-offer products can be
+// fully rehydrated (cost/supplier stays internal — never exposed in the story).
+// Falls back to the legacy query when migrations/marketing_supplier_offers_integration.sql
+// hasn't been applied yet (undefined_column).
+async function fetchSessionItems(companyId: string, sessionId: string): Promise<ItemRow[]> {
+  try {
+    const result = await pool.query<ItemRow>(
+      `SELECT mdi.inventory_id, mdi.supplier_offer_id, mdi.source_type,
+              so.model AS so_model, so.category AS so_category, so.storage AS so_storage,
+              so.size AS so_size, so.color AS so_color, so.brand AS so_brand,
+              so.condition AS so_condition, so.internal_grade AS so_internal_grade,
+              so.battery_health AS so_battery_health,
+              so.warranty_label AS so_warranty_label, so.supplier_price AS so_supplier_price,
+              so.suggested_sale_price AS so_suggested_sale_price, so.status AS so_status,
+              sup.name AS so_supplier_name, sup.id AS so_supplier_id,
+              mdi.is_primary, mdi.is_featured, mdi.base_price, mdi.disclosure_price, mdi.discount_amount,
+              mdi.discount_percent, mdi.installment_count, mdi.installment_amount, mdi.installment_total,
+              mdi.gifts_text, mdi.warranty_label, mdi.warranty_source, mdi.product_note, mdi.product_cta,
+              mdi.copy_json, mdi.display_order, mdi.updated_at
+       FROM marketing_disclosure_items mdi
+       LEFT JOIN supplier_offers so ON so.id = mdi.supplier_offer_id
+       LEFT JOIN suppliers sup ON sup.id = so.supplier_id
+       WHERE mdi.company_id = $1::uuid AND mdi.session_id = $2::uuid
+       ORDER BY mdi.display_order ASC, mdi.created_at ASC`,
       [companyId, sessionId]
-    ),
-    pool.query<ItemRow>(
+    )
+    return result.rows
+  } catch (error) {
+    if (!migrationMissing(error)) throw error
+    const result = await pool.query<ItemRow>(
       `SELECT inventory_id, is_primary, is_featured, base_price, disclosure_price, discount_amount,
               discount_percent, installment_count, installment_amount, installment_total,
               gifts_text, warranty_label, warranty_source, product_note, product_cta,
@@ -88,7 +128,22 @@ async function loadSession(companyId: string, sessionId: string) {
        WHERE company_id = $1::uuid AND session_id = $2::uuid
        ORDER BY display_order ASC, created_at ASC`,
       [companyId, sessionId]
+    )
+    return result.rows
+  }
+}
+
+async function loadSession(companyId: string, sessionId: string) {
+  const [sessionResult, itemRows, outputsResult] = await Promise.all([
+    pool.query<SessionRow>(
+      `SELECT id, objective, channel, tone, urgency_level, general_cta, general_note, angle,
+              add_highlight_story, add_cta_story, ai_enabled, created_at, updated_at
+       FROM marketing_disclosure_sessions
+       WHERE company_id = $1::uuid AND id = $2::uuid
+       LIMIT 1`,
+      [companyId, sessionId]
     ),
+    fetchSessionItems(companyId, sessionId),
     pool.query<OutputRow>(
       `SELECT channel, content_json, content_text, generated_by
        FROM marketing_disclosure_outputs
@@ -116,8 +171,33 @@ async function loadSession(companyId: string, sessionId: string) {
       addCtaStory: session.add_cta_story ?? null,
     },
     source: session.ai_enabled ? "ai" : "deterministic",
-    products: itemsResult.rows.map((item) => ({
-      productId: item.inventory_id,
+    products: itemRows.map((item) => {
+      const isSupplierOffer = item.source_type === "supplier_offer" && Boolean(item.supplier_offer_id)
+      const supplierOffer = isSupplierOffer && item.so_status != null
+        ? supplierOfferRowToMarketingProduct({
+            id: item.supplier_offer_id as string,
+            model: item.so_model,
+            category: item.so_category,
+            storage: item.so_storage,
+            size: item.so_size,
+            color: item.so_color,
+            brand: item.so_brand,
+            condition: item.so_condition,
+            internal_grade: item.so_internal_grade,
+            battery_health: item.so_battery_health,
+            warranty_label: item.so_warranty_label,
+            supplier_price: item.so_supplier_price,
+            suggested_sale_price: item.so_suggested_sale_price,
+            status: item.so_status,
+            supplier_name: item.so_supplier_name,
+            supplier_id: item.so_supplier_id,
+          } satisfies SupplierOfferRow)
+        : null
+      return {
+      productId: isSupplierOffer ? item.supplier_offer_id : item.inventory_id,
+      sourceType: isSupplierOffer ? "supplier_offer" : "inventory",
+      supplierOfferId: item.supplier_offer_id ?? null,
+      supplierOffer,
       isPrimary: item.is_primary,
       isFeatured: item.is_featured,
       basePrice: toNumber(item.base_price),
@@ -135,7 +215,8 @@ async function loadSession(companyId: string, sessionId: string) {
       copy: item.copy_json ?? {},
       displayOrder: item.display_order,
       updatedAt: item.updated_at,
-    })),
+      }
+    }),
     outputs: outputsResult.rows.reduce<Record<string, { text: string; json: Record<string, unknown> | null; source: string }>>(
       (acc, output) => {
         acc[output.channel] = {

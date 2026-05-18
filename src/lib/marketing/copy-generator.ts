@@ -42,6 +42,14 @@ export interface MarketingProduct {
   warranty_label?: string | null
   warranty_source?: "inventory" | "manual" | null
   variants: Array<{ color_name: string; quantity: number; suggested_price: number | null }>
+  // Supplier offer fields — only set when sourceType is "supplier_offer"
+  sourceType?: "inventory" | "supplier_offer"
+  supplierPrice?: number | null
+  supplierName?: string | null
+  supplierId?: string | null
+  condition?: string | null
+  // Internal grade (e.g. "A+"). Internal-only — never a public argument.
+  internalGrade?: string | null
 }
 
 // Editable per-product draft inside the campaign.

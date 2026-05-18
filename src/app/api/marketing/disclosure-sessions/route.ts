@@ -99,44 +99,99 @@ export async function POST(req: Request) {
     for (let index = 0; index < products.length; index += 1) {
       const item = products[index]
       const copy = asRecord(item.copy)
-      await client.query(
-        `INSERT INTO marketing_disclosure_items
-          (
-            session_id, company_id, inventory_id, is_primary, is_featured,
-            base_price, disclosure_price, discount_amount, discount_percent,
-            installment_count, installment_amount, installment_total,
-            gifts_text, warranty_label, warranty_source, product_note, product_cta,
-            copy_json, display_order
+      const inventoryId = pickUuid(item.productId)
+      const supplierOfferId = pickUuid(item.supplierOfferId)
+
+      // Try to insert with supplier_offer_id column (requires migration_supplier_offers_integration.sql).
+      // If the column doesn't exist yet, fall back to omitting it.
+      try {
+        await client.query(
+          `INSERT INTO marketing_disclosure_items
+            (
+              session_id, company_id, inventory_id, supplier_offer_id, source_type,
+              is_primary, is_featured,
+              base_price, disclosure_price, discount_amount, discount_percent,
+              installment_count, installment_amount, installment_total,
+              gifts_text, warranty_label, warranty_source, product_note, product_cta,
+              copy_json, display_order
+            )
+           VALUES (
+              $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5,
+              $6, $7,
+              $8, $9, $10, $11,
+              $12, $13, $14,
+              $15, $16, $17, $18, $19,
+              $20::jsonb, $21
+            )`,
+          [
+            sessionId,
+            auth.context.companyId,
+            inventoryId,
+            supplierOfferId,
+            supplierOfferId ? "supplier_offer" : "inventory",
+            Boolean(item.isPrimary),
+            Boolean(item.isFeatured),
+            pickNumber(item.basePrice),
+            pickNumber(item.disclosurePrice),
+            pickNumber(item.discountAmount),
+            pickNumber(item.discountPercent),
+            Math.max(0, Math.min(18, Math.floor(pickNumber(item.installmentCount) ?? 0))),
+            pickNumber(item.installmentAmount),
+            pickNumber(item.installmentTotal),
+            pickString(item.gifts, ""),
+            pickString(item.warrantyLabel, ""),
+            pickString(item.warrantySource, ""),
+            pickString(item.productNote, ""),
+            pickString(item.productCta, ""),
+            JSON.stringify(copy),
+            index,
+          ]
+        )
+      } catch (err) {
+        if (migrationMissing(err)) {
+          // Migration not yet applied — fall back to legacy insert without supplier_offer_id
+          await client.query(
+            `INSERT INTO marketing_disclosure_items
+              (
+                session_id, company_id, inventory_id, is_primary, is_featured,
+                base_price, disclosure_price, discount_amount, discount_percent,
+                installment_count, installment_amount, installment_total,
+                gifts_text, warranty_label, warranty_source, product_note, product_cta,
+                copy_json, display_order
+              )
+             VALUES (
+                $1::uuid, $2::uuid, $3::uuid, $4, $5,
+                $6, $7, $8, $9,
+                $10, $11, $12,
+                $13, $14, $15, $16, $17,
+                $18::jsonb, $19
+              )`,
+            [
+              sessionId,
+              auth.context.companyId,
+              inventoryId,
+              Boolean(item.isPrimary),
+              Boolean(item.isFeatured),
+              pickNumber(item.basePrice),
+              pickNumber(item.disclosurePrice),
+              pickNumber(item.discountAmount),
+              pickNumber(item.discountPercent),
+              Math.max(0, Math.min(18, Math.floor(pickNumber(item.installmentCount) ?? 0))),
+              pickNumber(item.installmentAmount),
+              pickNumber(item.installmentTotal),
+              pickString(item.gifts, ""),
+              pickString(item.warrantyLabel, ""),
+              pickString(item.warrantySource, ""),
+              pickString(item.productNote, ""),
+              pickString(item.productCta, ""),
+              JSON.stringify(copy),
+              index,
+            ]
           )
-         VALUES (
-            $1::uuid, $2::uuid, $3::uuid, $4, $5,
-            $6, $7, $8, $9,
-            $10, $11, $12,
-            $13, $14, $15, $16, $17,
-            $18::jsonb, $19
-          )`,
-        [
-          sessionId,
-          auth.context.companyId,
-          pickUuid(item.productId),
-          Boolean(item.isPrimary),
-          Boolean(item.isFeatured),
-          pickNumber(item.basePrice),
-          pickNumber(item.disclosurePrice),
-          pickNumber(item.discountAmount),
-          pickNumber(item.discountPercent),
-          Math.max(0, Math.min(18, Math.floor(pickNumber(item.installmentCount) ?? 0))),
-          pickNumber(item.installmentAmount),
-          pickNumber(item.installmentTotal),
-          pickString(item.gifts, ""),
-          pickString(item.warrantyLabel, ""),
-          pickString(item.warrantySource, ""),
-          pickString(item.productNote, ""),
-          pickString(item.productCta, ""),
-          JSON.stringify(copy),
-          index,
-        ]
-      )
+        } else {
+          throw err
+        }
+      }
     }
 
     for (const [channel, value] of Object.entries(outputs)) {

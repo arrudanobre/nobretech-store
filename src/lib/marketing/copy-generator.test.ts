@@ -1091,12 +1091,15 @@ function vitrineItem0(facts: ProductFacts[], strategy: GeneralStrategy) {
 }
 
 {
-  // Editor financial values must not use ellipsis/truncate.
+  // Inventory financial tiles must stay fully readable (break-all, no ellipsis).
+  // Supplier-offer tiles intentionally truncate but expose the full value via
+  // a native title tooltip, so the operator never loses the number.
   const ui = readFileSync("src/app/(dashboard)/marketing/divulgacao/divulgacao-client.tsx", "utf8")
-  assert.ok(!/Preço padrão[\s\S]{0,260}truncate/.test(ui), "Preço padrão card has no truncate")
-  assert.ok(!/Divulgação[\s\S]{0,260}truncate/.test(ui), "Divulgação card has no truncate")
-  assert.ok(!/Parcelamento[\s\S]{0,260}truncate/.test(ui), "Parcelamento card has no truncate")
-  assert.ok(/break-all text-sm font-black[\s\S]{0,120}\{disclosurePrice/.test(ui), "financial values stay fully readable (break-all, not ellipsis)")
+  assert.ok(!/Preço padrão[\s\S]{0,260}truncate/.test(ui), "inventory 'Preço padrão' card has no truncate")
+  assert.ok(/Preço padrão[\s\S]{0,200}break-all/.test(ui), "inventory 'Preço padrão' value uses break-all")
+  assert.ok(/break-all text-sm font-black[\s\S]{0,120}\{disclosurePrice/.test(ui), "inventory disclosure value stays fully readable (break-all, not ellipsis)")
+  // Supplier cost tile truncates but keeps a title with the full amount.
+  assert.ok(/Custo fornecedor[\s\S]{0,200}truncate[\s\S]{0,200}title=\{supplierCost/.test(ui), "supplier cost tile truncates with a full-value title tooltip")
 }
 
 // ─── New spec tests (8 required by task) ─────────────────────────────────────

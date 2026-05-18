@@ -52,6 +52,15 @@ import {
   type UrgencyLevel,
 } from "@/lib/marketing/copy-generator"
 import type { StoryPngResult } from "@/lib/marketing/story-renderer/story-png"
+import {
+  SUPPLIER_OFFER_DISCLOSURE_PRICE_MESSAGE,
+  batteryDisplayForMarketingProduct,
+  calculateSupplierOfferMargin,
+  getSupplierOfferSelectorSummary,
+  supplierOfferCampaignDefaults,
+  supplierOfferConditionLabel,
+  supplierOfferNeedsDisclosurePrice,
+} from "@/lib/marketing/supplier-offer-mapper"
 import { cn } from "@/lib/utils"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -122,6 +131,9 @@ interface LoadedDisclosureSession {
   source: CopySource
   products: Array<{
     productId: string | null
+    sourceType?: "inventory" | "supplier_offer"
+    supplierOfferId?: string | null
+    supplierOffer?: MarketingProduct | null
     isPrimary: boolean
     isFeatured: boolean
     basePrice: number | null
@@ -559,21 +571,28 @@ function CarouselCanvas({ slide }: { slide: CarouselSlideVisual }) {
 
 // ─── Product selector ────────────────────────────────────────────────────────
 
+type ProductSourceTab = "inventory" | "supplier_offer"
+
 function ProductSelector({
   products,
+  supplierOfferProducts,
   selectedIds,
   onAdd,
 }: {
   products: MarketingProduct[]
+  supplierOfferProducts: MarketingProduct[]
   selectedIds: Set<string>
   onAdd: (p: MarketingProduct) => void
 }) {
   const [query, setQuery] = useState("")
   const [open, setOpen] = useState(false)
+  const [sourceTab, setSourceTab] = useState<ProductSourceTab>("inventory")
   const containerRef = useRef<HTMLDivElement>(null)
 
+  const activeList = sourceTab === "inventory" ? products : supplierOfferProducts
+
   const filtered = useMemo(() => {
-    const available = products.filter((p) => !selectedIds.has(p.id))
+    const available = activeList.filter((p) => !selectedIds.has(p.id))
     if (!query.trim()) return available.slice(0, 30)
     const q = query.toLowerCase()
     return available
@@ -586,7 +605,7 @@ function ProductSelector({
           (p.grade ?? "").toLowerCase().includes(q)
       )
       .slice(0, 30)
-  }, [products, query, selectedIds])
+  }, [activeList, query, selectedIds])
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -622,47 +641,105 @@ function ProductSelector({
       </div>
 
       {open && (
-        <div className="absolute z-50 left-0 right-0 mt-1 max-h-72 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-lg">
-          {filtered.length === 0 ? (
-            <div className="px-4 py-3 text-xs text-gray-500">
-              {products.filter((p) => !selectedIds.has(p.id)).length === 0
-                ? "Todos os produtos já foram adicionados."
-                : "Nenhum produto encontrado."}
-            </div>
-          ) : (
-            filtered.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                className="w-full text-left px-4 py-2.5 hover:bg-royal-100/50 transition-colors border-b border-gray-100 last:border-0"
-                onClick={() => {
-                  onAdd(p)
-                  setQuery("")
-                  setOpen(false)
-                }}
-              >
-                <div className="text-sm font-medium text-navy-900 leading-tight">{p.name}</div>
-                <div className="flex gap-1.5 mt-1 flex-wrap items-center">
-                  {p.grade && (
-                    <span className="text-[10px] font-medium rounded px-1.5 py-0.5 bg-success-100 text-success-500">
-                      {p.grade}
-                    </span>
+        <div className="absolute z-50 left-0 right-0 mt-1 rounded-xl border border-gray-200 bg-white shadow-lg">
+          {/* Source tabs */}
+          <div className="flex border-b border-gray-100">
+            <button
+              type="button"
+              className={cn("flex-1 px-3 py-2 text-xs font-medium transition-colors", sourceTab === "inventory" ? "bg-navy-900 text-white rounded-tl-xl" : "text-gray-500 hover:bg-gray-50 rounded-tl-xl")}
+              onClick={(e) => { e.stopPropagation(); setSourceTab("inventory") }}
+            >
+              Estoque Nobretech
+            </button>
+            <button
+              type="button"
+              className={cn("flex-1 px-3 py-2 text-xs font-medium transition-colors", sourceTab === "supplier_offer" ? "bg-navy-900 text-white rounded-tr-xl" : "text-gray-500 hover:bg-gray-50 rounded-tr-xl")}
+              onClick={(e) => { e.stopPropagation(); setSourceTab("supplier_offer") }}
+            >
+              Ofertas de fornecedor {supplierOfferProducts.length > 0 ? `(${supplierOfferProducts.length})` : ""}
+            </button>
+          </div>
+
+          <div className="max-h-64 overflow-y-auto">
+            {filtered.length === 0 ? (
+              <div className="px-4 py-3 text-xs text-gray-500">
+                {activeList.filter((p) => !selectedIds.has(p.id)).length === 0
+                  ? "Todos os produtos já foram adicionados."
+                  : sourceTab === "supplier_offer"
+                    ? "Nenhuma oferta disponível. Importe ofertas em Fornecedores → Ofertas."
+                    : "Nenhum produto encontrado."}
+              </div>
+            ) : (
+              filtered.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className="w-full text-left px-4 py-2.5 hover:bg-royal-100/50 transition-colors border-b border-gray-100 last:border-0"
+                  onClick={() => {
+                    onAdd(p)
+                    setQuery("")
+                    setOpen(false)
+                  }}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="text-sm font-medium text-navy-900 leading-tight">{p.name}</div>
+                  </div>
+                  {p.sourceType === "supplier_offer" ? (() => {
+                    const s = getSupplierOfferSelectorSummary(p)
+                    return (
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        <span className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-gray-100 text-gray-600">
+                          {s.conditionLabel}
+                        </span>
+                        {s.battery != null && (
+                          <span className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-royal-100 text-royal-600">
+                            Bat. {s.battery}%
+                          </span>
+                        )}
+                        {s.warrantyLabel && (
+                          <span className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-emerald-50 text-emerald-700">
+                            {s.warrantyLabel}
+                          </span>
+                        )}
+                        <span className="text-[10px] font-medium text-gray-600">
+                          Custo: {s.supplierPrice != null ? formatBRL(s.supplierPrice) : "não informado"}
+                        </span>
+                        <span className="text-[10px] text-gray-400">·</span>
+                        <span className="text-[10px] font-medium text-gray-600">
+                          {s.hasSuggestion ? `Sugestão: ${formatBRL(s.suggestedPrice as number)}` : "Sem preço de divulgação"}
+                        </span>
+                        {s.supplierName && (
+                          <>
+                            <span className="text-[10px] text-gray-400">·</span>
+                            <span className="text-[10px] font-medium text-blue-600">{s.supplierName}</span>
+                          </>
+                        )}
+                      </div>
+                    )
+                  })() : (
+                    <div className="flex gap-1.5 mt-1 flex-wrap items-center">
+                      {p.grade && (
+                        <span className="text-[10px] font-medium rounded px-1.5 py-0.5 bg-success-100 text-success-500">
+                          {p.grade}
+                        </span>
+                      )}
+                      {p.battery_health != null && (
+                        <span className="text-[10px] font-medium rounded px-1.5 py-0.5 bg-royal-100 text-royal-600">
+                          Bat {p.battery_health}%
+                        </span>
+                      )}
+                      {p.suggested_price != null && (
+                        <span className="text-[10px] text-gray-600 font-medium">
+                          {formatBRL(p.suggested_price)}
+                        </span>
+                      )}
+                      <span className="text-[10px] text-gray-400">{p.quantity} un.</span>
+                    </div>
                   )}
-                  {p.battery_health != null && (
-                    <span className="text-[10px] font-medium rounded px-1.5 py-0.5 bg-royal-100 text-royal-600">
-                      Bat {p.battery_health}%
-                    </span>
-                  )}
-                  {p.suggested_price != null && (
-                    <span className="text-[10px] text-gray-600 font-medium">
-                      {formatBRL(p.suggested_price)}
-                    </span>
-                  )}
-                  <span className="text-[10px] text-gray-400">{p.quantity} un.</span>
-                </div>
-              </button>
-            ))
-          )}
+                </button>
+              ))
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -738,9 +815,20 @@ function ProductCardEditor({
   onToggleFeatured: () => void
   onRemove: () => void
 }) {
-  const basePrice = parseBRLInput(state.basePriceText) ?? product.suggested_price
-  const disclosurePrice = parseBRLInput(state.disclosurePriceText) ?? basePrice
-  const discount = calculateDiscount(basePrice, disclosurePrice)
+  const isSupplierOffer = product.sourceType === "supplier_offer"
+  const basePrice = isSupplierOffer
+    ? parseBRLInput(state.basePriceText) ?? product.supplierPrice ?? null
+    : parseBRLInput(state.basePriceText) ?? product.suggested_price
+  const disclosurePrice = isSupplierOffer
+    ? parseBRLInput(state.disclosurePriceText)
+    : parseBRLInput(state.disclosurePriceText) ?? basePrice
+  const discount = isSupplierOffer ? null : calculateDiscount(basePrice, disclosurePrice)
+
+  // Editable internal cost (defaults to supplierPrice). Margin reacts to edits.
+  const supplierCost = isSupplierOffer ? basePrice : null
+  const supplierMargin = calculateSupplierOfferMargin(supplierCost, disclosurePrice)
+  const batteryMode = batteryDisplayForMarketingProduct(product)
+  const conditionLabel = supplierOfferConditionLabel(product.condition)
   const installment =
     disclosurePrice && state.installmentCount > 0
       ? calculateInstallmentDisplay(disclosurePrice, state.installmentCount)
@@ -762,8 +850,8 @@ function ProductCardEditor({
   }
 
   const headerSummary: string[] = []
-  if (product.grade) headerSummary.push(product.grade)
-  if (product.battery_health != null) headerSummary.push(`Bat ${product.battery_health}%`)
+  if (!isSupplierOffer && product.grade) headerSummary.push(product.grade)
+  if (batteryMode === "value" && product.battery_health != null) headerSummary.push(`Bat. ${product.battery_health}%`)
   if (product.storage) headerSummary.push(product.storage)
   if (product.color) headerSummary.push(product.color)
   const effectiveWarranty = state.warrantyLabel.trim()
@@ -811,6 +899,25 @@ function ProductCardEditor({
                 Oferta
               </span>
             )}
+            {isSupplierOffer && (
+              <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide bg-blue-50 text-blue-600" title="Produto de fornecedor — não está no estoque Nobretech">
+                Fornecedor {product.supplierName ? `· ${product.supplierName}` : ""}
+              </span>
+            )}
+            {isSupplierOffer && (
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide",
+                  product.condition === "sealed"
+                    ? "bg-emerald-50 text-emerald-700"
+                    : product.condition === "used"
+                      ? "bg-amber-50 text-amber-700"
+                      : "bg-gray-100 text-gray-500"
+                )}
+              >
+                {conditionLabel}
+              </span>
+            )}
           </div>
           <h3 className="mt-2 text-lg font-bold leading-tight tracking-tight text-navy-900">{product.name}</h3>
           <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-gray-500">
@@ -830,36 +937,112 @@ function ProductCardEditor({
                 {state.gifts.trim()}
               </span>
             )}
+            {isSupplierOffer && batteryMode === "missing" && (
+              <span className="rounded-full border border-amber-100 bg-amber-50 px-2 py-1 font-semibold text-amber-700">
+                Bateria não informada
+              </span>
+            )}
           </div>
 
-          <div className="mt-4 grid grid-cols-1 gap-2 min-[520px]:grid-cols-2 xl:grid-cols-3">
-            <div className="rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-2">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Preço padrão</p>
-              <p className="mt-1 break-all text-sm font-bold leading-tight text-navy-900">{basePrice != null ? formatBRL(basePrice) : "A confirmar"}</p>
-            </div>
-            <div className="rounded-xl border border-[#F0A080] bg-[#FFF7F3] px-3 py-2">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-[#A23E18]">Divulgação</p>
-              <p className="mt-1 break-all text-sm font-black leading-tight text-[#D85A30]">{disclosurePrice != null ? formatBRL(disclosurePrice) : "A confirmar"}</p>
-            </div>
-            <div className="rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-2 min-[520px]:col-span-2 xl:col-span-1">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Parcelamento</p>
-              <p className="mt-1 break-all text-sm font-bold leading-tight text-navy-900">{installment?.text ?? "Sem parcelamento"}</p>
-            </div>
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
-            {discount ? (
-              <span className="font-semibold text-success-600">
-                Desconto: {formatBRL(discount.amount)} ({discount.percent}%)
-              </span>
-            ) : (
-              <span className="text-gray-500">Sem desconto vs padrão.</span>
-            )}
-            {installment && (
-              <span className="text-gray-500">
-                Total {formatBRL(installment.total)}{installment.hasFee ? " · taxas Sidepay" : ""} · simulação informativa
-              </span>
-            )}
-          </div>
+          {isSupplierOffer ? (
+            <>
+              <div className="mt-4 grid gap-2 grid-cols-2 xl:grid-cols-4">
+                <div className="min-w-0 rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-2">
+                  <p className="truncate text-[10px] font-semibold uppercase tracking-wider text-gray-400">Custo fornecedor</p>
+                  <p className="mt-1 truncate text-sm font-bold leading-tight text-navy-900" title={supplierCost != null ? formatBRL(supplierCost) : "não informado"}>
+                    {supplierCost != null ? formatBRL(supplierCost) : "não informado"}
+                  </p>
+                </div>
+                <div className="min-w-0 rounded-xl border border-[#F0A080] bg-[#FFF7F3] px-3 py-2">
+                  <p className="truncate text-[10px] font-semibold uppercase tracking-wider text-[#A23E18]">Divulgação</p>
+                  {disclosurePrice != null ? (
+                    <p className="mt-1 truncate text-sm font-black leading-tight text-[#D85A30]" title={formatBRL(disclosurePrice)}>
+                      {formatBRL(disclosurePrice)}
+                    </p>
+                  ) : (
+                    <p className="mt-1 truncate text-xs font-semibold leading-tight text-[#A23E18]">Defina o preço</p>
+                  )}
+                </div>
+                <div
+                  className={cn(
+                    "min-w-0 rounded-xl border px-3 py-2",
+                    supplierMargin.status === "risk"
+                      ? "border-danger-200 bg-danger-50"
+                      : "border-gray-100 bg-gray-50/70"
+                  )}
+                >
+                  <p className="truncate text-[10px] font-semibold uppercase tracking-wider text-gray-400">Margem estimada</p>
+                  <p
+                    className={cn(
+                      "mt-1 truncate text-sm font-bold leading-tight",
+                      supplierMargin.status === "risk"
+                        ? "text-danger-600"
+                        : supplierMargin.status === "ok"
+                          ? "text-success-600"
+                          : "text-gray-500"
+                    )}
+                    title={supplierMargin.value != null ? formatBRL(supplierMargin.value) : "—"}
+                  >
+                    {supplierMargin.value != null ? formatBRL(supplierMargin.value) : "—"}
+                  </p>
+                </div>
+                <div className="min-w-0 rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-2">
+                  <p className="truncate text-[10px] font-semibold uppercase tracking-wider text-gray-400">Pagamento</p>
+                  <p className="mt-1 truncate text-sm font-bold leading-tight text-navy-900" title={installment?.text ?? "À vista"}>
+                    {installment?.text ?? "À vista"}
+                  </p>
+                </div>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+                {supplierMargin.status === "risk" ? (
+                  <span className="inline-flex items-center gap-1 font-semibold text-danger-600">
+                    <AlertTriangle className="h-3 w-3" />
+                    Preço de divulgação abaixo do custo fornecedor
+                  </span>
+                ) : supplierMargin.status === "ok" ? (
+                  <span className="font-semibold text-success-600">
+                    Margem estimada {formatBRL(supplierMargin.value as number)} · simulação comercial
+                  </span>
+                ) : (
+                  <span className="text-gray-500">Defina custo e preço de divulgação para estimar a margem.</span>
+                )}
+                {product.internalGrade && (
+                  <span className="text-gray-400">Grade interno: {product.internalGrade}</span>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="mt-4 grid grid-cols-1 gap-2 min-[520px]:grid-cols-2 xl:grid-cols-3">
+                <div className="rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Preço padrão</p>
+                  <p className="mt-1 break-all text-sm font-bold leading-tight text-navy-900">{basePrice != null ? formatBRL(basePrice) : "A confirmar"}</p>
+                </div>
+                <div className="rounded-xl border border-[#F0A080] bg-[#FFF7F3] px-3 py-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[#A23E18]">Divulgação</p>
+                  <p className="mt-1 break-all text-sm font-black leading-tight text-[#D85A30]">{disclosurePrice != null ? formatBRL(disclosurePrice) : "A confirmar"}</p>
+                </div>
+                <div className="rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-2 min-[520px]:col-span-2 xl:col-span-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Parcelamento</p>
+                  <p className="mt-1 break-all text-sm font-bold leading-tight text-navy-900">{installment?.text ?? "Sem parcelamento"}</p>
+                </div>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+                {discount ? (
+                  <span className="font-semibold text-success-600">
+                    Desconto: {formatBRL(discount.amount)} ({discount.percent}%)
+                  </span>
+                ) : (
+                  <span className="text-gray-500">Sem desconto vs padrão.</span>
+                )}
+                {installment && (
+                  <span className="text-gray-500">
+                    Total {formatBRL(installment.total)}{installment.hasFee ? " · taxas Sidepay" : ""} · simulação informativa
+                  </span>
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         <div className="flex shrink-0 flex-row items-start gap-1 sm:flex-col">
@@ -912,7 +1095,7 @@ function ProductCardEditor({
           <div className="grid gap-3 md:grid-cols-2">
           <div className="rounded-2xl border border-gray-100 bg-white p-3">
             <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
-              Preço padrão
+              {isSupplierOffer ? "Custo fornecedor" : "Preço padrão"}
             </label>
             <BRLInput
               value={state.basePriceText}
@@ -925,7 +1108,9 @@ function ProductCardEditor({
               onBlur={() => onUpdate({ basePriceText: normalizeBRLInputText(state.basePriceText) })}
             />
             <p className="mt-1 text-[10px] text-gray-500">
-              Padrão: {product.suggested_price != null ? formatBRL(product.suggested_price) : "—"}
+              {isSupplierOffer
+                ? `Custo informado pelo fornecedor: ${product.supplierPrice != null ? formatBRL(product.supplierPrice) : "—"}`
+                : `Padrão: ${product.suggested_price != null ? formatBRL(product.suggested_price) : "—"}`}
             </p>
           </div>
 
@@ -939,7 +1124,19 @@ function ProductCardEditor({
               onChange={(v) => onUpdate({ disclosurePriceText: v })}
               onBlur={() => onUpdate({ disclosurePriceText: normalizeBRLInputText(state.disclosurePriceText) })}
             />
-            {discount ? (
+            {isSupplierOffer ? (
+              supplierMargin.status === "risk" ? (
+                <p className="mt-1 inline-flex items-center gap-1 text-[10px] font-semibold text-danger-600">
+                  <AlertTriangle className="h-3 w-3" /> Abaixo do custo fornecedor
+                </p>
+              ) : supplierMargin.status === "ok" ? (
+                <p className="mt-1 text-[10px] font-semibold text-success-600">
+                  Margem estimada: {formatBRL(supplierMargin.value as number)}
+                </p>
+              ) : (
+                <p className="mt-1 text-[10px] text-gray-500">Defina o preço para estimar a margem.</p>
+              )
+            ) : discount ? (
               <p className="mt-1 inline-flex items-center gap-1 text-[10px] text-success-500 font-semibold">
                 Desconto: {formatBRL(discount.amount)} ({discount.percent}%)
               </p>
@@ -1152,6 +1349,7 @@ function buildQuickProductText(facts: ReturnType<typeof buildProductFacts>[]): s
 
 export function DivulgacaoClient() {
   const [products, setProducts] = useState<MarketingProduct[]>([])
+  const [supplierOfferProducts, setSupplierOfferProducts] = useState<MarketingProduct[]>([])
   const [productImages, setProductImages] = useState<ProductImageMap>({})
   const [loadingProducts, setLoadingProducts] = useState(true)
   const [errorProducts, setErrorProducts] = useState<string | null>(null)
@@ -1227,8 +1425,9 @@ export function DivulgacaoClient() {
   const productsById = useMemo(() => {
     const map = new Map<string, MarketingProduct>()
     products.forEach((p) => map.set(p.id, p))
+    supplierOfferProducts.forEach((p) => map.set(p.id, p))
     return map
-  }, [products])
+  }, [products, supplierOfferProducts])
 
   const loadProducts = useCallback(async () => {
     setLoadingProducts(true)
@@ -1256,6 +1455,22 @@ export function DivulgacaoClient() {
   useEffect(() => {
     loadProducts()
   }, [loadProducts])
+
+  const loadSupplierOfferProducts = useCallback(async () => {
+    try {
+      const res = await fetch("/api/marketing/supplier-offer-products", { cache: "no-store" })
+      const body = await res.json().catch(() => null)
+      if (res.ok && Array.isArray(body?.data)) {
+        setSupplierOfferProducts(body.data as MarketingProduct[])
+      }
+    } catch {
+      // non-critical — supplier offers are additive, inventory still works
+    }
+  }, [])
+
+  useEffect(() => {
+    loadSupplierOfferProducts()
+  }, [loadSupplierOfferProducts])
 
   const loadSuggestions = useCallback(async () => {
     setSuggestionsLoading(true)
@@ -1317,24 +1532,15 @@ export function DivulgacaoClient() {
     setDraftStates((prev) => {
       if (prev.some((d) => d.productId === p.id)) return prev
       const isFirst = prev.length === 0
+      const { baseSeed, disclosureSeed } = supplierOfferCampaignDefaults(p)
       const next: EditableDraftState = {
         productId: p.id,
         isPrimary: isFirst,
         isFeatured: false,
         basePriceText:
-          p.suggested_price != null
-            ? new Intl.NumberFormat("pt-BR", {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              }).format(p.suggested_price)
-            : "",
+          baseSeed != null ? formatBRLInputValue(baseSeed) : "",
         disclosurePriceText:
-          p.suggested_price != null
-            ? new Intl.NumberFormat("pt-BR", {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              }).format(p.suggested_price)
-            : "",
+          disclosureSeed != null ? formatBRLInputValue(disclosureSeed) : "",
         installmentCount: 0,
         gifts: "",
         warrantyLabel: p.warranty_label || "",
@@ -1398,8 +1604,16 @@ export function DivulgacaoClient() {
       .map<ProductDraft | null>((s) => {
         const product = productsById.get(s.productId)
         if (!product) return null
-        const basePrice = parseBRLInput(s.basePriceText) ?? product.suggested_price
-        const disclosurePrice = parseBRLInput(s.disclosurePriceText) ?? basePrice
+        const isSupplierOffer = product.sourceType === "supplier_offer"
+        // Supplier offer: base = internal cost (supplierPrice). Disclosure has
+        // NO fallback to base — an empty price must stay null so the story is
+        // blocked and supplierPrice never leaks as the public price.
+        const basePrice = isSupplierOffer
+          ? parseBRLInput(s.basePriceText) ?? product.supplierPrice ?? null
+          : parseBRLInput(s.basePriceText) ?? product.suggested_price
+        const disclosurePrice = isSupplierOffer
+          ? parseBRLInput(s.disclosurePriceText)
+          : parseBRLInput(s.disclosurePriceText) ?? basePrice
         return {
           product,
           isPrimary: s.isPrimary,
@@ -1446,7 +1660,20 @@ export function DivulgacaoClient() {
     }
   }, [drafts, strategy])
 
-  const generated = aiResult ?? deterministic
+  // Supplier offers must have a public disclosure price before any art is
+  // produced. supplierPrice is internal cost and is never used as the public
+  // price. Blocking here also blocks export and save (both depend on
+  // displayGenerated being non-null).
+  const supplierOfferPriceErrors = useMemo(
+    () =>
+      drafts
+        .filter((d) => supplierOfferNeedsDisclosurePrice(d.product.sourceType, d.disclosurePrice))
+        .map((d) => d.product.name),
+    [drafts]
+  )
+  const blockedBySupplierPrice = supplierOfferPriceErrors.length > 0
+
+  const generated = blockedBySupplierPrice ? null : aiResult ?? deterministic
   const displayGenerated = useMemo<GeneratedContent | null>(() => {
     if (!generated) return null
     return {
@@ -1541,8 +1768,26 @@ export function DivulgacaoClient() {
   }, [])
 
   const applyDisclosureSession = useCallback((session: LoadedDisclosureSession) => {
+    // Supplier offers may no longer be in the live "available" list (sold,
+    // superseded...). Rehydrate them from the snapshot the API returned so the
+    // campaign reloads intact. Fornecedor/custo stay internal — public copy is
+    // unaffected because it never reads supplierName/supplierPrice.
+    const rehydratedOffers = session.products
+      .map((item) => item.supplierOffer)
+      .filter((p): p is MarketingProduct => Boolean(p && p.id))
+    if (rehydratedOffers.length > 0) {
+      setSupplierOfferProducts((prev) => {
+        const known = new Set(prev.map((p) => p.id))
+        const additions = rehydratedOffers.filter((p) => !known.has(p.id))
+        return additions.length > 0 ? [...prev, ...additions] : prev
+      })
+    }
+
+    const resolvable = new Set<string>(productsById.keys())
+    rehydratedOffers.forEach((p) => resolvable.add(p.id))
+
     const nextDrafts = session.products
-      .filter((item) => item.productId && productsById.has(item.productId))
+      .filter((item) => item.productId && resolvable.has(item.productId))
       .map<EditableDraftState>((item, index) => ({
         productId: item.productId as string,
         isPrimary: item.isPrimary || index === 0,
@@ -1642,31 +1887,35 @@ export function DivulgacaoClient() {
       const payload = {
         strategy,
         source: copySource,
-        products: facts.map((fact) => ({
-          productId: fact.id,
-          isPrimary: fact.isPrimary,
-          isFeatured: fact.isFeatured,
-          basePrice: fact.basePrice,
-          disclosurePrice: fact.disclosurePrice,
-          discountAmount: fact.discount?.amount ?? null,
-          discountPercent: fact.discount?.percent ?? null,
-          installmentCount: fact.installment?.count ?? 0,
-          installmentAmount: fact.installment?.perInstallment ?? null,
-          installmentTotal: fact.installment?.total ?? null,
-          gifts: fact.gifts,
-          warrantyLabel: fact.warrantyLabel,
-          warrantySource: fact.warrantySource,
-          productNote: fact.productNote,
-          productCta: fact.productCta,
-          copy: {
-            title: fact.copyTitle,
-            description: fact.copyDescription,
-            strongPoint: fact.copyStrongPoint,
-            objection: fact.copyObjection,
+        products: facts.map((fact) => {
+          const isSupplierOffer = productsById.get(fact.id)?.sourceType === "supplier_offer"
+          return {
+            productId: isSupplierOffer ? null : fact.id,
+            supplierOfferId: isSupplierOffer ? fact.id : null,
+            isPrimary: fact.isPrimary,
+            isFeatured: fact.isFeatured,
+            basePrice: fact.basePrice,
+            disclosurePrice: fact.disclosurePrice,
+            discountAmount: fact.discount?.amount ?? null,
+            discountPercent: fact.discount?.percent ?? null,
+            installmentCount: fact.installment?.count ?? 0,
+            installmentAmount: fact.installment?.perInstallment ?? null,
+            installmentTotal: fact.installment?.total ?? null,
+            gifts: fact.gifts,
+            warrantyLabel: fact.warrantyLabel,
+            warrantySource: fact.warrantySource,
+            productNote: fact.productNote,
             productCta: fact.productCta,
-            storyWhatsappText: quickByProduct.get(fact.id) ?? "",
-          },
-        })),
+            copy: {
+              title: fact.copyTitle,
+              description: fact.copyDescription,
+              strongPoint: fact.copyStrongPoint,
+              objection: fact.copyObjection,
+              productCta: fact.productCta,
+              storyWhatsappText: quickByProduct.get(fact.id) ?? "",
+            },
+          }
+        }),
         outputs: {
           whatsapp: { text: displayGenerated.whatsapp },
           instagram: { text: displayGenerated.instagram },
@@ -1767,6 +2016,10 @@ export function DivulgacaoClient() {
 
   async function generateWithAI() {
     if (drafts.length === 0) return
+    if (blockedBySupplierPrice) {
+      setAIError(SUPPLIER_OFFER_DISCLOSURE_PRICE_MESSAGE)
+      return
+    }
     setAILoading(true)
     setAIError(null)
     const historySummary = loadedDisclosure
@@ -2101,6 +2354,7 @@ export function DivulgacaoClient() {
                 <>
                   <ProductSelector
                     products={products}
+                    supplierOfferProducts={supplierOfferProducts}
                     selectedIds={selectedIds}
                     onAdd={addProduct}
                   />
@@ -2390,13 +2644,22 @@ export function DivulgacaoClient() {
                     </div>
                   </div>
                 )}
+                {blockedBySupplierPrice && (
+                  <div className="mb-2 rounded-lg border border-warning-500/30 bg-warning-100/60 px-3 py-2 text-[11px] text-warning-700 inline-flex items-start gap-1.5 w-full">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>
+                      {SUPPLIER_OFFER_DISCLOSURE_PRICE_MESSAGE}
+                      <span className="block font-semibold">{supplierOfferPriceErrors.join(", ")}</span>
+                    </span>
+                  </div>
+                )}
                 <button
                   type="button"
-                  disabled={drafts.length === 0 || aiLoading}
+                  disabled={drafts.length === 0 || aiLoading || blockedBySupplierPrice}
                   onClick={generateWithAI}
                   className={cn(
                     "w-full inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-xs font-semibold transition-colors",
-                    drafts.length === 0 || aiLoading
+                    drafts.length === 0 || aiLoading || blockedBySupplierPrice
                       ? "bg-gray-100 text-gray-400 cursor-not-allowed"
                       : "bg-navy-900 text-white hover:bg-navy-800"
                   )}
@@ -2416,7 +2679,7 @@ export function DivulgacaoClient() {
                 <div className="mt-2 grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    disabled={drafts.length === 0 || aiLoading}
+                    disabled={drafts.length === 0 || aiLoading || blockedBySupplierPrice}
                     onClick={generateWithAI}
                     className="rounded-md border border-gray-200 bg-white px-3 py-1.5 text-[10px] font-semibold text-gray-600 hover:border-royal-300 hover:text-royal-600 disabled:cursor-not-allowed disabled:text-gray-300"
                   >
@@ -2719,7 +2982,16 @@ export function DivulgacaoClient() {
                 error={errorProducts}
                 productsCount={products.length}
               />
-            ) : !displayGenerated ? null : (
+            ) : !displayGenerated ? (
+              blockedBySupplierPrice ? (
+                <div className="px-5 py-12 text-center">
+                  <AlertTriangle className="mx-auto mb-2 h-7 w-7 text-warning-500" />
+                  <p className="text-sm font-semibold text-navy-900">Preço de divulgação obrigatório</p>
+                  <p className="mx-auto mt-1 max-w-sm text-xs text-gray-500">{SUPPLIER_OFFER_DISCLOSURE_PRICE_MESSAGE}</p>
+                  <p className="mt-2 text-xs font-medium text-gray-600">{supplierOfferPriceErrors.join(", ")}</p>
+                </div>
+              ) : null
+            ) : (
               <>
                 {displayGenerated.warnings.filter((w) => !w.startsWith("IA:") && !w.startsWith("Ângulo sugerido:")).length > 0 && (
                   <div className="border-b border-warning-500/20 bg-warning-100/30 px-5 py-2.5">

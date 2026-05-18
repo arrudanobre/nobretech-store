@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { formatBRL, formatDate } from "@/lib/helpers"
 import { cn } from "@/lib/utils"
-import { ArrowRight, Clock, Edit, Loader2, Mail, MapPin, PackageCheck, Plus, Search, Star, Truck, X } from "lucide-react"
+import { ArrowRight, Bot, Clock, Edit, Loader2, Mail, MapPin, PackageCheck, Plus, Search, Star, Truck, X } from "lucide-react"
 import { toast } from "sonner"
 
 type SupplierProfile = {
@@ -311,9 +311,16 @@ export default function SuppliersPage() {
             {summary ? `${summary.activeSuppliers} ativos · ${summary.openPurchases} pedidos em aberto · ${formatBRL(summary.purchasedAmountCurrentMonth)} comprados no mês` : "Central de compras e rastreabilidade"}
           </p>
         </div>
-        <Button variant="primary" size="sm" onClick={openNewSupplier}>
-          <Plus className="h-4 w-4" /> Novo Fornecedor
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/fornecedores/ofertas/importar">
+            <Button variant="outline" size="sm">
+              <Bot className="h-4 w-4" /> Importar ofertas
+            </Button>
+          </Link>
+          <Button variant="primary" size="sm" onClick={openNewSupplier}>
+            <Plus className="h-4 w-4" /> Novo Fornecedor
+          </Button>
+        </div>
       </div>
 
       <Input
