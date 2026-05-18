@@ -5,6 +5,8 @@ import {
   batteryDisplayForMarketingProduct,
   calculateSupplierOfferMargin,
   getSupplierOfferSelectorSummary,
+  isSupplierOfferEligibleForMarketing,
+  matchesSupplierOfferSearch,
   supplierOfferCampaignDefaults,
   supplierOfferConditionLabel,
   supplierOfferNeedsDisclosurePrice,
@@ -280,6 +282,61 @@ describe("getSupplierOfferSelectorSummary", () => {
     assert.equal(s.battery, 88)
     assert.equal(s.hasSuggestion, false)
     assert.equal(s.suggestedPrice, null)
+  })
+})
+
+describe("matchesSupplierOfferSearch", () => {
+  const miami = supplierOfferRowToMarketingProduct({
+    ...baseRow,
+    model: "iPhone 17 Pro Max",
+    storage: "256GB",
+    color: "Azul",
+    condition: "sealed",
+    supplier_name: "Miami Imports",
+    supplier_price: "7800.00",
+    suggested_sale_price: "9200.00",
+  })
+  const daviAirpods = supplierOfferRowToMarketingProduct({
+    ...baseRow,
+    model: "AirPods Pro 2",
+    category: "airpods",
+    storage: null,
+    color: "Branco",
+    supplier_name: "Davi Imports",
+    supplier_price: "900.00",
+    suggested_sale_price: "1190.00",
+  })
+
+  it("finds supplier offers by supplier name", () => {
+    assert.equal(matchesSupplierOfferSearch(miami, "miami"), true)
+    assert.equal(matchesSupplierOfferSearch(miami, "davi"), false)
+  })
+
+  it("matches tokens across product and supplier fields", () => {
+    assert.equal(matchesSupplierOfferSearch(miami, "iphone 17 pro max miami"), true)
+    assert.equal(matchesSupplierOfferSearch(daviAirpods, "davi airpods"), true)
+    assert.equal(matchesSupplierOfferSearch(miami, "davi airpods"), false)
+  })
+
+  it("is case-insensitive and accent-insensitive", () => {
+    assert.equal(matchesSupplierOfferSearch(miami, "MIAMI azul"), true)
+    assert.equal(matchesSupplierOfferSearch({ ...miami, color: "Titânio Natural" }, "titanio miami"), true)
+  })
+
+  it("still searches product fields when supplierName is missing", () => {
+    assert.equal(matchesSupplierOfferSearch({ ...miami, supplierName: null }, "iphone 17 azul"), true)
+  })
+
+  it("does not affect inventory products", () => {
+    assert.equal(matchesSupplierOfferSearch({ ...miami, sourceType: "inventory", supplierName: "Miami Imports" }, "miami"), false)
+  })
+})
+
+describe("isSupplierOfferEligibleForMarketing", () => {
+  it("keeps available offers and excludes superseded by default", () => {
+    assert.equal(isSupplierOfferEligibleForMarketing("available"), true)
+    assert.equal(isSupplierOfferEligibleForMarketing("superseded"), false)
+    assert.equal(isSupplierOfferEligibleForMarketing("canceled"), false)
   })
 })
 

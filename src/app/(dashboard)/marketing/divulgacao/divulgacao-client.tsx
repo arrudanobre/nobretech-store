@@ -57,6 +57,8 @@ import {
   batteryDisplayForMarketingProduct,
   calculateSupplierOfferMargin,
   getSupplierOfferSelectorSummary,
+  matchesSupplierOfferSearch,
+  normalizeMarketingSearchText,
   supplierOfferCampaignDefaults,
   supplierOfferConditionLabel,
   supplierOfferNeedsDisclosurePrice,
@@ -587,25 +589,39 @@ function ProductSelector({
   const [query, setQuery] = useState("")
   const [open, setOpen] = useState(false)
   const [sourceTab, setSourceTab] = useState<ProductSourceTab>("inventory")
+  const [supplierFilter, setSupplierFilter] = useState("all")
   const containerRef = useRef<HTMLDivElement>(null)
 
   const activeList = sourceTab === "inventory" ? products : supplierOfferProducts
+  const supplierOptions = useMemo(() => {
+    const map = new Map<string, { key: string; label: string; count: number }>()
+    for (const product of supplierOfferProducts) {
+      const label = product.supplierName || "Sem fornecedor"
+      const key = product.supplierId || normalizeMarketingSearchText(label) || "sem-fornecedor"
+      const current = map.get(key)
+      if (current) current.count += 1
+      else map.set(key, { key, label, count: 1 })
+    }
+    return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, "pt-BR"))
+  }, [supplierOfferProducts])
 
   const filtered = useMemo(() => {
     const available = activeList.filter((p) => !selectedIds.has(p.id))
-    if (!query.trim()) return available.slice(0, 30)
-    const q = query.toLowerCase()
-    return available
-      .filter(
-        (p) =>
-          p.name.toLowerCase().includes(q) ||
-          (p.category ?? "").toLowerCase().includes(q) ||
-          (p.storage ?? "").toLowerCase().includes(q) ||
-          (p.color ?? "").toLowerCase().includes(q) ||
-          (p.grade ?? "").toLowerCase().includes(q)
-      )
-      .slice(0, 30)
-  }, [activeList, query, selectedIds])
+    const supplierScoped = sourceTab === "supplier_offer" && supplierFilter !== "all"
+      ? available.filter((product) => (product.supplierId || normalizeMarketingSearchText(product.supplierName) || "sem-fornecedor") === supplierFilter)
+      : available
+
+    if (!query.trim()) return supplierScoped.slice(0, sourceTab === "supplier_offer" ? 200 : 30)
+    const normalizedQuery = normalizeMarketingSearchText(query)
+    const filteredList = sourceTab === "supplier_offer"
+      ? supplierScoped.filter((product) => matchesSupplierOfferSearch(product, normalizedQuery))
+      : supplierScoped.filter((p) => {
+        const haystack = normalizeMarketingSearchText([p.name, p.category, p.storage, p.color, p.grade].filter(Boolean).join(" "))
+        return normalizedQuery.split(" ").filter(Boolean).every((token) => haystack.includes(token))
+      })
+
+    return filteredList.slice(0, sourceTab === "supplier_offer" ? 200 : 30)
+  }, [activeList, query, selectedIds, sourceTab, supplierFilter])
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -660,13 +676,35 @@ function ProductSelector({
             </button>
           </div>
 
+          {sourceTab === "supplier_offer" && supplierOptions.length > 0 ? (
+            <div className="border-b border-gray-100 bg-gray-50/70 px-3 py-2">
+              <label className="flex items-center gap-2 text-[11px] font-medium text-gray-500">
+                Fornecedor
+                <select
+                  className="h-8 flex-1 rounded-lg border border-gray-200 bg-white px-2 text-xs font-semibold text-navy-900 outline-none focus:border-royal-500"
+                  value={supplierFilter}
+                  onChange={(event) => setSupplierFilter(event.target.value)}
+                >
+                  <option value="all">Todos fornecedores ({supplierOfferProducts.length})</option>
+                  {supplierOptions.map((supplier) => (
+                    <option key={supplier.key} value={supplier.key}>
+                      {supplier.label} ({supplier.count})
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : null}
+
           <div className="max-h-64 overflow-y-auto">
             {filtered.length === 0 ? (
               <div className="px-4 py-3 text-xs text-gray-500">
                 {activeList.filter((p) => !selectedIds.has(p.id)).length === 0
                   ? "Todos os produtos já foram adicionados."
                   : sourceTab === "supplier_offer"
-                    ? "Nenhuma oferta disponível. Importe ofertas em Fornecedores → Ofertas."
+                    ? query.trim()
+                      ? `Nenhuma oferta disponível encontrada para “${query.trim()}”. Verifique se as ofertas desse fornecedor estão disponíveis ou se foram substituídas.`
+                      : "Nenhuma oferta disponível. Importe ofertas em Fornecedores → Ofertas."
                     : "Nenhum produto encontrado."}
               </div>
             ) : (

@@ -1,5 +1,7 @@
 import type { MarketingProduct } from "./copy-generator"
 
+export const MARKETING_SUPPLIER_OFFER_STATUSES = ["available"] as const
+
 // Raw supplier_offers row (snake_case) joined with supplier name/id.
 // Numeric columns may arrive as string from pg (NUMERIC) — handled by num().
 export interface SupplierOfferRow {
@@ -25,6 +27,69 @@ function num(value: unknown): number | null {
   if (value == null) return null
   const parsed = typeof value === "number" ? value : Number(value)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+export function isSupplierOfferEligibleForMarketing(status: string | null | undefined): boolean {
+  return status === "available"
+}
+
+export function normalizeMarketingSearchText(value: unknown): string {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ")
+}
+
+function searchableMoney(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return ""
+  return [
+    String(value),
+    String(Math.round(value)),
+    new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value),
+  ].join(" ")
+}
+
+export function matchesSupplierOfferSearch(
+  product: Pick<
+    MarketingProduct,
+    | "sourceType"
+    | "name"
+    | "category"
+    | "storage"
+    | "color"
+    | "grade"
+    | "condition"
+    | "warranty_label"
+    | "supplierName"
+    | "supplierPrice"
+    | "suggested_price"
+    | "brand"
+  >,
+  query: string
+): boolean {
+  const tokens = normalizeMarketingSearchText(query).split(" ").filter(Boolean)
+  if (tokens.length === 0) return true
+  if (product.sourceType !== "supplier_offer") return false
+
+  const haystack = normalizeMarketingSearchText([
+    product.name,
+    product.category,
+    product.storage,
+    product.color,
+    product.grade,
+    product.condition,
+    supplierOfferConditionLabel(product.condition),
+    product.warranty_label,
+    product.supplierName,
+    product.brand,
+    searchableMoney(product.supplierPrice),
+    searchableMoney(product.suggested_price),
+  ].filter(Boolean).join(" "))
+
+  return tokens.every((token) => haystack.includes(token))
 }
 
 // Maps a supplier offer DB row to a MarketingProduct.

@@ -4,7 +4,10 @@ export const dynamic = "force-dynamic"
 import { NextResponse } from "next/server"
 import { pool } from "@/lib/db"
 import { requireApiAuthContext } from "@/lib/auth-context"
-import { supplierOfferRowToMarketingProduct } from "@/lib/marketing/supplier-offer-mapper"
+import {
+  MARKETING_SUPPLIER_OFFER_STATUSES,
+  supplierOfferRowToMarketingProduct,
+} from "@/lib/marketing/supplier-offer-mapper"
 
 // Returns supplier offers with status='available' in a MarketingProduct-compatible shape.
 // sourceType is always "supplier_offer" so the UI can distinguish from inventory products.
@@ -37,10 +40,14 @@ export async function GET() {
        FROM supplier_offers so
        LEFT JOIN suppliers s ON s.id = so.supplier_id
        WHERE so.company_id = $1::uuid
-         AND so.status = 'available'
-       ORDER BY so.created_at DESC
-       LIMIT 300`,
-      [companyId]
+         AND so.status = ANY($2::text[])
+       ORDER BY
+         COALESCE(s.name, 'Sem fornecedor') ASC,
+         COALESCE(so.category, '') ASC,
+         COALESCE(so.model, '') ASC,
+         so.created_at DESC
+       LIMIT 500`,
+      [companyId, MARKETING_SUPPLIER_OFFER_STATUSES]
     )
 
     const items = result.rows.map((row) => supplierOfferRowToMarketingProduct(row))
