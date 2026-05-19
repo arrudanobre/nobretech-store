@@ -38,7 +38,7 @@ export default function LoginPage() {
               path="/login"
               routing="path"
               signUpUrl="/login"
-              forceRedirectUrl="/dashboard"
+              fallbackRedirectUrl="/dashboard"
               appearance={{
                 variables: {
                   colorPrimary: "#2f6df6",

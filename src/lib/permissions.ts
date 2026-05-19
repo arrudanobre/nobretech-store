@@ -1,4 +1,4 @@
-export const USER_ROLES = ["owner", "manager", "operator"] as const
+export const USER_ROLES = ["owner", "manager", "operator", "reseller"] as const
 
 export type UserRole = (typeof USER_ROLES)[number]
 
@@ -15,17 +15,20 @@ export type PermissionKey =
   | "sales.cancel"
   | "sales.edit_sensitive"
   | "sensitive.delete"
+  | "resellers.manage"
 
 export const roleLabels: Record<UserRole, string> = {
   owner: "Owner",
   manager: "Manager",
   operator: "Operator",
+  reseller: "Revendedor",
 }
 
 export const roleDescriptions: Record<UserRole, string> = {
   owner: "Acesso total, configurações, equipe, financeiro, DRE e ações críticas.",
   manager: "Opera vendas, estoque, clientes, garantias e problemas sem acesso ao financeiro.",
   operator: "Vende e consulta estoque, clientes e garantias sem custos, DRE ou taxas.",
+  reseller: "Acesso restrito ao Portal de Revendedores. Sem acesso ao ERP.",
 }
 
 export const rolePermissions: Record<UserRole, PermissionKey[]> = {
@@ -42,13 +45,24 @@ export const rolePermissions: Record<UserRole, PermissionKey[]> = {
     "sales.cancel",
     "sales.edit_sensitive",
     "sensitive.delete",
+    "resellers.manage",
   ],
   manager: [
     "settings.view",
+    "resellers.manage",
   ],
   operator: [
     "settings.view",
   ],
+  reseller: [],
+}
+
+export function isResellerRole(role?: string | null): boolean {
+  return normalizeRole(role) === "reseller"
+}
+
+export function canManageResellers(role: string | null | undefined) {
+  return canAccess(role, "resellers.manage")
 }
 
 export function normalizeRole(role?: string | null): UserRole {

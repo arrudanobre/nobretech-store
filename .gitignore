@@ -50,6 +50,8 @@ next-env.d.ts
 
 # claude/agent files
 .claude/
+.agents/
+skills-lock.json
 
 # local experiment projects
 /clerk-nextjs/

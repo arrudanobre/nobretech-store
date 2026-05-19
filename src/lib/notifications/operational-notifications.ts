@@ -38,10 +38,20 @@ export interface InventoryStaleInput {
   purchase_price?: number | string | null
 }
 
+export interface ResellerRequestInput {
+  id: string
+  type: string
+  reseller_name: string
+  reseller_id: string
+  source_type?: string | null
+  created_at: string
+}
+
 export interface NotificationContext {
   transactions: TransactionInput[]
   inventory: InventoryStaleInput[]
   today: string // YYYY-MM-DD
+  resellerRequests?: ResellerRequestInput[]
 }
 
 const SEVERITY_ORDER: Record<OperationalNotification["severity"], number> = {
@@ -300,12 +310,51 @@ function buildInventoryStale(
   return out
 }
 
+// ─── Reseller requests ────────────────────────────────────────
+
+function buildResellerRequestsPending(
+  requests: ResellerRequestInput[]
+): OperationalNotification | null {
+  if (!requests.length) return null
+
+  const sorted = [...requests].sort((a, b) => b.created_at.localeCompare(a.created_at))
+  const latest = sorted[0]
+  const count = requests.length
+
+  const typeLabel: Record<string, string> = {
+    interest: "Cliente interessado",
+    reservation_requested: "Reserva solicitada",
+    sold_reported: "Venda informada",
+  }
+  const originLabel =
+    latest.source_type === "supplier" ? "Produto via catálogo parceiro" : "Estoque Nobretech"
+
+  return {
+    id: "reseller_requests_pending",
+    type: "reseller_requests_pending",
+    severity: "warning",
+    title:
+      count === 1
+        ? "Solicitação de revendedor pendente"
+        : `${count} solicitações de revendedores pendentes`,
+    description:
+      count === 1
+        ? `${typeLabel[latest.type] ?? latest.type} — ${latest.reseller_name} · ${originLabel}`
+        : `Mais recente: ${typeLabel[latest.type] ?? latest.type} — ${latest.reseller_name} · ${originLabel}`,
+    count,
+    href: `/revendedores/${latest.reseller_id}`,
+    entityType: "reseller_request",
+    entityId: latest.id,
+    createdAt: nowISO(),
+  }
+}
+
 // ─── Main builder ─────────────────────────────────────────────
 
 export function buildOperationalNotifications(
   ctx: NotificationContext
 ): OperationalNotification[] {
-  const { transactions, inventory, today } = ctx
+  const { transactions, inventory, today, resellerRequests = [] } = ctx
 
   const raw = [
     buildReceivableOverdue(transactions, today),
@@ -313,6 +362,7 @@ export function buildOperationalNotifications(
     buildReceivableUpcoming(transactions, today),
     buildPayableUpcoming(transactions, today),
     ...buildInventoryStale(inventory, today),
+    buildResellerRequestsPending(resellerRequests),
   ]
 
   const notifications = raw.filter((n): n is OperationalNotification => n !== null)

@@ -4,9 +4,9 @@
 
 import Link from "next/link"
 import { usePathname, useSearchParams } from "next/navigation"
-import { SignOutButton } from "@clerk/nextjs"
+import { useClerk } from "@clerk/nextjs"
 import { cn } from "@/lib/utils"
-import { BarChart3, Package, ShoppingCart, ShieldCheck, AlertTriangle, FileText, Users, Truck, DollarSign, Settings, Calculator, ListChecks, ChevronDown, Menu, X, LogOut, Mail, BrainCircuit, Megaphone, FileSpreadsheet, type LucideIcon } from "lucide-react"
+import { BarChart3, Package, ShoppingCart, ShieldCheck, AlertTriangle, FileText, Users, Truck, DollarSign, Settings, Calculator, ListChecks, ChevronDown, Menu, X, LogOut, Mail, BrainCircuit, Megaphone, FileSpreadsheet, Store, type LucideIcon } from "lucide-react"
 import { useState, useEffect, createContext, useContext, useCallback } from "react"
 import { supabase } from "@/lib/supabase"
 import { canAccess, roleLabels, type PermissionKey, type UserRole } from "@/lib/permissions"
@@ -71,6 +71,7 @@ const staticNavItems: (Omit<NavItem, "badge"> & { badge?: { count?: number; defa
   { label: "Cotações", href: "/cotacoes", icon: FileText },
   { label: "Clientes", href: "/clientes", icon: Users },
   { label: "Fornecedores", href: "/fornecedores", icon: Truck },
+  { label: "Revendedores", href: "/revendedores", icon: Store, permission: "resellers.manage" },
   {
     label: "Financeiro",
     href: "/financeiro",
@@ -537,10 +538,21 @@ export function MobileNav({ isOpen, onOpenChange, currentUser }: { isOpen: boole
 
 function UserHeader({ currentUser, dark = false }: { currentUser: DashboardUser; dark?: boolean }) {
   const [open, setOpen] = useState(false)
+  const { signOut } = useClerk()
   const displayName = currentUser.name || currentUser.email || "Usuário"
   const displayEmail = currentUser.email || "Email não informado"
   const roleLabel = roleLabels[currentUser.role]
   const initials = userInitials(displayName, displayEmail)
+  const signOutButton = (
+    <button
+      type="button"
+      onClick={() => signOut({ redirectUrl: "/login" })}
+      className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-50"
+    >
+      <LogOut className="h-4 w-4" />
+      Sair da conta
+    </button>
+  )
 
   return (
     <div className="relative">
@@ -606,12 +618,7 @@ function UserHeader({ currentUser, dark = false }: { currentUser: DashboardUser;
               Configurações
             </Link>
             <div className="my-1 h-px bg-slate-100" />
-            <SignOutButton redirectUrl="/login">
-              <button className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-50">
-                <LogOut className="h-4 w-4" />
-                Sair da conta
-              </button>
-            </SignOutButton>
+            {signOutButton}
           </div>
         </div>
       )}

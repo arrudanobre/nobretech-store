@@ -827,6 +827,15 @@ export async function POST(request: Request) {
 
     const { companyId, role, appUserId } = authResult.context
 
+    // Resellers must never reach the generic internal data gateway. The portal
+    // uses its own dedicated, field-restricted endpoints only.
+    if (role === "reseller") {
+      return NextResponse.json(
+        { data: null, error: { message: "Forbidden" } },
+        { status: 403 }
+      )
+    }
+
     const rateLimitResult = checkRateLimit(`db:${appUserId}`, 120, 60_000)
     if (!rateLimitResult.ok) {
       return NextResponse.json(

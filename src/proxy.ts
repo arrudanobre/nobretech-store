@@ -15,6 +15,8 @@ const isProtectedPageRoute = createRouteMatcher([
   "/cotacoes(.*)",
   "/historico(.*)",
   "/crm(.*)",
+  "/revendedores(.*)",
+  "/revendedor(.*)",
 ])
 
 // All /api/* routes require authentication by default.

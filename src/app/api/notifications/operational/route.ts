@@ -6,6 +6,7 @@ import {
   buildOperationalNotifications,
   type TransactionInput,
   type InventoryStaleInput,
+  type ResellerRequestInput,
 } from "@/lib/notifications/operational-notifications"
 
 export const runtime = "nodejs"
@@ -18,7 +19,7 @@ export async function GET() {
   const today = todayISO()
 
   try {
-    const [txResult, spResult, invResult] = await Promise.all([
+    const [txResult, spResult, invResult, rrResult] = await Promise.all([
       // Transactions: income manual + income sale-without-splits + all expense pending
       // Exclui source_type='sale_payment' (status gerenciado em sale_payments, não em transactions)
       // Exclui source_type='sale' quando a venda já tem sale_payments (evita duplicidade)
@@ -65,12 +66,27 @@ export async function GET() {
            AND created_at < (NOW() - INTERVAL '20 days')`,
         [companyId]
       ),
+      // Pending reseller requests — triggers bell notification for owner/manager
+      pool.query<ResellerRequestInput>(
+        `SELECT rr.id, rr.type, rr.reseller_id, rr.created_at::text,
+                r.name AS reseller_name,
+                COALESCE(o.source_type, 'inventory') AS source_type
+           FROM reseller_requests rr
+           JOIN resellers r ON r.id = rr.reseller_id
+           LEFT JOIN reseller_product_offers o ON o.id = rr.offer_id
+          WHERE rr.company_id = $1
+            AND rr.status = 'pending'
+          ORDER BY rr.created_at DESC
+          LIMIT 20`,
+        [companyId]
+      ).catch(() => ({ rows: [] as ResellerRequestInput[] })),
     ])
 
     const notifications = buildOperationalNotifications({
       transactions: [...txResult.rows, ...spResult.rows],
       inventory: invResult.rows,
       today,
+      resellerRequests: rrResult.rows,
     })
 
     return NextResponse.json({ notifications })

@@ -183,10 +183,11 @@ const permissionRows: { label: string; permission: PermissionKey }[] = [
   { label: "Cancelar vendas", permission: "sales.cancel" },
 ]
 
-const roleBadgeVariant: Record<UserRole, "green" | "blue" | "yellow"> = {
+const roleBadgeVariant: Record<UserRole, "green" | "blue" | "yellow" | "gray"> = {
   owner: "green",
   manager: "blue",
   operator: "yellow",
+  reseller: "gray",
 }
 
 function formatPhone(value: string) {

@@ -1,5 +1,5 @@
-import { SignOutButton } from "@clerk/nextjs"
-import { ShieldAlert, LogOut } from "lucide-react"
+import { ShieldAlert } from "lucide-react"
+import { UnauthorizedSignOutButton } from "./sign-out-button"
 
 export default function UnauthorizedPage() {
   return (
@@ -20,12 +20,7 @@ export default function UnauthorizedPage() {
         </p>
 
         <div className="mt-8">
-          <SignOutButton redirectUrl="/login">
-            <button className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-royal-500 px-5 text-sm font-semibold text-white transition-colors hover:bg-royal-600">
-              <LogOut className="h-4 w-4" />
-              Sair da conta
-            </button>
-          </SignOutButton>
+          <UnauthorizedSignOutButton />
         </div>
       </section>
     </main>
