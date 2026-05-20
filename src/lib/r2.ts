@@ -21,6 +21,41 @@ function unquote(value: string) {
   return value.replace(/^["']|["']$/g, "").trim()
 }
 
+function safeEndpointDiag(raw: string, sourceUsed: string) {
+  const trimmed = unquote(raw).replace(/\/+$/, "")
+  let parseableAsUrl = false
+  let hostnameSuffix: string | null = null
+  let pathnameLength: number | null = null
+  try {
+    const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : trimmed.includes(".") ? `https://${trimmed}` : null
+    if (candidate) {
+      const u = new URL(candidate)
+      parseableAsUrl = true
+      const h = u.hostname
+      hostnameSuffix = h.length > 20 ? `...${h.slice(-20)}` : h
+      pathnameLength = u.pathname.length
+    }
+  } catch { /* ignore */ }
+  return {
+    sourceUsed,
+    exists: true,
+    trimmedLength: trimmed.length,
+    startsWithHttps: trimmed.startsWith("https://"),
+    startsWithHttp: trimmed.startsWith("http://") && !trimmed.startsWith("https://"),
+    includesCloudflareStorage: trimmed.includes("r2.cloudflarestorage.com"),
+    includesR2Dev: trimmed.includes(".r2.dev"),
+    hasWhitespace: /\s/.test(trimmed),
+    hasQuotes: /["']/.test(raw),
+    hasSlash: trimmed.includes("/"),
+    hasPath: pathnameLength !== null && pathnameLength > 1,
+    parseableAsUrl,
+    hostnameSuffix,
+    pathnameLength,
+    looksLike32HexAccountId: /^[0-9a-f]{32}$/i.test(trimmed),
+    looksLikeCloudflareAccountId: /^[a-z0-9]{8,80}$/i.test(trimmed) && !trimmed.includes("."),
+  }
+}
+
 function normalizeR2Endpoint(value: string, envName: string) {
   const rawValue = unquote(value).replace(/\/+$/, "")
   const maybeUrl = /^https?:\/\//i.test(rawValue)
@@ -37,11 +72,13 @@ function normalizeR2Endpoint(value: string, envName: string) {
       }
       return `${url.protocol}//${url.hostname}`
     } catch {
+      console.error("[r2-config] invalid endpoint diagnostic", safeEndpointDiag(value, envName))
       throw new Error(`${envName} inválido. Use o Account ID puro ou o endpoint R2 completo.`)
     }
   }
 
   if (!/^[a-z0-9-]{8,80}$/i.test(rawValue)) {
+    console.error("[r2-config] invalid endpoint diagnostic", safeEndpointDiag(value, envName))
     throw new Error(`${envName} inválido. Use o Account ID puro ou o endpoint R2 completo.`)
   }
 
