@@ -88,7 +88,7 @@ export const pool =
     onConnect: (client) => client.query("SET statement_timeout = '8000'"),
   })
 
-if (process.env.NODE_ENV !== "production") {
+if (!globalThis.nobretechPool) {
   globalThis.nobretechPool = pool
 }
 
