@@ -32,7 +32,7 @@ function normalizeR2Endpoint(value: string, envName: string) {
   if (maybeUrl) {
     try {
       const url = new URL(maybeUrl)
-      if (!["https:", "http:"].includes(url.protocol) || !url.hostname || (url.pathname && url.pathname !== "/")) {
+      if (!["https:", "http:"].includes(url.protocol) || !url.hostname) {
         throw new Error("invalid")
       }
       return `${url.protocol}//${url.hostname}`
