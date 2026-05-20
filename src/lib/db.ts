@@ -14,10 +14,23 @@ declare global {
 // The SSL guard must only fire at runtime, not during static analysis/build.
 const isBuildPhase = process.env.NEXT_PHASE === "phase-production-build"
 const isLocalDevRuntime = process.env.NODE_ENV !== "production" && !isBuildPhase
+const isProductionRuntime = process.env.NODE_ENV === "production" && !isBuildPhase
 const looksLikeRailwayDatabase =
   process.env.DATABASE_PROVIDER === "railway" || Boolean(connectionString?.match(/railway|rlwy|monorail/i))
 const isRailwayDatabaseForSsl =
   process.env.DATABASE_PROVIDER === "railway" || Boolean(connectionString?.includes("railway"))
+const databasePoolMax = Number.parseInt(
+  process.env.DATABASE_POOL_MAX || (isProductionRuntime ? "2" : "20"),
+  10
+)
+const databaseIdleTimeoutMillis = Number.parseInt(
+  process.env.DATABASE_IDLE_TIMEOUT_MILLIS || (isProductionRuntime ? "10000" : "30000"),
+  10
+)
+const databaseConnectionTimeoutMillis = Number.parseInt(
+  process.env.DATABASE_CONNECTION_TIMEOUT_MILLIS || (isProductionRuntime ? "10000" : "5000"),
+  10
+)
 
 if (
   connectionString &&
@@ -40,7 +53,7 @@ const buildSslConfig = () => {
     process.env.DATABASE_PROVIDER === "railway" &&
     process.env.DATABASE_SSL_ALLOW_UNVERIFIED === "true"
 
-  if (process.env.NODE_ENV === "production" && isExplicitRailwayException) {
+  if (isProductionRuntime && isExplicitRailwayException) {
     console.warn(
       "[db] Railway SSL unverified mode enabled: connection is encrypted, but server identity is not verified."
     )
@@ -48,7 +61,7 @@ const buildSslConfig = () => {
   }
 
   // In production runtime, unverified SSL is not permitted unless Railway is explicitly allowed.
-  if (process.env.NODE_ENV === "production" && !isBuildPhase) {
+  if (isProductionRuntime) {
     throw new Error(
       "[db] DATABASE_SSL_CA must be configured in production. " +
         "Set DATABASE_PROVIDER=railway and DATABASE_SSL_ALLOW_UNVERIFIED=true only for Railway public proxy SSL hostname mismatch."
@@ -63,9 +76,13 @@ export const pool =
   new Pool({
     connectionString,
     ssl: buildSslConfig(),
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
+    max: Number.isFinite(databasePoolMax) && databasePoolMax > 0 ? databasePoolMax : 2,
+    idleTimeoutMillis: Number.isFinite(databaseIdleTimeoutMillis) && databaseIdleTimeoutMillis > 0
+      ? databaseIdleTimeoutMillis
+      : 10000,
+    connectionTimeoutMillis: Number.isFinite(databaseConnectionTimeoutMillis) && databaseConnectionTimeoutMillis > 0
+      ? databaseConnectionTimeoutMillis
+      : 10000,
     // onConnect is awaited by pg-pool before the client is dispatched to callers,
     // preventing the concurrent-query DeprecationWarning that pool.on("connect") caused.
     onConnect: (client) => client.query("SET statement_timeout = '8000'"),
