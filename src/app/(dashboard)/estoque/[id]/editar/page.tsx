@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useMemo, type ComponentType, type ReactNode } from "react"
+import { useState, useEffect, useCallback, useMemo, useRef, type ComponentType, type ReactNode } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -158,6 +158,7 @@ export default function EditProductPage() {
   const [productName, setProductName] = useState("")
   const [mode, setMode] = useState<ProductMode>("catalog")
   const [catalogConfig, setCatalogConfig] = useState<CatalogConfig>(() => buildLegacyCatalogConfig())
+  const catalogConfigRef = useRef<CatalogConfig>(catalogConfig)
   const [catalogId, setCatalogId] = useState<string | null>(null)
   const [linkedSale, setLinkedSale] = useState<LinkedSaleInfo | null>(null)
   const [linkedPurchase, setLinkedPurchase] = useState<LinkedPurchaseInfo | null>(null)
@@ -235,7 +236,11 @@ export default function EditProductPage() {
         ? "Venda cancelada"
         : "Negociação vinculada"
 
-  const inferCatalogSelection = (item: any, catalog?: any | null) => {
+  useEffect(() => {
+    catalogConfigRef.current = catalogConfig
+  }, [catalogConfig])
+
+  const inferCatalogSelection = (item: any, catalog?: any | null, config: CatalogConfig = catalogConfigRef.current) => {
     const rawName = getProductName({ ...item, catalog }).toLowerCase()
     const findBestModelIndex = (modelsToSearch: readonly any[]) => {
       const exactIndex = modelsToSearch.findIndex((model: any) => catalog?.model === model.name)
@@ -246,10 +251,10 @@ export default function EditProductPage() {
         .filter((model) => rawName.includes(model.name))
         .sort((a, b) => b.name.length - a.name.length)[0]?.index ?? -1
     }
-    const categoryValue = catalog?.category || catalogConfig.categories.find((group) =>
+    const categoryValue = catalog?.category || config.categories.find((group) =>
       findBestModelIndex(group.models) >= 0
     )?.value || "iphone"
-    const group = getCatalogCategory(catalogConfig, categoryValue)
+    const group = getCatalogCategory(config, categoryValue)
     const modelIndex = Math.max(0, findBestModelIndex(group?.models || []))
     const model = group?.models[modelIndex] as any
     const storage = catalog?.storage || (model?.storage || model?.sizes || []).find((value: string) => rawName.includes(value.toLowerCase())) || ""
@@ -273,6 +278,7 @@ export default function EditProductPage() {
       }
 
       const item = items[0]
+      const activeCatalogConfig = catalogConfigRef.current
       const imageMap: Record<string, ProductImageRecord | null> = await fetchProductImageMap([item.id]).catch(() => ({}))
       setProductImage(imageMap[item.id] || null)
 
@@ -351,7 +357,7 @@ export default function EditProductPage() {
           .single()
 
         if (catData) {
-          const selection = inferCatalogSelection(item, catData)
+          const selection = inferCatalogSelection(item, catData, activeCatalogConfig)
           setMode("catalog")
           setCategory(selection.categoryValue)
           setModelIdx(selection.modelIndex)
@@ -369,7 +375,7 @@ export default function EditProductPage() {
           }))
         }
       } else {
-        const selection = inferCatalogSelection(item)
+        const selection = inferCatalogSelection(item, null, activeCatalogConfig)
         const fallbackName = item.notes || item.condition_notes?.replace(/^Acessório:\s*/, "") || "Produto manual"
         const hasDeviceSignals = !isAccessoryProduct({ category: selection.categoryValue, name: fallbackName }) && Boolean(item.imei || item.battery_health || item.ios_version || selection.storage || selection.color || getProductName(item).toLowerCase().includes("iphone"))
         setMode(hasDeviceSignals ? "catalog" : "manual")
@@ -384,7 +390,7 @@ export default function EditProductPage() {
             ? "trade_in_received"
             : getComputedInventoryStatus(item),
         }))
-        setCatalogName(hasDeviceSignals ? getProductName({ model: (getCatalogCategory(catalogConfig, selection.categoryValue)?.models[selection.modelIndex] as any)?.name, storage: selection.storage, color: selection.color }) : fallbackName)
+        setCatalogName(hasDeviceSignals ? getProductName({ model: (getCatalogCategory(activeCatalogConfig, selection.categoryValue)?.models[selection.modelIndex] as any)?.name, storage: selection.storage, color: selection.color }) : fallbackName)
         setProductName(hasDeviceSignals ? "" : fallbackName)
       }
 
@@ -445,7 +451,7 @@ export default function EditProductPage() {
     } finally {
       setLoading(false)
     }
-  }, [catalogConfig, productId, router, toast])
+  }, [productId, router, toast])
 
   useEffect(() => {
     loadCatalogConfig({ refresh: true }).then(setCatalogConfig)

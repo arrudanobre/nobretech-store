@@ -346,13 +346,13 @@ export default function ProductDetailPage() {
           <Button variant="outline" size="sm" onClick={() => setIsStockLabelOpen(true)}>
             <Download className="w-4 h-4" /> Gerar etiqueta de estoque
           </Button>
-          <Link href={`/estoque/${productId}/editar`}>
+          <Link prefetch={false} href={`/estoque/${productId}/editar`}>
             <Button variant="outline" size="sm">
               <Edit3 className="w-4 h-4" /> Editar
             </Button>
           </Link>
           {product.status !== "sold" && (
-            <Link href={`/vendas/nova?product=${productId}`}>
+          <Link prefetch={false} href={`/vendas/nova?product=${productId}`}>
               <Button variant="success" size="sm">
                 <ShoppingCart className="w-4 h-4" /> Vender
               </Button>
@@ -381,7 +381,7 @@ export default function ProductDetailPage() {
       {isPendingInventoryStatus(computedStatus) && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 flex items-center justify-between">
           <p className="text-sm text-amber-800">Cadastro incompleto. Finalize os dados obrigatórios para ativar a venda.</p>
-          <Link href={`/estoque/${productId}/editar`}>
+          <Link prefetch={false} href={`/estoque/${productId}/editar`}>
             <Button variant="outline" size="sm">Finalizar cadastro</Button>
           </Link>
         </div>
@@ -487,6 +487,7 @@ export default function ProductDetailPage() {
               </div>
             </div>
             <Link
+              prefetch={false}
               href={`/estoque/${productId}/editar`}
               className="text-xs font-semibold text-royal-600 hover:text-royal-800"
             >

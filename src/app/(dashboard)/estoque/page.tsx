@@ -878,7 +878,7 @@ export default function InventoryPage() {
                             className="rounded-xl bg-white"
                           />
                           <div className="min-w-0">
-                            <Link href={`/estoque/${item.id}`} className="block truncate font-semibold text-navy-900 hover:text-royal-600">{product}</Link>
+                            <Link prefetch={false} href={`/estoque/${item.id}`} className="block truncate font-semibold text-navy-900 hover:text-royal-600">{product}</Link>
                             {productMeta ? <p className="truncate text-xs text-gray-500">{productMeta}</p> : null}
                             {variantSummaryLine(variantsByItemId[item.id] || []) ? (
                               <p className="truncate text-xs font-medium text-royal-600">{variantSummaryLine(variantsByItemId[item.id] || [])}</p>
@@ -919,10 +919,10 @@ export default function InventoryPage() {
                       </td>
                       <td className="px-4 py-3 align-middle">
                         <div className="flex items-center justify-end gap-2 whitespace-nowrap">
-                          <Link href={`/estoque/${item.id}`}>
+                          <Link prefetch={false} href={`/estoque/${item.id}`}>
                             <Button variant="ghost" size="icon" title="Ver" className="h-8 w-8"><Eye className="w-4 h-4" /></Button>
                           </Link>
-                          <Link href={`/estoque/${item.id}/editar`}>
+                          <Link prefetch={false} href={`/estoque/${item.id}/editar`}>
                             <Button variant="ghost" size="icon" title={logistics === "in_transit" ? "Editar previsão" : "Editar"} className="h-8 w-8"><Pencil className="w-4 h-4" /></Button>
                           </Link>
                           {showReserveAction ? (
