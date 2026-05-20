@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import type { QueryResultRow } from "pg"
 import { requireApiAuthContext } from "@/lib/auth-context"
 import { pool } from "@/lib/db"
 import { todayISO } from "@/lib/helpers"
@@ -11,19 +12,55 @@ import {
 
 export const runtime = "nodejs"
 
+type QueryRows<T extends QueryResultRow> = { rows: T[] }
+
+function emptyRows<T extends QueryResultRow>(): QueryRows<T> {
+  return { rows: [] }
+}
+
+function logOperationalNotificationError(scope: string, err: unknown) {
+  const error = err as { code?: string; message?: string; name?: string }
+  console.error("[notifications/operational] degraded", {
+    scope,
+    code: error?.code,
+    name: error?.name,
+    message: error?.message,
+  })
+}
+
+async function safeNotificationQuery<T extends QueryResultRow>(
+  scope: string,
+  query: string,
+  params: readonly unknown[]
+): Promise<QueryRows<T>> {
+  try {
+    return await pool.query<T>(query, [...params])
+  } catch (err) {
+    logOperationalNotificationError(scope, err)
+    return emptyRows<T>()
+  }
+}
+
 export async function GET() {
-  const authResult = await requireApiAuthContext()
+  let authResult: Awaited<ReturnType<typeof requireApiAuthContext>>
+
+  try {
+    authResult = await requireApiAuthContext()
+  } catch (err) {
+    logOperationalNotificationError("auth", err)
+    return NextResponse.json({ notifications: [] })
+  }
+
   if (!authResult.ok) return authResult.response
 
   const { companyId } = authResult.context
   const today = todayISO()
 
   try {
-    const [txResult, spResult, invResult, rrResult] = await Promise.all([
-      // Transactions: income manual + income sale-without-splits + all expense pending
-      // Exclui source_type='sale_payment' (status gerenciado em sale_payments, não em transactions)
-      // Exclui source_type='sale' quando a venda já tem sale_payments (evita duplicidade)
-      pool.query<TransactionInput>(
+    // The notification bell is operational support, not a page-critical dependency.
+    // Run defensively and sequentially so transient DB/schema issues never break dashboards.
+    const txResult = await safeNotificationQuery<TransactionInput>(
+      "transactions",
         `SELECT t.id, t.type, t.status, t.due_date::text, t.amount, t.description
          FROM transactions t
          WHERE t.company_id = $1
@@ -43,10 +80,11 @@ export async function GET() {
                )
              )
            )`,
-        [companyId]
-      ),
-      // Sale_payments não recebidos/cancelados — split receivables que podem estar vencidos
-      pool.query<TransactionInput>(
+      [companyId]
+    )
+
+    const spResult = await safeNotificationQuery<TransactionInput>(
+      "sale_payments",
         `SELECT sp.id, 'income' AS type, 'pending' AS status,
                 sp.due_date::text, sp.amount::text AS amount,
                 'Pagamento parcelado' AS description
@@ -55,19 +93,22 @@ export async function GET() {
          WHERE s.company_id = $1
            AND sp.status NOT IN ('received', 'cancelled', 'reconciled')
            AND sp.due_date IS NOT NULL`,
-        [companyId]
-      ),
-      pool.query<InventoryStaleInput>(
+      [companyId]
+    )
+
+    const invResult = await safeNotificationQuery<InventoryStaleInput>(
+      "inventory",
         `SELECT id, status, logistics_status, commercial_status,
                 created_at::text, purchase_price
          FROM inventory
          WHERE company_id = $1
            AND status NOT IN ('sold', 'returned', 'under_repair')
            AND created_at < (NOW() - INTERVAL '20 days')`,
-        [companyId]
-      ),
-      // Pending reseller requests — triggers bell notification for owner/manager
-      pool.query<ResellerRequestInput>(
+      [companyId]
+    )
+
+    const rrResult = await safeNotificationQuery<ResellerRequestInput>(
+      "reseller_requests",
         `SELECT rr.id, rr.type, rr.reseller_id, rr.created_at::text,
                 r.name AS reseller_name,
                 COALESCE(o.source_type, 'inventory') AS source_type
@@ -78,9 +119,8 @@ export async function GET() {
             AND rr.status = 'pending'
           ORDER BY rr.created_at DESC
           LIMIT 20`,
-        [companyId]
-      ).catch(() => ({ rows: [] as ResellerRequestInput[] })),
-    ])
+      [companyId]
+    )
 
     const notifications = buildOperationalNotifications({
       transactions: [...txResult.rows, ...spResult.rows],
@@ -91,10 +131,7 @@ export async function GET() {
 
     return NextResponse.json({ notifications })
   } catch (err) {
-    console.error("[notifications/operational] error", err)
-    return NextResponse.json(
-      { error: { message: "Erro ao buscar notificações operacionais." } },
-      { status: 500 }
-    )
+    logOperationalNotificationError("build", err)
+    return NextResponse.json({ notifications: [] })
   }
 }

@@ -6,7 +6,7 @@ import { Bell, AlertTriangle, AlertCircle, Info, ArrowRight, Loader2 } from "luc
 import { cn } from "@/lib/utils"
 import type { OperationalNotification } from "@/lib/notifications/operational-notifications"
 
-const POLL_INTERVAL = 90_000 // 90s
+const POLL_INTERVAL = 300_000 // 5min
 
 const severityConfig = {
   critical: {
