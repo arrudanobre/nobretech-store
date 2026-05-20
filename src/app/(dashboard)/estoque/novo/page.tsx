@@ -13,6 +13,7 @@ import { useToast } from "@/components/ui/toaster"
 import { supabase } from "@/lib/supabase"
 import { formatBRL, getComputedInventoryStatus, mapLifecycleToLegacyCompatibleStatus } from "@/lib/helpers"
 import { CHECKLIST_TEMPLATES, GRADES } from "@/lib/constants"
+import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 import {
   accessoryUsuallyHasSerial,
   buildLegacyCatalogConfig,
@@ -28,6 +29,17 @@ import {
 
 type Step = 1 | 2 | 3
 type ProductMode = "catalog" | "manual"
+type PurchaseFinanceMode = "payable" | "paid_now" | "none"
+type SelectOption = { label: string; value: string }
+type SupplierOption = SelectOption
+type FinanceAccountOption = SelectOption
+type CatalogModelOption = {
+  name: string
+  storage?: string[]
+  sizes?: string[]
+  colors?: CatalogColor[]
+  subcategoryId?: string | null
+}
 
 type ChecklistItem = {
   id: string
@@ -54,7 +66,8 @@ export default function AddProductPage() {
   const [catalogConfig, setCatalogConfig] = useState<CatalogConfig>(() => buildLegacyCatalogConfig())
   const [category, setCategory] = useState("iphone")
   const [modelIdx, setModelIdx] = useState(0)
-  const [suppliers, setSuppliers] = useState<any[]>([])
+  const [suppliers, setSuppliers] = useState<SupplierOption[]>([])
+  const [financeAccounts, setFinanceAccounts] = useState<FinanceAccountOption[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([])
   const [formData, setFormData] = useState({
@@ -75,6 +88,11 @@ export default function AddProductPage() {
     supplier_name: "",
     purchase_date: new Date().toISOString().split("T")[0],
     purchase_price: "",
+    purchase_finance_mode: "payable" as PurchaseFinanceMode,
+    purchase_due_date: new Date().toISOString().split("T")[0],
+    purchase_account_id: "",
+    purchase_payment_method: "Pix",
+    purchase_financial_notes: "",
     suggested_price: "",
     margin: "15",
     quantity: "1",
@@ -84,7 +102,7 @@ export default function AddProductPage() {
     return getCatalogCategory(catalogConfig, category)?.models || []
   }, [catalogConfig, category])
 
-  const selectedModel = models[modelIdx] as any
+  const selectedModel = models[modelIdx] as CatalogModelOption | undefined
   const selectedModelColors = (selectedModel?.colors || []) as CatalogColor[]
   const isManual = mode === "manual"
   const currentCategory = getCatalogCategory(catalogConfig, category)
@@ -131,18 +149,33 @@ export default function AddProductPage() {
     }
     if (step === 2) {
       const hasValues = Number(formData.purchase_price || 0) > 0 && Boolean(formData.purchase_date) && Number(formData.quantity || 0) > 0
-      return hasValues && (!requiresChecklist || checklistProgress >= 80)
+      const financeOk =
+        formData.purchase_finance_mode === "none" ||
+        (formData.purchase_finance_mode === "payable" && Boolean(formData.purchase_due_date)) ||
+        (formData.purchase_finance_mode === "paid_now" && Boolean(formData.purchase_account_id))
+      return hasValues && financeOk && (!requiresChecklist || checklistProgress >= 80)
     }
     return true
   }, [step, isManual, formData, category, selectedModel, selectedModelColors.length, isAccessory, requiresChecklist, checklistProgress])
 
   useEffect(() => {
     async function fetchSuppliers() {
-      const { data } = await (supabase.from("suppliers") as any).select("id, name, city").order("name", { ascending: true })
-      setSuppliers((data || []).map((supplier: any) => ({
+      const [{ data }, accountsResult] = await Promise.all([
+        supabase.from("suppliers").select("id, name, city").order("name", { ascending: true }),
+        supabase.from("finance_accounts").select("id, name, institution").eq("is_active", true).order("created_at", { ascending: true }),
+      ])
+      setSuppliers(((data || []) as Array<{ id: string; name: string; city?: string | null }>).map((supplier) => ({
         label: `${supplier.name}${supplier.city ? ` - ${supplier.city}` : ""}`,
         value: supplier.id,
       })))
+      const accounts = ((accountsResult.data || []) as Array<{ id: string; name: string; institution?: string | null }>).map((account) => ({
+        label: account.institution ? `${account.name} · ${account.institution}` : account.name,
+        value: account.id,
+      }))
+      setFinanceAccounts(accounts)
+      if (accounts[0]?.value) {
+        setFormData((prev) => prev.purchase_account_id ? prev : { ...prev, purchase_account_id: accounts[0].value })
+      }
     }
     fetchSuppliers()
     loadCatalogConfig({ refresh: true }).then(setCatalogConfig)
@@ -154,7 +187,7 @@ export default function AddProductPage() {
       return
     }
     const template = CHECKLIST_TEMPLATES[category as keyof typeof CHECKLIST_TEMPLATES] || []
-    setChecklistItems(template.map((item: any) => ({ ...item, status: item.status || "", note: item.note || "" })))
+    setChecklistItems((template as Array<Partial<ChecklistItem> & { id: string; label: string }>).map((item) => ({ ...item, status: item.status || "", note: item.note || "" })))
   }, [requiresChecklist, category])
 
   useEffect(() => {
@@ -202,6 +235,83 @@ export default function AddProductPage() {
     })
   }
 
+  const totalPurchaseCost = () => {
+    const unitCost = Number(formData.purchase_price || 0)
+    const quantity = formData.type === "own" ? Math.max(1, Number(formData.quantity || 1)) : 1
+    return Math.round(unitCost * quantity * 100) / 100
+  }
+
+  const createPurchaseFinanceTransaction = async (input: {
+    inventoryId: string
+    supplierName: string | null
+  }) => {
+    if (formData.purchase_finance_mode === "none") return
+
+    const amount = totalPurchaseCost()
+    if (amount <= 0) return
+
+    const { data: existingTransaction, error: existingError } = await supabase.from("transactions")
+      .select("id, status")
+      .eq("source_type", "inventory_purchase")
+      .eq("source_id", input.inventoryId)
+      .neq("status", "cancelled")
+      .maybeSingle()
+
+    if (existingError) throw existingError
+    if (existingTransaction?.id) return
+
+    const { data: stockAccount } = await supabase.from("finance_chart_accounts")
+      .select("id")
+      .eq("code", "7.01")
+      .limit(1)
+
+    const isPaidNow = formData.purchase_finance_mode === "paid_now"
+    const dueDate = isPaidNow ? formData.purchase_date : formData.purchase_due_date || formData.purchase_date
+    const descriptionProduct = productName || "Produto de estoque"
+
+    const { data: transactionRow, error: transactionError } = await supabase.from("transactions")
+      .insert({
+        account_id: isPaidNow ? formData.purchase_account_id || null : null,
+        chart_account_id: stockAccount?.[0]?.id || null,
+        type: "expense",
+        category: "Estoque (Peças/Acessórios)",
+        description: `Compra de estoque · ${descriptionProduct}`,
+        amount,
+        date: isPaidNow ? formData.purchase_date : dueDate,
+        due_date: dueDate,
+        payment_method: formData.purchase_payment_method,
+        status: isPaidNow ? "reconciled" : "pending",
+        reconciled_at: isPaidNow ? new Date().toISOString() : null,
+        source_type: "inventory_purchase",
+        source_id: input.inventoryId,
+        notes: [
+          input.supplierName ? `Fornecedor: ${input.supplierName}` : null,
+          formData.type === "own" && Number(formData.quantity || 1) > 1 ? `Quantidade: ${formData.quantity}` : null,
+          formData.purchase_financial_notes || null,
+        ].filter(Boolean).join(" · ") || null,
+      })
+      .select("id")
+      .single()
+
+    if (transactionError) throw transactionError
+
+    if (isPaidNow && transactionRow?.id) {
+      try {
+        await requestSyncTransactionMovement(String(transactionRow.id))
+      } catch (syncError) {
+        await supabase.from("transactions").delete().eq("id", transactionRow.id)
+        throw syncError
+      }
+    }
+  }
+
+  const rollbackCreatedInventory = async (input: { inventoryId?: string | null; checklistId?: string | null }) => {
+    await Promise.allSettled([
+      input.inventoryId ? supabase.from("inventory").delete().eq("id", input.inventoryId) : Promise.resolve(),
+      input.checklistId ? supabase.from("checklists").delete().eq("id", input.checklistId) : Promise.resolve(),
+    ])
+  }
+
   const handleCategoryChange = (value: string) => {
     setCategory(value)
     setModelIdx(0)
@@ -243,9 +353,10 @@ export default function AddProductPage() {
 
   const findOrCreateCatalog = async () => {
     if (isManual) return null
+    if (!selectedModel) throw new Error("Selecione um modelo para cadastrar o produto.")
     const storage = isAccessory ? null : formData.storage || null
     const color = formData.color || null
-    const { data: existing } = await (supabase.from("product_catalog") as any)
+    const { data: existing } = await supabase.from("product_catalog")
       .select("id")
       .eq("category", category)
       .eq("model", selectedModel.name)
@@ -255,7 +366,7 @@ export default function AddProductPage() {
 
     if (existing?.[0]?.id) return existing[0].id
 
-    const { data: created, error } = await (supabase.from("product_catalog") as any)
+    const { data: created, error } = await supabase.from("product_catalog")
       .insert({
         category,
         brand: ["iphone", "ipad", "applewatch", "airpods", "macbook"].includes(category) ? "Apple" : category,
@@ -264,7 +375,7 @@ export default function AddProductPage() {
         storage,
         color,
         color_hex: formData.colorHex || null,
-      } as any)
+      })
       .select("id")
       .single()
 
@@ -278,14 +389,14 @@ export default function AddProductPage() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session?.user) throw new Error("Sessão expirada. Por favor, saia e entre novamente no sistema.")
 
-      const { data: company, error: companyError } = await (supabase.from("companies") as any).select("id").limit(1).single()
+      const { data: company, error: companyError } = await supabase.from("companies").select("id").limit(1).single()
       if (companyError || !company?.id) throw new Error("Não foi possível identificar sua empresa.")
 
       const catalogId = await findOrCreateCatalog()
       let checklistId = null
       if (requiresChecklist) {
-        const { data: checklist, error } = await (supabase.from("checklists") as any)
-          .insert({ company_id: company.id, device_type: category, items: checklistItems } as any)
+        const { data: checklist, error } = await supabase.from("checklists")
+          .insert({ company_id: company.id, device_type: category, items: checklistItems })
           .select("id")
           .single()
         if (error) throw error
@@ -309,7 +420,7 @@ export default function AddProductPage() {
         condition_notes: formData.condition_notes || notes,
       })
 
-      const { error } = await (supabase.from("inventory") as any).insert({
+      const { data: createdInventory, error } = await supabase.from("inventory").insert({
         company_id: company.id,
         catalog_id: catalogId,
         imei: isAccessory ? null : formData.imei || null,
@@ -335,9 +446,25 @@ export default function AddProductPage() {
         subcategory_name_snapshot: isManual ? productName || null : selectedModel?.name || null,
         color_name_snapshot: formData.color || null,
         attribute_summary_snapshot: attributeSummary,
-      } as any)
+      })
+        .select("id")
+        .single()
 
       if (error) throw error
+      if (createdInventory?.id) {
+        try {
+          await createPurchaseFinanceTransaction({
+            inventoryId: String(createdInventory.id),
+            supplierName,
+          })
+        } catch (financeError) {
+          await rollbackCreatedInventory({
+            inventoryId: String(createdInventory.id),
+            checklistId,
+          })
+          throw financeError
+        }
+      }
 
       toast({ title: "Produto cadastrado!", description: `${productName || "Produto"} foi salvo no estoque.`, type: "success" })
       router.push("/estoque")
@@ -431,9 +558,9 @@ export default function AddProductPage() {
             </div>
           ) : (
             <div className="space-y-4">
-              <Select label="Modelo" value={modelIdx.toString()} onChange={(e) => setModelIdx(Number(e.target.value))} options={models.map((model: any, index) => ({ label: model.name, value: index.toString() }))} />
+              <Select label="Modelo" value={modelIdx.toString()} onChange={(e) => setModelIdx(Number(e.target.value))} options={(models as CatalogModelOption[]).map((model, index) => ({ label: model.name, value: index.toString() }))} />
               {!isAccessory && (selectedModel?.storage || selectedModel?.sizes) && (
-                <Select label="Armazenamento / tamanho" value={formData.storage} onChange={(e) => updateField("storage", e.target.value)} placeholder="Selecione" options={(selectedModel.storage || selectedModel.sizes).map((value: string) => ({ label: value, value }))} />
+                <Select label="Armazenamento / tamanho" value={formData.storage} onChange={(e) => updateField("storage", e.target.value)} placeholder="Selecione" options={((selectedModel?.storage || selectedModel?.sizes || []) as string[]).map((value) => ({ label: value, value }))} />
               )}
               <ColorSwatchPicker
                 colors={selectedModelColors}
@@ -483,6 +610,54 @@ export default function AddProductPage() {
             <Input label="Margem padrão (%)" type="number" min="0" value={formData.margin} onChange={(e) => updateMargin(e.target.value)} />
             <Input label="Data da compra" type="date" value={formData.purchase_date} onChange={(e) => updateField("purchase_date", e.target.value)} />
             {showBatteryField && <Input label="Saúde da bateria (%)" type="number" min="0" max="100" value={formData.battery_health} onChange={(e) => updateField("battery_health", e.target.value)} />}
+          </div>
+
+          <div className="rounded-2xl border border-gray-100 bg-surface/60 p-4">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="font-semibold text-navy-900">Financeiro da compra</p>
+                <p className="text-xs text-gray-500">Compra pendente vira conta a pagar. Pago agora entra no extrato após conciliação.</p>
+              </div>
+              <Badge variant={formData.purchase_finance_mode === "paid_now" ? "green" : formData.purchase_finance_mode === "payable" ? "yellow" : "gray"}>
+                {formData.purchase_finance_mode === "paid_now" ? "Pago agora" : formData.purchase_finance_mode === "payable" ? "A pagar" : "Sem financeiro"}
+              </Badge>
+            </div>
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Select
+                label="Status financeiro"
+                value={formData.purchase_finance_mode}
+                onChange={(e) => updateField("purchase_finance_mode", e.target.value)}
+                options={[
+                  { label: "A pagar", value: "payable" },
+                  { label: "Pago agora", value: "paid_now" },
+                  { label: "Não lançar financeiro", value: "none" },
+                ]}
+              />
+              {formData.purchase_finance_mode !== "none" && (
+                <Select
+                  label="Forma de pagamento"
+                  value={formData.purchase_payment_method}
+                  onChange={(e) => updateField("purchase_payment_method", e.target.value)}
+                  options={["Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência"].map((value) => ({ label: value, value }))}
+                />
+              )}
+              {formData.purchase_finance_mode === "payable" && (
+                <Input label="Vencimento da conta" type="date" value={formData.purchase_due_date} onChange={(e) => updateField("purchase_due_date", e.target.value)} />
+              )}
+              {formData.purchase_finance_mode === "paid_now" && (
+                <Select
+                  label="Conta financeira"
+                  value={formData.purchase_account_id}
+                  onChange={(e) => updateField("purchase_account_id", e.target.value)}
+                  options={financeAccounts.length ? financeAccounts : [{ label: "Nenhuma conta ativa encontrada", value: "" }]}
+                />
+              )}
+              {formData.purchase_finance_mode !== "none" && (
+                <div className="sm:col-span-2">
+                  <Textarea label="Observação financeira" placeholder="Ex: combinado com fornecedor, prazo, comprovante..." value={formData.purchase_financial_notes} onChange={(e) => updateField("purchase_financial_notes", e.target.value)} />
+                </div>
+              )}
+            </div>
           </div>
 
           <Textarea label="Observações" placeholder="Estado físico, riscos, marcas de uso, detalhes do item..." value={formData.condition_notes} onChange={(e) => updateField("condition_notes", e.target.value)} />
@@ -551,6 +726,16 @@ export default function AddProductPage() {
               <p className="text-xs text-gray-500">Checklist</p>
               <p className="font-bold text-navy-900">{requiresChecklist ? `${checklistProgress}%` : "Não exigido"}</p>
             </div>
+          </div>
+          <div className="rounded-xl border border-gray-100 p-3">
+            <p className="text-xs text-gray-500">Financeiro</p>
+            <p className="font-bold text-navy-900">
+              {formData.purchase_finance_mode === "paid_now"
+                ? `Pago agora · ${formatBRL(totalPurchaseCost())}`
+                : formData.purchase_finance_mode === "payable"
+                  ? `Conta a pagar · ${formatBRL(totalPurchaseCost())}`
+                  : "Não lançar financeiro"}
+            </p>
           </div>
         </div>
       )}

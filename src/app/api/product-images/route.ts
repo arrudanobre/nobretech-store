@@ -190,6 +190,10 @@ export async function POST(request: NextRequest) {
     }
   } catch (error) {
     await Promise.allSettled(uploadedKeys.map((key) => deleteR2Object(key)))
+    console.warn("[product-images] Upload failed", {
+      message: error instanceof Error ? error.message : "Erro ao enviar imagem",
+      uploadedKeys: uploadedKeys.length,
+    })
     return NextResponse.json(
       { data: null, error: { message: error instanceof Error ? error.message : "Erro ao enviar imagem" } },
       { status: 400 }

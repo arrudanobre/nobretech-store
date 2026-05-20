@@ -1,7 +1,7 @@
 import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3"
 
 type R2Config = {
-  accountId: string
+  endpoint: string
   accessKeyId: string
   secretAccessKey: string
   bucketName: string
@@ -21,18 +21,31 @@ function unquote(value: string) {
   return value.replace(/^["']|["']$/g, "").trim()
 }
 
-function normalizeR2AccountId(value: string) {
-  const rawValue = unquote(value)
-  const endpointHost = rawValue.startsWith("http://") || rawValue.startsWith("https://")
-    ? new URL(rawValue).hostname
-    : rawValue
-  const accountId = endpointHost.replace(/\.r2\.cloudflarestorage\.com$/i, "")
+function normalizeR2Endpoint(value: string, envName: string) {
+  const rawValue = unquote(value).replace(/\/+$/, "")
+  const maybeUrl = /^https?:\/\//i.test(rawValue)
+    ? rawValue
+    : rawValue.includes(".")
+      ? `https://${rawValue}`
+      : null
 
-  if (!/^[a-z0-9]+$/i.test(accountId) || accountId.includes(".")) {
-    throw new Error("R2_ACCOUNT_ID inválido. Use o Account ID puro ou o endpoint R2 completo.")
+  if (maybeUrl) {
+    try {
+      const url = new URL(maybeUrl)
+      if (!["https:", "http:"].includes(url.protocol) || !url.hostname || (url.pathname && url.pathname !== "/")) {
+        throw new Error("invalid")
+      }
+      return `${url.protocol}//${url.hostname}`
+    } catch {
+      throw new Error(`${envName} inválido. Use o Account ID puro ou o endpoint R2 completo.`)
+    }
   }
 
-  return accountId
+  if (!/^[a-z0-9-]{8,80}$/i.test(rawValue)) {
+    throw new Error(`${envName} inválido. Use o Account ID puro ou o endpoint R2 completo.`)
+  }
+
+  return `https://${rawValue}.r2.cloudflarestorage.com`
 }
 
 function normalizePublicUrl(value: string) {
@@ -52,8 +65,11 @@ function normalizePublicUrl(value: string) {
 
 export function getR2Config(): R2Config {
   if (!r2Config) {
+    const endpointSource = process.env.R2_ENDPOINT?.trim()
+      ? { name: "R2_ENDPOINT", value: requiredEnv("R2_ENDPOINT") }
+      : { name: "R2_ACCOUNT_ID", value: requiredEnv("R2_ACCOUNT_ID") }
     r2Config = {
-      accountId: normalizeR2AccountId(requiredEnv("R2_ACCOUNT_ID")),
+      endpoint: normalizeR2Endpoint(endpointSource.value, endpointSource.name),
       accessKeyId: requiredEnv("R2_ACCESS_KEY_ID"),
       secretAccessKey: requiredEnv("R2_SECRET_ACCESS_KEY"),
       bucketName: requiredEnv("R2_BUCKET_NAME"),
@@ -68,7 +84,7 @@ export function getR2Client() {
     const config = getR2Config()
     r2Client = new S3Client({
       region: "auto",
-      endpoint: `https://${config.accountId}.r2.cloudflarestorage.com`,
+      endpoint: config.endpoint,
       credentials: {
         accessKeyId: config.accessKeyId,
         secretAccessKey: config.secretAccessKey,
