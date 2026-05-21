@@ -30,6 +30,10 @@ import {
   ClipboardList,
   Sparkles,
   CalendarDays,
+  Target,
+  Rocket,
+  Trophy,
+  Info,
 } from "lucide-react"
 import {
   BarChart,
@@ -43,6 +47,9 @@ import {
   Pie,
   Cell,
   LabelList,
+  LineChart,
+  Line,
+  ReferenceLine,
 } from "recharts"
 import Link from "next/link"
 import { OperationalAlertsCard } from "@/components/notifications/notification-bell"
@@ -74,6 +81,43 @@ type SalesComparisonPoint = {
   label: string
   gross: number
   net: number
+}
+
+type MonthRhythmPoint = {
+  day: number
+  currentRevenue: number | null
+  currentProfit: number | null
+  previousRevenue: number | null
+  previousProfit: number | null
+}
+
+type RhythmSaleRow = {
+  sale_price?: number | null
+  net_amount?: number | null
+  sale_date?: string | null
+  created_at?: string | null
+  source_type?: string | null
+  sale_status?: string | null
+  supplier_cost?: number | null
+  notes?: string | null
+  inventory?: { purchase_price?: number | null; type?: string | null } | null
+  sales_additional_items?: unknown
+}
+
+type MonthRhythmData = {
+  points: MonthRhythmPoint[]
+  currentMonthLabel: string
+  previousMonthLabel: string
+  currentDay: number
+  daysInCurrentMonth: number
+  daysInPreviousMonth: number
+  currentAccumRevenue: number
+  currentAccumProfit: number
+  previousAccumAtSameDayRevenue: number
+  previousAccumAtSameDayProfit: number
+  previousTotalRevenue: number
+  previousTotalProfit: number
+  bestDay: { day: number; revenue: number; profit: number } | null
 }
 
 type StockTurnoverItem = {
@@ -250,6 +294,350 @@ const toneClasses: Record<DashboardTone, { card: string; icon: string; iconText:
   },
 }
 
+function MonthRhythmBlock({ data, mode, onChangeMode }: { data: MonthRhythmData | null; mode: "revenue" | "profit"; onChangeMode: (m: "revenue" | "profit") => void }) {
+  if (!data) {
+    return (
+      <div className="rounded-3xl border border-slate-200/70 bg-white p-5 shadow-sm">
+        <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Radar de ritmo comercial</p>
+        <p className="mt-3 text-sm text-gray-400 text-center py-10">Sem dados suficientes para comparar mês atual com mês anterior.</p>
+      </div>
+    )
+  }
+
+  const isRevenue = mode === "revenue"
+  const currentAccum = isRevenue ? data.currentAccumRevenue : data.currentAccumProfit
+  const previousAtSameDay = isRevenue ? data.previousAccumAtSameDayRevenue : data.previousAccumAtSameDayProfit
+  const previousTotal = isRevenue ? data.previousTotalRevenue : data.previousTotalProfit
+  const diff = currentAccum - previousAtSameDay
+  const ratePct = previousAtSameDay > 0
+    ? Math.round((diff / previousAtSameDay) * 1000) / 10
+    : currentAccum > 0 ? 100 : 0
+  const projection = data.currentDay > 0
+    ? Math.round((currentAccum / data.currentDay) * data.daysInCurrentMonth)
+    : 0
+  const projectionSurplus = projection - previousTotal
+  const remainingToBeatPrevious = Math.max(0, previousTotal - currentAccum)
+  const remainingDays = Math.max(1, data.daysInCurrentMonth - data.currentDay)
+  const dailyRateToBeat = remainingToBeatPrevious / remainingDays
+  const status: "above" | "below" | "neutral" = diff > 0 ? "above" : diff < 0 ? "below" : "neutral"
+  const bestDay = data.bestDay
+  const bestValue = bestDay ? (isRevenue ? bestDay.revenue : bestDay.profit) : 0
+  const currentMonthShort = data.currentMonthLabel.split(" ")[0]
+  const previousMonthShort = data.previousMonthLabel.split(" ")[0]
+  const currentMonthNumber = new Date().getMonth() + 1
+
+  const lineData = data.points.map((p) => ({
+    day: p.day,
+    current: isRevenue ? p.currentRevenue : p.currentProfit,
+    previous: isRevenue ? p.previousRevenue : p.previousProfit,
+  }))
+
+  return (
+    <div className="rounded-3xl border border-slate-200/70 bg-white p-5 shadow-sm animate-fade-in">
+      {/* Header */}
+      <div className="mb-4 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600 ring-1 ring-emerald-100">
+            <Activity className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <h4 className="font-syne text-base font-bold text-navy-900">Radar de ritmo comercial</h4>
+            <p className="mt-0.5 text-sm text-gray-500">Compare o desempenho acumulado do mês atual com o mês anterior.</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 lg:justify-end">
+          <div className={`flex max-w-md items-start gap-2 rounded-2xl px-3 py-2 ring-1 ${
+            status === "above" ? "bg-emerald-50/60 ring-emerald-100" : status === "below" ? "bg-amber-50/60 ring-amber-100" : "bg-slate-50 ring-slate-100"
+          }`}>
+            <TrendingUp className={`mt-0.5 h-4 w-4 shrink-0 ${status === "above" ? "text-emerald-600" : status === "below" ? "text-amber-600" : "text-slate-500"}`} />
+            <div className="min-w-0">
+              <p className={`text-sm font-bold ${status === "above" ? "text-emerald-700" : status === "below" ? "text-amber-700" : "text-slate-700"}`}>
+                {status === "above" ? "Acima do mês passado" : status === "below" ? "Atenção · abaixo do mês passado" : "Empatando com o mês passado"}
+              </p>
+              <p className="text-[11px] leading-tight text-gray-500">
+                Você está {Math.abs(ratePct)}% {status === "above" ? "à frente" : status === "below" ? "atrás" : "no mesmo ritmo"} no mesmo dia do mês.
+              </p>
+            </div>
+          </div>
+          <div className="flex rounded-full bg-gray-100 p-1">
+            <button
+              type="button"
+              onClick={() => onChangeMode("revenue")}
+              className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${isRevenue ? "bg-navy-900 text-white shadow-sm" : "text-gray-500 hover:text-navy-900"}`}
+            >Receita</button>
+            <button
+              type="button"
+              onClick={() => onChangeMode("profit")}
+              className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${!isRevenue ? "bg-navy-900 text-white shadow-sm" : "text-gray-500 hover:text-navy-900"}`}
+            >Lucro</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Metric cards */}
+      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <RhythmMetric
+          icon={CalendarDays}
+          iconTone="blue"
+          label="Dia do mês"
+          value={String(data.currentDay)}
+          sub={`de ${data.daysInCurrentMonth}`}
+        />
+        <RhythmMetric
+          icon={Activity}
+          iconTone="emerald"
+          label="Atual acumulado"
+          value={formatBRL(currentAccum)}
+          sub={data.currentMonthLabel}
+        />
+        <RhythmMetric
+          icon={CalendarDays}
+          iconTone="slate"
+          label={`${previousMonthShort} no mesmo dia`}
+          value={formatBRL(previousAtSameDay)}
+          sub={data.previousMonthLabel}
+        />
+        <RhythmMetric
+          icon={TrendingUp}
+          iconTone={status === "above" ? "emerald" : status === "below" ? "rose" : "slate"}
+          label="Diferença"
+          value={`${diff >= 0 ? "+" : ""}${formatBRL(diff)}`}
+          sub={`${ratePct >= 0 ? "+" : ""}${ratePct}%`}
+          subTone={status === "above" ? "emerald" : status === "below" ? "rose" : "slate"}
+        />
+        <RhythmMetric
+          icon={Rocket}
+          iconTone="royal"
+          label="Projeção do mês"
+          value={formatBRL(projection)}
+          sub="Se mantiver o ritmo"
+        />
+      </div>
+
+      {/* Chart + insights */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_280px]">
+        <div className="relative h-[280px] min-w-0 rounded-2xl border border-slate-100 bg-white p-2">
+          <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={50}>
+            <LineChart data={lineData} margin={{ top: 16, right: 24, left: 0, bottom: 0 }}>
+              <defs>
+                <linearGradient id="rhythmFutureFill" x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="0%" stopColor="#10b981" stopOpacity={0.08} />
+                  <stop offset="100%" stopColor="#10b981" stopOpacity={0.0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+              <XAxis dataKey="day" tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+              <YAxis
+                tick={{ fontSize: 11, fill: "#94a3b8" }}
+                axisLine={false}
+                tickLine={false}
+                tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)}
+                width={42}
+              />
+              <Tooltip
+                cursor={{ stroke: "#cbd5e1", strokeDasharray: "3 3" }}
+                content={({ active, payload, label }) => {
+                  if (!active || !payload || payload.length === 0) return null
+                  const current = payload.find((p) => p.dataKey === "current")?.value as number | null | undefined
+                  const previous = payload.find((p) => p.dataKey === "previous")?.value as number | null | undefined
+                  const tipDiff = (current ?? 0) - (previous ?? 0)
+                  const tipRate = (previous ?? 0) > 0
+                    ? Math.round((tipDiff / (previous as number)) * 1000) / 10
+                    : null
+                  return (
+                    <div className="rounded-2xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs shadow-md">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Dia</p>
+                      <p className="text-lg font-bold text-navy-900 leading-none">{label}</p>
+                      <div className="mt-2 space-y-1">
+                        <div className="flex items-center justify-between gap-4">
+                          <span className="text-gray-500">{currentMonthShort}</span>
+                          <span className="font-semibold tabular-nums text-emerald-600">{current != null ? formatBRL(current) : "—"}</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-4">
+                          <span className="text-gray-500">{previousMonthShort}</span>
+                          <span className="font-semibold tabular-nums text-slate-500">{previous != null ? formatBRL(previous) : "—"}</span>
+                        </div>
+                      </div>
+                      {current != null && previous != null && (
+                        <div className="mt-2 flex items-center justify-between gap-4 border-t border-slate-100 pt-2">
+                          <span className="text-gray-500">Ritmo</span>
+                          <span className={`font-bold tabular-nums ${tipDiff >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                            {tipDiff >= 0 ? "+" : ""}{formatBRL(tipDiff)}{tipRate != null ? ` · ${tipRate >= 0 ? "+" : ""}${tipRate}%` : ""}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )
+                }}
+              />
+              <ReferenceLine
+                y={previousTotal}
+                stroke="#f59e0b"
+                strokeDasharray="6 4"
+                strokeOpacity={0.8}
+                label={{
+                  value: `Fechamento ${previousMonthShort} (${formatBRL(previousTotal)})`,
+                  position: "insideTopLeft",
+                  fill: "#b45309",
+                  fontSize: 10,
+                  fontWeight: 600,
+                  offset: 10,
+                }}
+              />
+              {data.currentDay < data.daysInCurrentMonth && (
+                <ReferenceLine
+                  x={data.currentDay}
+                  stroke="#cbd5e1"
+                  strokeDasharray="2 3"
+                  strokeOpacity={0.6}
+                />
+              )}
+              <Line
+                type="monotone"
+                dataKey="previous"
+                stroke="#94a3b8"
+                strokeWidth={1.8}
+                strokeDasharray="5 4"
+                strokeOpacity={0.85}
+                dot={false}
+                activeDot={{ r: 4, fill: "#64748b" }}
+                isAnimationActive
+                animationDuration={700}
+                connectNulls={false}
+                name={`${previousMonthShort} acumulado`}
+              />
+              <Line
+                type="monotone"
+                dataKey="current"
+                stroke="#10b981"
+                strokeWidth={2.6}
+                dot={false}
+                activeDot={{ r: 5, fill: "#059669", stroke: "#a7f3d0", strokeWidth: 3 }}
+                isAnimationActive
+                animationDuration={900}
+                connectNulls={false}
+                name={`${currentMonthShort} acumulado`}
+                fill="url(#rhythmFutureFill)"
+              />
+            </LineChart>
+          </ResponsiveContainer>
+          <div className="absolute left-3 top-3 flex flex-wrap gap-1.5 text-[11px] font-semibold">
+            <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700 ring-1 ring-emerald-100">
+              <span className="h-1.5 w-3 rounded-full bg-emerald-500" /> {currentMonthShort} acumulado
+            </span>
+            <span className="flex items-center gap-1 rounded-full bg-slate-50 px-2 py-0.5 text-slate-600 ring-1 ring-slate-100">
+              <span className="h-1.5 w-3 rounded-full bg-slate-400" style={{ backgroundImage: "repeating-linear-gradient(90deg, #94a3b8 0 4px, transparent 4px 7px)" }} /> {previousMonthShort} acumulado
+            </span>
+            <span className="flex items-center gap-1 rounded-full bg-amber-50/80 px-2 py-0.5 text-amber-700 ring-1 ring-amber-100">
+              <span className="h-1.5 w-3 rounded-full bg-amber-500" style={{ backgroundImage: "repeating-linear-gradient(90deg, #f59e0b 0 4px, transparent 4px 7px)" }} /> Fechamento {previousMonthShort}
+            </span>
+          </div>
+        </div>
+
+        {/* Insights column */}
+        <div className="grid grid-cols-1 gap-2.5">
+          <InsightCard
+            icon={TrendingUp}
+            tone={status === "above" ? "emerald" : status === "below" ? "amber" : "slate"}
+            title={`${currentMonthShort} está ${formatBRL(Math.abs(diff))} ${status === "above" ? "acima" : status === "below" ? "abaixo" : "no mesmo nível"} de ${previousMonthShort} no dia ${data.currentDay}.`}
+            sub={`Ritmo: ${ratePct >= 0 ? "+" : ""}${ratePct}%`}
+          />
+          <InsightCard
+            icon={Target}
+            tone="amber"
+            title={remainingToBeatPrevious > 0
+              ? `Para superar ${previousMonthShort} (${formatBRL(previousTotal)}), faltam ${formatBRL(remainingToBeatPrevious)} em ${remainingDays} dia(s).`
+              : `${currentMonthShort} já superou ${previousMonthShort} (${formatBRL(previousTotal)}).`}
+            sub={remainingToBeatPrevious > 0 ? `Média necessária: ${formatBRL(Math.ceil(dailyRateToBeat))}/dia.` : `Excedente atual: ${formatBRL(currentAccum - previousTotal)}.`}
+          />
+          <InsightCard
+            icon={Trophy}
+            tone="violet"
+            title="Melhor dia do mês"
+            sub={bestDay && bestValue > 0
+              ? `${String(bestDay.day).padStart(2, "0")}/${String(currentMonthNumber).padStart(2, "0")} · ${formatBRL(bestValue)} ${isRevenue ? "de receita" : "de lucro"}`
+              : "Sem dia destacado ainda."}
+          />
+        </div>
+      </div>
+
+      {/* Executive strip */}
+      <div className="mt-4 flex items-start gap-2 rounded-2xl border border-royal-100/70 bg-royal-50/50 px-3 py-2.5 text-[12px] leading-relaxed text-royal-800">
+        <Info className="mt-0.5 h-4 w-4 shrink-0 text-royal-500" />
+        <p>
+          {projection > 0
+            ? <>Se mantiver o ritmo atual, a projeção é fechar {currentMonthShort} em <strong className="tabular-nums">{formatBRL(projection)}</strong>{projectionSurplus > 0
+                ? <>, superando {previousMonthShort} em <strong className="tabular-nums text-emerald-700">{formatBRL(projectionSurplus)}</strong> ({Math.round((projectionSurplus / Math.max(1, previousTotal)) * 100)}%).</>
+                : projectionSurplus < 0
+                ? <>, ficando <strong className="tabular-nums text-rose-600">{formatBRL(Math.abs(projectionSurplus))}</strong> abaixo de {previousMonthShort}.</>
+                : <>, empatando com {previousMonthShort}.</>}</>
+            : <>Sem projeção disponível para {currentMonthShort} — aguarde mais movimentações no mês.</>}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function RhythmMetric({ icon: Icon, iconTone, label, value, sub, subTone }: {
+  icon: React.ComponentType<{ className?: string }>
+  iconTone: "emerald" | "slate" | "rose" | "blue" | "royal" | "amber"
+  label: string
+  value: string
+  sub: string
+  subTone?: "emerald" | "rose" | "slate"
+}) {
+  const iconClass =
+    iconTone === "emerald" ? "bg-emerald-50 text-emerald-600 ring-emerald-100" :
+    iconTone === "rose" ? "bg-rose-50 text-rose-600 ring-rose-100" :
+    iconTone === "blue" ? "bg-sky-50 text-sky-600 ring-sky-100" :
+    iconTone === "royal" ? "bg-royal-50 text-royal-600 ring-royal-100" :
+    iconTone === "amber" ? "bg-amber-50 text-amber-600 ring-amber-100" :
+    "bg-slate-100 text-slate-600 ring-slate-200"
+  const subClass =
+    subTone === "emerald" ? "text-emerald-600" :
+    subTone === "rose" ? "text-rose-600" :
+    subTone === "slate" ? "text-slate-500" :
+    "text-gray-500"
+  return (
+    <div className="group min-w-0 rounded-2xl border border-slate-200/70 bg-white px-3 py-3 transition-all duration-200 hover:-translate-y-px hover:shadow-sm">
+      <div className="flex items-start gap-2.5">
+        <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ring-1 ${iconClass}`}>
+          <Icon className="h-4 w-4" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold leading-tight text-gray-500">{label}</p>
+          <p className="mt-1 break-words text-base font-bold tabular-nums text-navy-900 sm:text-[17px]">{value}</p>
+          <p className={`mt-0.5 text-[11px] font-medium ${subClass}`}>{sub}</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function InsightCard({ icon: Icon, tone, title, sub }: {
+  icon: React.ComponentType<{ className?: string }>
+  tone: "emerald" | "amber" | "violet" | "slate"
+  title: string
+  sub: string
+}) {
+  const iconClass =
+    tone === "emerald" ? "bg-emerald-50 text-emerald-600 ring-emerald-100" :
+    tone === "amber" ? "bg-amber-50 text-amber-600 ring-amber-100" :
+    tone === "violet" ? "bg-violet-50 text-violet-600 ring-violet-100" :
+    "bg-slate-100 text-slate-600 ring-slate-200"
+  return (
+    <div className="flex items-start gap-2.5 rounded-2xl border border-slate-200/70 bg-white px-3 py-2.5 transition-colors duration-200 hover:bg-slate-50/50">
+      <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ring-1 ${iconClass}`}>
+        <Icon className="h-4 w-4" />
+      </div>
+      <div className="min-w-0">
+        <p className="text-[12px] font-semibold leading-snug text-navy-900">{title}</p>
+        <p className="mt-0.5 text-[11px] leading-snug text-gray-500">{sub}</p>
+      </div>
+    </div>
+  )
+}
+
 function DashboardMetricCard({
   title,
   value,
@@ -363,6 +751,8 @@ export default function DashboardPage() {
 
   const [salesChartData, setSalesChartData] = useState<{ month: string; value: number }[]>([])
   const [salesComparisonMode, setSalesComparisonMode] = useState<"day" | "month">("day")
+  const [monthRhythm, setMonthRhythm] = useState<MonthRhythmData | null>(null)
+  const [rhythmMode, setRhythmMode] = useState<"revenue" | "profit">("revenue")
   const [dailySalesComparison, setDailySalesComparison] = useState<SalesComparisonPoint[]>([])
   const [monthlySalesComparison, setMonthlySalesComparison] = useState<SalesComparisonPoint[]>([])
   const [categoryData, setCategoryData] = useState<{ name: string; value: number; color: string }[]>([])
@@ -416,6 +806,7 @@ export default function DashboardPage() {
           setStockCount(data.stockCount)
           setWarrantiesCount(data.warrantiesCount)
           setProblemsCount(data.problemsCount)
+          if (data.monthRhythm) setMonthRhythm(data.monthRhythm)
           if (hasComparisonData) {
             setLoading(false)
             return
@@ -425,6 +816,8 @@ export default function DashboardPage() {
 
       const now = new Date()
       const startOfMonth = dateKey(new Date(now.getFullYear(), now.getMonth(), 1))
+      const startOfPrevMonth = dateKey(new Date(now.getFullYear(), now.getMonth() - 1, 1))
+      const endOfPrevMonth = dateKey(new Date(now.getFullYear(), now.getMonth(), 0))
       const today = dateKey(now)
       const in30Days = dateKey(new Date(now.getTime() + 30 * 86400000))
 
@@ -438,6 +831,7 @@ export default function DashboardPage() {
         warrantiesRes,
         problemsRes,
         recentSalesRes,
+        salesPrevMonthRes,
       ] = await Promise.all([
         (supabase.from("inventory") as any)
           .select(`
@@ -518,6 +912,11 @@ export default function DashboardPage() {
           .select("sale_price, created_at, customer:customer_id(full_name), inventory:inventory_id(catalog:catalog_id(model, brand))")
           .order("created_at", { ascending: false })
           .limit(6),
+
+        supabase.from("sales")
+          .select("sale_price, net_amount, sale_date, created_at, source_type, sale_status, supplier_cost, notes, inventory:inventory_id(purchase_price, type), sales_additional_items(*)")
+          .gte("sale_date", startOfPrevMonth)
+          .lte("sale_date", endOfPrevMonth),
       ])
 
       const inventory = ((inventoryRes.data as any[]) ?? []).filter((i) => (i.type || "own") === "own")
@@ -676,6 +1075,84 @@ export default function DashboardPage() {
       const nextMonthlyComparison = Object.values(monthComparisonMap)
       setMonthlySalesComparison(nextMonthlyComparison)
 
+      const salesPrevMonth: RhythmSaleRow[] = ((salesPrevMonthRes.data as RhythmSaleRow[] | null) ?? []).filter(
+        (s) => (s.source_type || "own") === "own" && isCompletedSale(s)
+      )
+      const salesMonthForRhythm: RhythmSaleRow[] = salesMonth as RhythmSaleRow[]
+      const currentMonthDayNow = now.getDate()
+      const totalDaysInCurrentMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+      const totalDaysInPrevMonth = new Date(now.getFullYear(), now.getMonth(), 0).getDate()
+      const rhythmMaxDays = Math.max(totalDaysInCurrentMonth, totalDaysInPrevMonth)
+      const currentDailyMap: Record<number, { revenue: number; profit: number }> = {}
+      const previousDailyMap: Record<number, { revenue: number; profit: number }> = {}
+      for (let d = 1; d <= rhythmMaxDays; d++) {
+        currentDailyMap[d] = { revenue: 0, profit: 0 }
+        previousDailyMap[d] = { revenue: 0, profit: 0 }
+      }
+      salesMonthForRhythm.forEach((s: RhythmSaleRow) => {
+        const dayLabel = saleDateDayLabel(s.sale_date ?? undefined, s.created_at ?? undefined)
+        const day = Number(dayLabel)
+        if (!day || day < 1 || day > rhythmMaxDays) return
+        currentDailyMap[day].revenue += Number(s.sale_price || 0)
+        currentDailyMap[day].profit += getSaleProfit(s)
+      })
+      salesPrevMonth.forEach((s: RhythmSaleRow) => {
+        const raw = String(s.sale_date || "").slice(0, 10)
+        const dayStr = raw.split("-")[2]
+        const day = Number(dayStr)
+        if (!day || day < 1 || day > rhythmMaxDays) return
+        previousDailyMap[day].revenue += Number(s.sale_price || 0)
+        previousDailyMap[day].profit += getSaleProfit(s)
+      })
+      const rhythmPoints: MonthRhythmPoint[] = []
+      let runCurrentRevenue = 0
+      let runCurrentProfit = 0
+      let runPreviousRevenue = 0
+      let runPreviousProfit = 0
+      for (let d = 1; d <= rhythmMaxDays; d++) {
+        runCurrentRevenue += currentDailyMap[d]?.revenue ?? 0
+        runCurrentProfit += currentDailyMap[d]?.profit ?? 0
+        runPreviousRevenue += previousDailyMap[d]?.revenue ?? 0
+        runPreviousProfit += previousDailyMap[d]?.profit ?? 0
+        rhythmPoints.push({
+          day: d,
+          currentRevenue: d <= currentMonthDayNow && d <= totalDaysInCurrentMonth ? Math.round(runCurrentRevenue * 100) / 100 : null,
+          currentProfit: d <= currentMonthDayNow && d <= totalDaysInCurrentMonth ? Math.round(runCurrentProfit * 100) / 100 : null,
+          previousRevenue: d <= totalDaysInPrevMonth ? Math.round(runPreviousRevenue * 100) / 100 : null,
+          previousProfit: d <= totalDaysInPrevMonth ? Math.round(runPreviousProfit * 100) / 100 : null,
+        })
+      }
+      const sameDayLimit = Math.min(currentMonthDayNow, totalDaysInPrevMonth)
+      const sameDayPrev = rhythmPoints.find((p) => p.day === sameDayLimit)
+      const todayPoint = rhythmPoints.find((p) => p.day === currentMonthDayNow)
+      const prevTotalsPoint = rhythmPoints[rhythmPoints.length - 1]
+      let bestDay: { day: number; revenue: number; profit: number } | null = null
+      for (let d = 1; d <= currentMonthDayNow; d++) {
+        const entry = currentDailyMap[d]
+        if (!entry) continue
+        if (!bestDay || entry.revenue > bestDay.revenue) {
+          bestDay = { day: d, revenue: entry.revenue, profit: entry.profit }
+        }
+      }
+      const monthFormatter = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" })
+      const cap = (s: string) => s.replace(/^\w/, (l) => l.toUpperCase())
+      const nextMonthRhythm: MonthRhythmData = {
+        points: rhythmPoints,
+        currentMonthLabel: cap(monthFormatter.format(new Date(now.getFullYear(), now.getMonth(), 1))),
+        previousMonthLabel: cap(monthFormatter.format(new Date(now.getFullYear(), now.getMonth() - 1, 1))),
+        currentDay: currentMonthDayNow,
+        daysInCurrentMonth: totalDaysInCurrentMonth,
+        daysInPreviousMonth: totalDaysInPrevMonth,
+        currentAccumRevenue: todayPoint?.currentRevenue ?? runCurrentRevenue,
+        currentAccumProfit: todayPoint?.currentProfit ?? runCurrentProfit,
+        previousAccumAtSameDayRevenue: sameDayPrev?.previousRevenue ?? 0,
+        previousAccumAtSameDayProfit: sameDayPrev?.previousProfit ?? 0,
+        previousTotalRevenue: prevTotalsPoint?.previousRevenue ?? runPreviousRevenue,
+        previousTotalProfit: prevTotalsPoint?.previousProfit ?? runPreviousProfit,
+        bestDay,
+      }
+      setMonthRhythm(nextMonthRhythm)
+
       const catRaw = ((salesCategoryRes.data as any[]) ?? []).filter(
         (s) => (s.source_type || "own") === "own" && isCompletedSale(s)
       )
@@ -748,6 +1225,7 @@ export default function DashboardPage() {
           salesChartData: nextSalesChartData,
           dailySalesComparison: nextDailyComparison,
           monthlySalesComparison: nextMonthlyComparison,
+          monthRhythm: nextMonthRhythm,
           categoryData: Object.entries(catCount).map(([name, count]) => ({
             name,
             value: Math.round((count / total) * 100),
@@ -1096,8 +1574,9 @@ export default function DashboardPage() {
         icon={BarChart3}
         action={<Badge variant={chartHasSales ? "green" : "gray"}>{chartHasSales ? "Com vendas" : "Sem vendas"}</Badge>}
       >
+        <div className="space-y-4">
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-          <div className="rounded-2xl border border-gray-100 bg-white p-4">
+          <div className="rounded-2xl border border-gray-100 bg-white p-4 min-w-0">
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Bruto x líquido</p>
@@ -1225,6 +1704,9 @@ export default function DashboardPage() {
               </div>
             )}
           </div>
+        </div>
+
+        <MonthRhythmBlock data={monthRhythm} mode={rhythmMode} onChangeMode={setRhythmMode} />
         </div>
       </DashboardSection>
 
