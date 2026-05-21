@@ -81,8 +81,14 @@ html:has([data-nobretech-landing])::-webkit-scrollbar-thumb:hover {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
 }
+@keyframes bar-shine {
+  0% { transform: translateX(-150%) skewX(-12deg); opacity: 0; }
+  15% { opacity: 1; }
+  100% { transform: translateX(450%) skewX(-12deg); opacity: 0; }
+}
 
 .animate-fade-in { animation: fade-in 0.3s ease-out; }
 .animate-slide-up { animation: slide-up 0.4s ease-out; }
 .animate-scale-in { animation: scale-in 0.3s ease-out; }
 .animate-pulse-glow { animation: pulse-glow 2s infinite; }
+.animate-bar-shine { animation: bar-shine 1.6s cubic-bezier(0.22, 0.61, 0.36, 1) 0.9s 1 both; }

@@ -3,17 +3,19 @@
 import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar, Cell } from "recharts"
-import { Banknote, Building2, CalendarClock, CheckCircle2, Landmark, LineChart, Plus, ReceiptText, Wallet, ArrowUpRight, ArrowDownRight, Sparkles } from "lucide-react"
+import { AlertTriangle, Banknote, Building2, CalendarClock, CheckCircle2, Landmark, LineChart, Plus, ReceiptText, Shield, TrendingUp, Wallet, ArrowUpRight, ArrowDownRight, Sparkles, Info } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { supabase } from "@/lib/supabase"
-import { currentMonthKey, formatBRL, formatDate, getProductName, monthRangeISO, todayISO } from "@/lib/helpers"
+import { addMonthsISO, currentMonthKey, formatBRL, formatDate, getProductName, monthRangeISO, todayISO } from "@/lib/helpers"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/toaster"
 import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 import { upsertSaleReceivable } from "@/lib/finance/sale-receivable-client"
+import { getActiveLedgerMovements } from "@/lib/financial/ledger-balance-engine"
+import { buildOwnerCapitalSnapshot } from "@/lib/financial/owner-capital-engine"
 
 type FinanceAccount = {
   id: string
@@ -47,8 +49,13 @@ type FinancialAccountMovement = {
   account_id?: string | null
   amount: number
   movement_date: string
+  type?: string | null
+  source?: string | null
+  source_id?: string | null
+  balance_after?: number | null
   is_canceled?: boolean | null
   reversal_of_id?: string | null
+  created_at?: string | null
 }
 
 type ChartAccount = {
@@ -102,6 +109,8 @@ type InventoryItem = {
   catalog?: { model?: string | null; storage?: string | null; color?: string | null; category?: string | null } | null
 }
 
+type DashboardMovementStatus = "reconciled" | "pending" | "cancelled" | "reversed" | "reversal"
+
 const expenseColors = ["#ef4444", "#f97316", "#eab308", "#2563eb", "#14b8a6", "#8b5cf6"]
 const STOCK_PURCHASE_CATEGORY = "Estoque (Peças/Acessórios)"
 
@@ -137,6 +146,25 @@ function parseCurrencyInput(value: string) {
   return Number(value.replace(/\D/g, "") || "0") / 100
 }
 
+function roundCurrency(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100
+}
+
+function movementStatusLabel(status: DashboardMovementStatus) {
+  if (status === "reconciled") return "Conciliado"
+  if (status === "cancelled") return "Cancelado"
+  if (status === "reversed") return "Estornado"
+  if (status === "reversal") return "Movimento de estorno"
+  return "Pendente"
+}
+
+function movementStatusVariant(status: DashboardMovementStatus): "green" | "yellow" | "red" | "gray" {
+  if (status === "reconciled") return "green"
+  if (status === "cancelled" || status === "reversed") return "red"
+  if (status === "reversal") return "gray"
+  return "yellow"
+}
+
 function buildMonthOptions() {
   const formatter = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" })
   return Array.from({ length: 18 }, (_, index) => {
@@ -162,6 +190,30 @@ function addDaysISO(dateISO: string, days: number) {
 function formatShortDate(value: string) {
   const [year, month, day] = value.split("-").map(Number)
   return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short" }).format(new Date(year, month - 1, day))
+}
+
+function LazyChart({ children, fallback }: { children: React.ReactNode; fallback?: React.ReactNode }) {
+  const [ready, setReady] = useState(false)
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setReady(true))
+    return () => cancelAnimationFrame(id)
+  }, [])
+  if (!ready) return <>{fallback ?? null}</>
+  return <>{children}</>
+}
+
+function formatMonthLabel(monthKey: string) {
+  const [y, m] = monthKey.split("-").map(Number)
+  if (!Number.isFinite(y) || !Number.isFinite(m)) return monthKey
+  const label = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(new Date(y, m - 1, 1))
+  return label.replace(/^\w/, (l) => l.toUpperCase())
+}
+
+function timelineDateParts(value: string) {
+  const [year, monthN, day] = value.split("-").map(Number)
+  if (!Number.isFinite(year) || !Number.isFinite(monthN) || !Number.isFinite(day)) return { day: "", monthAbbr: "" }
+  const monthAbbr = new Intl.DateTimeFormat("pt-BR", { month: "short" }).format(new Date(year, monthN - 1, day)).replace(/\./g, "").toUpperCase()
+  return { day: String(day).padStart(2, "0"), monthAbbr }
 }
 
 export default function FinanceiroPage() {
@@ -204,7 +256,9 @@ export default function FinanceiroPage() {
         (supabase.from("finance_accounts") as any).select("*").eq("is_active", true).order("created_at", { ascending: true }),
         (supabase.from("finance_chart_accounts") as any).select("*").eq("is_active", true).order("sort_order", { ascending: true }),
         (supabase.from("transactions") as any).select("*").gte("date", start).lte("date", end).order("date", { ascending: false }),
-        (supabase.from("financial_account_movements") as any).select("id, account_id, amount, movement_date, is_canceled, reversal_of_id").order("movement_date", { ascending: true }),
+        (supabase.from("financial_account_movements") as any)
+          .select("id, account_id, amount, movement_date, type, source, source_id, balance_after, is_canceled, reversal_of_id, created_at")
+          .order("movement_date", { ascending: true }),
         (supabase.from("transactions") as any).select("*").or("status.is.null,status.neq.cancelled").order("due_date", { ascending: true }),
         (supabase.from("sales") as any)
           .select("id, sale_date, payment_due_date, sale_status, sale_price, net_amount, payment_method, inventory:inventory_id(catalog:catalog_id(model))")
@@ -248,6 +302,7 @@ export default function FinanceiroPage() {
         ...item,
         movement_date: toDateOnly(item.movement_date),
         amount: Number(item.amount || 0),
+        balance_after: item.balance_after === null ? null : Number(item.balance_after || 0),
       })))
       setProjectionTransactions((projectionTransactionsRes.data || [])
         .filter((item: any) => item.source_type !== "sale" || validProjectionSaleIds.has(String(item.source_id)))
@@ -273,24 +328,73 @@ export default function FinanceiroPage() {
     }
   }
 
-  const reconciledSaleIds = useMemo(() => {
-    return new Set(transactions.filter((t) => t.source_type === "sale" && t.source_id).map((t) => String(t.source_id)))
-  }, [transactions])
-
   const saleIdsWithSplitPayments = useMemo(() => {
     return new Set(projectionSalePayments.map((payment) => String(payment.sale_id)))
   }, [projectionSalePayments])
 
+  const projectionTransactionById = useMemo(() => {
+    return new Map(projectionTransactions.map((transaction) => [String(transaction.id), transaction]))
+  }, [projectionTransactions])
+
+  const projectionTransactionBySalePaymentId = useMemo(() => {
+    return new Map(
+      projectionTransactions
+        .filter((transaction) => transaction.source_type === "sale_payment" && transaction.source_id)
+        .map((transaction) => [String(transaction.source_id), transaction])
+    )
+  }, [projectionTransactions])
+
+  const saleFinanceStatusBySaleId = useMemo(() => {
+    const statuses = new Map<string, DashboardMovementStatus>()
+
+    for (const transaction of [...projectionTransactions, ...transactions]) {
+      if (transaction.source_type !== "sale" || !transaction.source_id) continue
+      statuses.set(String(transaction.source_id), transaction.status === "reconciled" ? "reconciled" : transaction.status === "cancelled" ? "cancelled" : "pending")
+    }
+
+    const paymentsBySaleId = new Map<string, SalePayment[]>()
+    for (const payment of projectionSalePayments) {
+      const saleId = String(payment.sale_id)
+      paymentsBySaleId.set(saleId, [...(paymentsBySaleId.get(saleId) || []), payment])
+    }
+
+    for (const [saleId, payments] of paymentsBySaleId) {
+      const paymentStatuses = payments
+        .map((payment) => {
+          const transaction = (payment.transaction_id ? projectionTransactionById.get(String(payment.transaction_id)) : undefined)
+            || projectionTransactionBySalePaymentId.get(String(payment.id))
+          if (transaction?.status === "reconciled") return "reconciled" as DashboardMovementStatus
+          if (transaction?.status === "cancelled" || payment.status === "cancelled") return "cancelled" as DashboardMovementStatus
+          return "pending" as DashboardMovementStatus
+        })
+
+      if (paymentStatuses.length === 0) continue
+      if (paymentStatuses.every((status) => status === "reconciled")) statuses.set(saleId, "reconciled")
+      else if (paymentStatuses.every((status) => status === "cancelled")) statuses.set(saleId, "cancelled")
+      else statuses.set(saleId, "pending")
+    }
+
+    return statuses
+  }, [projectionSalePayments, projectionTransactionById, projectionTransactionBySalePaymentId, projectionTransactions, transactions])
+
+  const reconciledSaleIds = useMemo(() => {
+    return new Set(Array.from(saleFinanceStatusBySaleId.entries()).filter(([, status]) => status === "reconciled").map(([saleId]) => saleId))
+  }, [saleFinanceStatusBySaleId])
+
+  const activeAccountMovements = useMemo(() => {
+    return getActiveLedgerMovements(accountMovements) as FinancialAccountMovement[]
+  }, [accountMovements])
+
   const accountBalances = useMemo(() => {
     const unassignedLedger =
       accounts.length === 1
-        ? accountMovements
+        ? activeAccountMovements
             .filter((movement) => !movement.account_id)
             .reduce((sum, movement) => sum + Number(movement.amount || 0), 0)
         : 0
 
     return accounts.map((account) => {
-      const linkedLedger = accountMovements
+      const linkedLedger = activeAccountMovements
         .filter((movement) => movement.account_id === account.id)
         .reduce((sum, movement) => sum + Number(movement.amount || 0), 0)
       const baseBalance = 0
@@ -298,11 +402,11 @@ export default function FinanceiroPage() {
       const balance = ledger
       return { ...account, baseBalance, ledger, balance }
     })
-  }, [accountMovements, accounts])
+  }, [activeAccountMovements, accounts])
 
   const statementBalance = useMemo(() => {
-    return accountMovements.reduce((sum, movement) => sum + Number(movement.amount || 0), 0)
-  }, [accountMovements])
+    return activeAccountMovements.reduce((sum, movement) => sum + Number(movement.amount || 0), 0)
+  }, [activeAccountMovements])
 
   useEffect(() => {
     if (accountBalances.length === 0) {
@@ -321,6 +425,10 @@ export default function FinanceiroPage() {
   const chartAccountByName = useMemo(() => {
     return new Map(chartAccounts.map((account) => [account.name, account]))
   }, [chartAccounts])
+
+  const accountNameById = useMemo(() => {
+    return new Map(accounts.map((account) => [account.id, account.name]))
+  }, [accounts])
 
   const getTransactionAccount = (transaction: Transaction) => {
     if (transaction.type === "expense" && isInventoryPurchaseTransaction(transaction)) {
@@ -358,13 +466,54 @@ export default function FinanceiroPage() {
   const isRevenueIncome = (transaction: Transaction) => transaction.type === "income" && hasFinancialType(transaction, "revenue")
   const salesRevenueAccount = chartAccounts.find((account) => account.code === "1.01") || chartAccounts.find((account) => account.financial_type === "revenue" && account.cash_flow_type === "income")
 
+  const activePeriodAccountMovements = useMemo(() => {
+    const { start, end } = monthRangeISO(month)
+    return activeAccountMovements.filter((movement) => movement.movement_date >= start && movement.movement_date <= end)
+  }, [activeAccountMovements, month])
+
+  const ownerCapitalSnapshot = useMemo(() => {
+    const { start, end } = monthRangeISO(month)
+    return buildOwnerCapitalSnapshot({
+      period: {
+        preset: "custom",
+        startDate: start,
+        endDate: end,
+        label: monthOptions.find((option) => option.value === month)?.label || month,
+      },
+      movements: projectionTransactions.map((transaction) => {
+        const account = transaction.type === "expense" && isInventoryPurchaseTransaction(transaction)
+          ? chartAccounts.find((item) => item.code === "7.01") || null
+          : (transaction.chart_account_id ? chartAccountById.get(transaction.chart_account_id) : undefined) || chartAccountByName.get(transaction.category) || null
+        return {
+          ...transaction,
+          date: transaction.date,
+          dueDate: transaction.due_date,
+          accountName: transaction.account_id ? accountNameById.get(transaction.account_id) : undefined,
+          paymentMethod: transaction.payment_method,
+          financialType: account?.financial_type,
+          financial_type: account?.financial_type,
+          statementSection: account?.statement_section,
+          statement_section: account?.statement_section,
+          affectsCash: account?.affects_cash,
+          affects_cash: account?.affects_cash,
+          affectsDre: account?.affects_dre,
+          affects_dre: account?.affects_dre,
+          affectsInventory: account?.affects_inventory,
+          affects_inventory: account?.affects_inventory,
+          affectsOwnerEquity: account?.affects_owner_equity,
+          affects_owner_equity: account?.affects_owner_equity,
+        }
+      }),
+    })
+  }, [accountNameById, chartAccountById, chartAccountByName, chartAccounts, month, monthOptions, projectionTransactions])
+
   const metrics = useMemo(() => {
     const completedSales = sales.filter((sale) => (sale.sale_status || "completed") === "completed")
     const activeTransactions = transactions.filter((t) => t.status !== "cancelled")
     const reconciledTransactions = transactions.filter((t) => t.status === "reconciled")
     const manualIncome = reconciledTransactions.filter((t) => t.source_type !== "sale" && t.source_type !== "sale_payment" && isRevenueIncome(t)).reduce((sum, t) => sum + Number(t.amount), 0)
-    const cashInflows = reconciledTransactions.filter((t) => t.type === "income").reduce((sum, t) => sum + Number(t.amount), 0)
-    const cashOutflows = reconciledTransactions.filter((t) => t.type === "expense").reduce((sum, t) => sum + Number(t.amount), 0)
+    const cashInflows = activePeriodAccountMovements.filter((movement) => Number(movement.amount || 0) > 0).reduce((sum, movement) => sum + Number(movement.amount || 0), 0)
+    const cashOutflows = activePeriodAccountMovements.filter((movement) => Number(movement.amount || 0) < 0).reduce((sum, movement) => sum + Math.abs(Number(movement.amount || 0)), 0)
     const reconciledInventoryPurchases = reconciledTransactions.filter(isInventoryCashOut).reduce((sum, t) => sum + Number(t.amount), 0)
     const reconciledOperatingOutflows = reconciledTransactions.filter(isResultExpense).reduce((sum, t) => sum + Number(t.amount), 0)
     const reconciledOwnerWithdrawals = reconciledTransactions.filter(isOwnerWithdrawal).reduce((sum, t) => sum + Number(t.amount), 0)
@@ -390,6 +539,11 @@ export default function FinanceiroPage() {
     const averageTicket = completedSales.length > 0 ? salesRevenue / completedSales.length : 0
     const salesNeeded = averageTicket > 0 ? Math.ceil(breakEvenGap / averageTicket) : 0
     const accountTotal = statementBalance
+    const ownerProfitWithdrawals = ownerCapitalSnapshot.ownerProfitWithdrawalsInPeriod
+    const ownerCapitalReturns = ownerCapitalSnapshot.ownerCapitalReturnsInPeriod + ownerCapitalSnapshot.untracedOwnerCapitalReturnsInPeriod
+    const profitAvailable = roundCurrency(netProfit - ownerProfitWithdrawals)
+    const profitWithdrawalRate = netProfit > 0 ? Math.min(999, Math.round((ownerProfitWithdrawals / netProfit) * 100)) : ownerProfitWithdrawals > 0 ? 100 : 0
+    const profitAvailabilityStatus: "exceeded" | "attention" | "available" = profitAvailable < 0 ? "exceeded" : profitWithdrawalRate >= 80 ? "attention" : "available"
     const pendingSales = sales.filter((sale) => (sale.sale_status || "completed") !== "cancelled" && !reconciledSaleIds.has(sale.id) && !saleIdsWithSplitPayments.has(sale.id))
     const pendingSalePayments = projectionSalePayments.filter((payment) => payment.status === "pending")
     const pendingTransactions = transactions.filter((t) => t.source_type !== "sale" && t.source_type !== "sale_payment" && t.status !== "reconciled" && t.status !== "cancelled")
@@ -427,12 +581,17 @@ export default function FinanceiroPage() {
       averageTicket,
       salesNeeded,
       accountTotal,
+      ownerProfitWithdrawals,
+      ownerCapitalReturns,
+      profitAvailable,
+      profitWithdrawalRate,
+      profitAvailabilityStatus,
       pendingSales,
       pendingSalePayments,
       pendingTransactions,
       pendingAmount,
     }
-  }, [chartAccountById, chartAccountByName, projectionSalePayments, reconciledSaleIds, saleIdsWithSplitPayments, sales, statementBalance, transactions])
+  }, [activePeriodAccountMovements, chartAccountById, chartAccountByName, ownerCapitalSnapshot, projectionSalePayments, reconciledSaleIds, saleIdsWithSplitPayments, sales, statementBalance, transactions])
 
   const cashProjection = useMemo(() => {
     const today = todayISO()
@@ -573,6 +732,52 @@ export default function FinanceiroPage() {
     }
   }, [metrics.accountTotal, projectionTransactions, projectionSalePayments, projectionSales, saleIdsWithSplitPayments])
 
+  const profitFutureRisk = useMemo(() => {
+    const nextMonthStartDate = addMonthsISO(`${month}-01`, 1)
+    if (!nextMonthStartDate) return null
+    const nextMonthKey = nextMonthStartDate.slice(0, 7)
+    const { start: nmStart, end: nmEnd } = monthRangeISO(nextMonthKey)
+    const futureExpenses = cashProjection.pendingItems
+      .filter((item) => item.type === "expense" && item.originalDate && item.originalDate >= nmStart && item.originalDate <= nmEnd)
+      .sort((a, b) => (a.originalDate || a.date).localeCompare(b.originalDate || b.date))
+    if (futureExpenses.length === 0) {
+      return { items: [], futureTotal: 0, projectedCashAfter: null as number | null, nextMonthKey, nextMonthLabel: "" }
+    }
+    const futureTotal = futureExpenses.reduce((sum, item) => sum + item.amount, 0)
+    const projectedCashAfter = cashProjection.startingBalance + cashProjection.pendingItems
+      .filter((item) => item.date <= nmEnd)
+      .reduce((sum, item) => sum + item.signedAmount, 0)
+    const monthDate = new Date(`${nextMonthKey}-01T00:00:00`)
+    const monthFormatter = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" })
+    const nextMonthLabel = monthFormatter.format(monthDate).replace(/^\w/, (letter) => letter.toUpperCase())
+    return { items: futureExpenses, futureTotal, projectedCashAfter, nextMonthKey, nextMonthLabel }
+  }, [cashProjection, month])
+
+  const profitDecision = useMemo(() => {
+    const committed = profitFutureRisk?.futureTotal ?? 0
+    const availableToday = metrics.profitAvailable
+    const availableAfter = roundCurrency(availableToday - committed)
+    const impactRate = availableToday > 0
+      ? Math.min(999, Math.round((committed / availableToday) * 100))
+      : committed > 0
+      ? 100
+      : 0
+    let status: "exceeded" | "attention" | "available"
+    if (availableAfter < 0 || metrics.profitAvailabilityStatus === "exceeded") status = "exceeded"
+    else if (impactRate >= 30 || metrics.profitAvailabilityStatus === "attention") status = "attention"
+    else status = "available"
+    return {
+      availableToday,
+      committed,
+      availableAfter,
+      impactRate,
+      status,
+      hasCommitments: committed > 0,
+      nextMonthLabel: profitFutureRisk?.nextMonthLabel ?? "",
+      projectedCashAfter: profitFutureRisk?.projectedCashAfter ?? null,
+    }
+  }, [metrics.profitAvailable, metrics.profitAvailabilityStatus, profitFutureRisk])
+
   const productRecommendations = useMemo(() => {
     return inventory
       .map((item) => {
@@ -609,11 +814,11 @@ export default function FinanceiroPage() {
   const flowChart = useMemo(() => {
     const days = new Map<string, { date: string; entradas: number; saidas: number; saldo: number }>()
     const { start, end } = monthRangeISO(month)
-    let running = accountMovements
+    let running = activeAccountMovements
       .filter((movement) => movement.movement_date < start)
       .reduce((sum, movement) => sum + Number(movement.amount || 0), 0)
 
-    for (const movement of accountMovements) {
+    for (const movement of activeAccountMovements) {
       if (movement.movement_date < start || movement.movement_date > end) continue
       const row = days.get(movement.movement_date) || { date: movement.movement_date, entradas: 0, saidas: 0, saldo: 0 }
       if (movement.amount >= 0) row.entradas += Number(movement.amount)
@@ -627,7 +832,7 @@ export default function FinanceiroPage() {
         running += row.entradas - row.saidas
         return { ...row, dia: row.date.slice(8, 10), saldo: running }
       })
-  }, [accountMovements, month])
+  }, [activeAccountMovements, month])
 
   const expensesByCategory = useMemo(() => {
     const grouped = new Map<string, number>()
@@ -641,17 +846,20 @@ export default function FinanceiroPage() {
   }, [transactions])
 
   const recentMovements = useMemo(() => {
-    const saleMovements = sales.slice(0, 8).map((sale) => ({
-      id: sale.id,
-      kind: "sale" as const,
-      date: sale.sale_date,
-      description: `Venda${sale.inventory?.catalog?.model ? ` · ${sale.inventory.catalog.model}` : ""}`,
-      category: "Venda",
-      amount: saleNetRevenue(sale),
-      status: reconciledSaleIds.has(sale.id) ? "reconciled" : "pending",
-    }))
+    const saleMovements = sales
+      .filter((sale) => !saleIdsWithSplitPayments.has(String(sale.id)))
+      .slice(0, 8)
+      .map((sale) => ({
+        id: sale.id,
+        kind: "sale" as const,
+        date: sale.sale_date,
+        description: `Venda${sale.inventory?.catalog?.model ? ` · ${sale.inventory.catalog.model}` : ""}`,
+        category: "Venda",
+        amount: saleNetRevenue(sale),
+        status: saleFinanceStatusBySaleId.get(String(sale.id)) || "pending" as DashboardMovementStatus,
+      }))
     const manual = transactions
-      .filter((t) => t.source_type !== "sale" && t.source_type !== "sale_payment")
+      .filter((t) => t.source_type !== "sale")
       .slice(0, 8)
       .map((t) => ({
         id: t.id,
@@ -660,12 +868,20 @@ export default function FinanceiroPage() {
         description: t.description || t.category,
         category: t.category,
         amount: t.type === "income" ? Number(t.amount) : -Number(t.amount),
-        status: t.status || "pending",
+        status: (t.status === "reconciled" ? "reconciled" : t.status === "cancelled" ? "cancelled" : "pending") as DashboardMovementStatus,
       }))
     return [...saleMovements, ...manual]
       .sort((a, b) => b.date.localeCompare(a.date))
       .slice(0, 8)
-  }, [reconciledSaleIds, sales, transactions])
+  }, [saleFinanceStatusBySaleId, saleIdsWithSplitPayments, sales, transactions])
+
+  const profitWithdrawalTimeline = useMemo(() => {
+    let running = 0
+    return ownerCapitalSnapshot.ownerProfitWithdrawalMovements.map((movement) => {
+      running += Number(movement.amount || 0)
+      return { ...movement, accumulated: roundCurrency(running) }
+    })
+  }, [ownerCapitalSnapshot])
 
   const defaultAccount = accountBalances.find((account) => account.id === selectedAccountId) || accountBalances[0]
 
@@ -879,8 +1095,186 @@ export default function FinanceiroPage() {
         <MetricCard title="Saldo em contas" value={formatBRL(metrics.accountTotal)} icon={Wallet} tone="navy" hint={`Fonte: extrato · ${accountBalances.length} conta(s)`} />
         <MetricCard title="Entradas conciliadas" value={formatBRL(metrics.cashInflows)} icon={ArrowUpRight} tone="green" hint={`Receita do mês: ${formatBRL(metrics.netRevenue)}`} />
         <MetricCard title="Saídas de caixa" value={formatBRL(metrics.cashOutflows)} icon={ArrowDownRight} tone="red" hint={`Estoque ${formatBRL(metrics.reconciledInventoryPurchases)} · retiradas ${formatBRL(metrics.reconciledOwnerWithdrawals)}`} />
-        <MetricCard title="Resultado líquido" value={formatBRL(metrics.netProfit)} icon={LineChart} tone={metrics.netProfit >= 0 ? "green" : "red"} hint="Lucro bruto menos despesas operacionais" />
+        <MetricCard title="Resultado líquido" value={formatBRL(metrics.netProfit)} icon={LineChart} tone={metrics.netProfit >= 0 ? "green" : "red"} hint="DRE gerencial: lucro bruto - despesas pagas" />
       </div>
+
+      {loading ? (
+        <ProfitAvailabilitySkeleton />
+      ) : (
+        <Card className="overflow-hidden border-gray-100 bg-white/95 shadow-sm">
+          <div className="grid lg:grid-cols-[1.12fr_0.88fr]">
+            <div className="border-b border-gray-100/80 p-5 lg:border-b-0 lg:border-r lg:p-6">
+              <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-start">
+                <div className="flex min-w-0 items-start gap-3">
+                  <div className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600 ring-1 ring-emerald-100 sm:flex">
+                    <TrendingUp className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="font-display font-bold text-navy-900 font-syne">Movimento de lucro</h3>
+                    <p className="mt-1 text-sm text-gray-500">Acompanhe o lucro gerado, retiradas e compromissos futuros.</p>
+                  </div>
+                </div>
+                <div className="rounded-xl bg-rose-50/40 px-3 py-1.5 text-left ring-1 ring-rose-100/70 sm:text-right">
+                  <span className="block text-[9px] font-semibold uppercase tracking-[0.08em] text-rose-600/70">Total retirado</span>
+                  <span className="mt-0.5 block whitespace-nowrap text-[13px] font-bold tabular-nums text-rose-600">-{formatBRL(metrics.ownerProfitWithdrawals)}</span>
+                </div>
+              </div>
+
+              <ProfitMovementTimeline
+                netProfit={metrics.netProfit}
+                withdrawals={profitWithdrawalTimeline}
+                futureRisk={profitFutureRisk}
+                currentMonthLabel={formatMonthLabel(month).toUpperCase()}
+              />
+              {profitWithdrawalTimeline.length > 5 && (
+                <p className="mt-3 rounded-xl bg-gray-50 px-3 py-2 text-xs text-gray-500">Há mais retiradas no período. Veja Entradas e Saídas para a lista completa.</p>
+              )}
+
+              {ownerCapitalSnapshot.ownerCapitalReturnWithoutTrackedContribution.length > 0 ? (
+                <div className="mt-4 flex items-start gap-2 rounded-xl border border-amber-100/70 bg-amber-50/40 px-3 py-2 text-[11px] leading-relaxed text-amber-700/90">
+                  <Info className="mt-0.5 h-3 w-3 shrink-0" />
+                  <p>
+                    {ownerCapitalSnapshot.ownerCapitalReturnWithoutTrackedContribution.length} reembolso{ownerCapitalSnapshot.ownerCapitalReturnWithoutTrackedContribution.length === 1 ? "" : "s"} de aporte excederam os aportes rastreados e ficaram fora das retiradas de lucro.
+                  </p>
+                </div>
+              ) : metrics.ownerCapitalReturns > 0 ? (
+                <div className="mt-4 flex items-start gap-2 rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-2 text-[11px] leading-relaxed text-gray-500">
+                  <Info className="mt-0.5 h-3 w-3 shrink-0" />
+                  <p>Reembolsos de aporte no período: {formatBRL(metrics.ownerCapitalReturns)}. Fora das retiradas de lucro.</p>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="bg-gradient-to-br from-white via-emerald-50/15 to-white p-5 lg:p-6 animate-fade-in">
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div className="flex min-w-0 items-start gap-3">
+                  <div className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600 ring-1 ring-emerald-100 sm:flex">
+                    <Wallet className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="font-display font-bold text-navy-900 font-syne">Lucro disponível</h3>
+                    <p className="mt-1 text-sm text-gray-500">Decisão de retirada considerando compromissos M+1.</p>
+                  </div>
+                </div>
+                <Badge
+                  className="shrink-0 whitespace-nowrap px-3 py-1 text-[11px]"
+                  variant={profitDecision.status === "exceeded" ? "red" : profitDecision.status === "attention" ? "yellow" : "green"}
+                >
+                  <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-current align-middle" />
+                  {profitDecision.status === "exceeded" ? "Excedido" : profitDecision.status === "attention" ? "Atenção" : "Disponível"}
+                </Badge>
+              </div>
+
+              {/* Block 1: white card — Disponível hoje */}
+              <div className="rounded-3xl border border-gray-100/80 bg-white/95 p-3.5 sm:p-4">
+                <ProfitSummaryLine label="Resultado líquido" value={metrics.netProfit} />
+                <ProfitSummaryLine label="Retiradas de lucro" value={-metrics.ownerProfitWithdrawals} tone="red" />
+                <div className="my-1 h-px bg-gradient-to-r from-transparent via-gray-200 to-transparent" />
+                <ProfitSummaryLine label="Disponível hoje" value={metrics.profitAvailable} highlight tone={metrics.profitAvailable >= 0 ? "green" : "red"} />
+              </div>
+
+              {/* Block 2: amber card — Compromissos M+1 */}
+              {profitDecision.hasCommitments && (
+                <div className="relative mt-3 overflow-hidden rounded-3xl border border-amber-200/60 bg-gradient-to-br from-amber-50/70 via-amber-50/40 to-white p-3.5 sm:p-4">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-amber-700">Compromissos · {profitDecision.nextMonthLabel} (M+1)</span>
+                    <span className="relative flex h-6 w-6 items-center justify-center">
+                      <span aria-hidden className="absolute inset-0 rounded-full bg-amber-400/40 animate-ping" />
+                      <span className="relative inline-flex h-6 w-6 items-center justify-center rounded-full bg-amber-500 text-white shadow-sm">
+                        <AlertTriangle className="h-3 w-3" />
+                      </span>
+                    </span>
+                  </div>
+                  <ProfitSummaryLine label="Total compromissos M+1" value={-profitDecision.committed} tone="red" />
+                  <ProfitSummaryLine
+                    label="Disponível após compromissos"
+                    value={profitDecision.availableAfter}
+                    highlight
+                    tone={profitDecision.availableAfter >= 0 ? "green" : "red"}
+                  />
+                  {profitDecision.projectedCashAfter !== null && (
+                    <div className="mt-1.5 grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-3 px-1">
+                      <span className="min-w-0 truncate text-[11px] text-gray-500">Caixa projetado M+1 (referência)</span>
+                      <span className="whitespace-nowrap text-right text-[11px] font-semibold tabular-nums text-gray-600">{formatBRL(profitDecision.projectedCashAfter)}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Block 3: emerald margem segura */}
+              <div className={cn(
+                "mt-3 flex items-start gap-3 rounded-2xl border p-3",
+                profitDecision.status === "exceeded"
+                  ? "border-rose-100 bg-rose-50/40"
+                  : profitDecision.status === "attention"
+                  ? "border-amber-100 bg-amber-50/40"
+                  : "border-emerald-100 bg-emerald-50/40"
+              )}>
+                <div className={cn(
+                  "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full",
+                  profitDecision.status === "exceeded"
+                    ? "bg-rose-100 text-rose-600"
+                    : profitDecision.status === "attention"
+                    ? "bg-amber-100 text-amber-700"
+                    : "bg-emerald-100 text-emerald-700"
+                )}>
+                  <Shield className="h-3.5 w-3.5" />
+                </div>
+                <p className={cn(
+                  "text-[12px] leading-relaxed",
+                  profitDecision.status === "exceeded"
+                    ? "text-rose-900"
+                    : profitDecision.status === "attention"
+                    ? "text-amber-900"
+                    : "text-emerald-900"
+                )}>
+                  {profitDecision.hasCommitments ? (
+                    profitDecision.availableAfter < 0 ? (
+                      <>
+                        <strong>Atenção:</strong> compromissos de {profitDecision.nextMonthLabel} excedem o lucro disponível hoje em <span className="font-semibold tabular-nums">{formatBRL(Math.abs(profitDecision.availableAfter))}</span>. Retirar agora pode quebrar o caixa.
+                      </>
+                    ) : (
+                      <>
+                        <strong>Margem segura estimada: <span className="tabular-nums">{formatBRL(profitDecision.availableAfter)}</span></strong> após compromissos de {profitDecision.nextMonthLabel}. Você tem <span className="font-semibold tabular-nums">{formatBRL(profitDecision.availableToday)}</span> disponível hoje, mas <span className="font-semibold tabular-nums text-amber-700">{formatBRL(profitDecision.committed)}</span> já está reservado para contas futuras.
+                      </>
+                    )
+                  ) : metrics.profitAvailable > 0 ? (
+                    <>Sem compromissos M+1 mapeados. <strong>Margem segura: <span className="tabular-nums">{formatBRL(metrics.profitAvailable)}</span></strong>.</>
+                  ) : (
+                    <>Sem lucro disponível para retirada neste período.</>
+                  )}
+                </p>
+              </div>
+
+              {/* Progress bars */}
+              <div className="mt-4 space-y-3">
+                <div>
+                  <div className="mb-1.5 flex items-center justify-between text-xs font-semibold">
+                    <span className="flex items-center gap-1 text-gray-500">Lucro retirado <Info className="h-3 w-3 text-gray-300" /></span>
+                    <span className={cn(
+                      "tabular-nums",
+                      metrics.profitAvailabilityStatus === "exceeded" ? "text-rose-600" :
+                      metrics.profitAvailabilityStatus === "attention" ? "text-amber-600" :
+                      "text-emerald-600"
+                    )}>{metrics.profitWithdrawalRate}%</span>
+                  </div>
+                  <ProfitWithdrawalRateBar rate={metrics.profitWithdrawalRate} status={metrics.profitAvailabilityStatus} />
+                </div>
+
+                {profitDecision.hasCommitments && (
+                  <div>
+                    <div className="mb-1.5 flex items-center justify-between text-xs font-semibold">
+                      <span className="flex items-center gap-1 text-gray-500">Comprometido em M+1 <Info className="h-3 w-3 text-gray-300" /></span>
+                      <span className="tabular-nums text-amber-700">{Math.min(999, profitDecision.impactRate)}%</span>
+                    </div>
+                    <ProfitWithdrawalRateBar rate={profitDecision.impactRate} status={profitDecision.status === "exceeded" ? "exceeded" : "attention"} />
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <Card className="overflow-hidden">
         <div className="grid gap-4 border-b border-gray-100 p-5 lg:grid-cols-[1fr_auto] lg:items-start">
@@ -903,23 +1297,25 @@ export default function FinanceiroPage() {
             <ProjectionCard title="30 dias" value={cashProjection.balance30} hint={`${formatBRL(cashProjection.income30)} entra · ${formatBRL(cashProjection.expense30)} sai`} />
             <ProjectionCard title="60 dias" value={cashProjection.balance60} hint={`Menor saldo: ${formatBRL(cashProjection.minBalance)}`} />
           </div>
-          <div className="h-48 rounded-2xl border border-gray-100 bg-surface p-3">
+          <div className="relative h-48 min-w-0 overflow-hidden rounded-2xl border border-gray-100 bg-surface p-3">
             {cashProjection.chart.length > 1 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={cashProjection.chart} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="futureCashColor" x1="0" x2="0" y1="0" y2="1">
-                      <stop offset="5%" stopColor="#2563eb" stopOpacity={0.28} />
-                      <stop offset="95%" stopColor="#2563eb" stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid stroke="#e8eef7" vertical={false} />
-                  <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} minTickGap={18} />
-                  <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11 }} tickFormatter={(value) => compactCurrency(Number(value))} />
-                  <Tooltip formatter={(value) => formatBRL(Number(value || 0))} labelFormatter={(label) => `Saldo previsto em ${label}`} />
-                  <Area type="monotone" dataKey="saldo" stroke="#2563eb" strokeWidth={2} fill="url(#futureCashColor)" />
-                </AreaChart>
-              </ResponsiveContainer>
+              <LazyChart>
+                <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={50}>
+                  <AreaChart data={cashProjection.chart} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="futureCashColor" x1="0" x2="0" y1="0" y2="1">
+                        <stop offset="5%" stopColor="#2563eb" stopOpacity={0.28} />
+                        <stop offset="95%" stopColor="#2563eb" stopOpacity={0.02} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid stroke="#e8eef7" vertical={false} />
+                    <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} minTickGap={18} />
+                    <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11 }} tickFormatter={(value) => compactCurrency(Number(value))} />
+                    <Tooltip formatter={(value) => formatBRL(Number(value || 0))} labelFormatter={(label) => `Saldo previsto em ${label}`} />
+                    <Area type="monotone" dataKey="saldo" stroke="#2563eb" strokeWidth={2} fill="url(#futureCashColor)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </LazyChart>
             ) : (
               <div className="flex h-full items-center justify-center text-center text-sm text-gray-400">
                 Sem entradas ou saídas futuras lançadas para os próximos 60 dias.
@@ -978,12 +1374,12 @@ export default function FinanceiroPage() {
               <p className="mt-1 text-xs text-gray-500">{metrics.breakEvenProgress}% do ponto de equilíbrio</p>
             </div>
             <div className="min-w-0 rounded-xl border border-gray-100 bg-surface p-4">
-              <p className="text-xs font-semibold uppercase text-gray-400">{metrics.breakEvenGap > 0 ? "Falta vender" : "Meta coberta"}</p>
+              <p className="text-xs font-semibold uppercase text-gray-400">{metrics.breakEvenGap > 0 ? "Falta vender" : "Folga sobre equilíbrio"}</p>
               <p className={cn("mt-2 min-w-0 text-[1.35rem] font-bold leading-tight tabular-nums 2xl:text-xl", metrics.breakEvenGap > 0 ? "text-navy-900" : "text-emerald-600")}>
                 {metrics.breakEvenGap > 0 ? formatBRL(metrics.breakEvenGap) : formatBRL(Math.max(0, metrics.profitCoverage))}
               </p>
               <p className="mt-1 text-xs text-gray-500">
-                {metrics.salesNeeded > 0 ? `Aprox. ${metrics.salesNeeded} venda(s) no ticket atual` : "Lucro bruto acima das despesas"}
+                {metrics.salesNeeded > 0 ? `Aprox. ${metrics.salesNeeded} venda(s) no ticket atual` : "Lucro bruto acima das despesas fixas"}
               </p>
             </div>
             <div className="min-w-0 rounded-xl border border-gray-100 bg-surface p-4">
@@ -1014,7 +1410,7 @@ export default function FinanceiroPage() {
                 <p className="text-xs text-gray-500">
                   {metrics.profitGap > 0
                     ? `Ainda faltam ${formatBRL(metrics.profitGap)} de lucro para cobrir as despesas.`
-                    : `O ponto de equilíbrio já foi coberto em ${formatBRL(Math.max(0, metrics.profitCoverage))}. Priorize itens com melhor lucro por unidade.`}
+                    : `Há ${formatBRL(Math.max(0, metrics.profitCoverage))} de lucro bruto acima das despesas fixas. Resultado líquido e retirada continuam no card de lucro disponível.`}
                 </p>
               </div>
             </div>
@@ -1044,23 +1440,25 @@ export default function FinanceiroPage() {
               <p className="rounded-xl bg-white p-3 text-sm text-gray-500">Cadastre preço sugerido e custo nos produtos em estoque para o sistema recomendar o que vender primeiro.</p>
             )}
           </div>
-          <div className="mt-5 h-56">
+          <div className="relative mt-5 h-56 min-w-0">
             {flowChart.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={flowChart} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="saldoColor" x1="0" x2="0" y1="0" y2="1">
-                      <stop offset="5%" stopColor="#2563eb" stopOpacity={0.32} />
-                      <stop offset="95%" stopColor="#2563eb" stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid stroke="#eef2f7" vertical={false} />
-                  <XAxis dataKey="dia" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
-                  <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11 }} tickFormatter={(value) => compactCurrency(Number(value))} />
-                  <Tooltip formatter={(value) => formatBRL(Number(value || 0))} labelFormatter={(label) => `Saldo do extrato no dia ${label}`} />
-                  <Area type="monotone" dataKey="saldo" stroke="#2563eb" strokeWidth={2} fill="url(#saldoColor)" />
-                </AreaChart>
-              </ResponsiveContainer>
+              <LazyChart>
+                <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={50}>
+                  <AreaChart data={flowChart} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="saldoColor" x1="0" x2="0" y1="0" y2="1">
+                        <stop offset="5%" stopColor="#2563eb" stopOpacity={0.32} />
+                        <stop offset="95%" stopColor="#2563eb" stopOpacity={0.02} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid stroke="#eef2f7" vertical={false} />
+                    <XAxis dataKey="dia" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
+                    <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11 }} tickFormatter={(value) => compactCurrency(Number(value))} />
+                    <Tooltip formatter={(value) => formatBRL(Number(value || 0))} labelFormatter={(label) => `Saldo do extrato no dia ${label}`} />
+                    <Area type="monotone" dataKey="saldo" stroke="#2563eb" strokeWidth={2} fill="url(#saldoColor)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </LazyChart>
             ) : (
               <EmptyState icon={LineChart} title="Sem movimentos no extrato" text="Lance ou concilie movimentos no extrato para acompanhar a curva real do caixa." />
             )}
@@ -1151,19 +1549,21 @@ export default function FinanceiroPage() {
             </div>
             <Link href="/financeiro/gastos" className="text-sm font-semibold text-royal-500">Ver gastos</Link>
           </div>
-          <div className="h-64">
+          <div className="relative h-64 min-w-0">
             {expensesByCategory.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={expensesByCategory} layout="vertical" margin={{ left: 8, right: 18, top: 4, bottom: 4 }}>
-                  <CartesianGrid stroke="#eef2f7" horizontal={false} />
-                  <XAxis type="number" hide />
-                  <YAxis type="category" dataKey="name" width={120} tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
-                  <Tooltip formatter={(value) => formatBRL(Number(value || 0))} />
-                  <Bar dataKey="value" radius={[0, 8, 8, 0]}>
-                    {expensesByCategory.map((_, index) => <Cell key={index} fill={expenseColors[index % expenseColors.length]} />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+              <LazyChart>
+                <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={50}>
+                  <BarChart data={expensesByCategory} layout="vertical" margin={{ left: 8, right: 18, top: 4, bottom: 4 }}>
+                    <CartesianGrid stroke="#eef2f7" horizontal={false} />
+                    <XAxis type="number" hide />
+                    <YAxis type="category" dataKey="name" width={120} tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
+                    <Tooltip formatter={(value) => formatBRL(Number(value || 0))} />
+                    <Bar dataKey="value" radius={[0, 8, 8, 0]}>
+                      {expensesByCategory.map((_, index) => <Cell key={index} fill={expenseColors[index % expenseColors.length]} />)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </LazyChart>
             ) : (
               <EmptyState icon={ReceiptText} title="Sem despesas" text="As despesas registradas aparecerão agrupadas aqui." />
             )}
@@ -1211,7 +1611,7 @@ export default function FinanceiroPage() {
               </div>
               <p className={cn("font-bold sm:text-right", movement.amount >= 0 ? "text-emerald-600" : "text-red-600")}>{movement.amount >= 0 ? "+" : "-"}{formatBRL(Math.abs(movement.amount))}</p>
               <div className="sm:text-center">
-                <Badge variant={movement.status === "reconciled" ? "green" : "yellow"}>{movement.status === "reconciled" ? "Conciliado" : "Pendente"}</Badge>
+                <Badge variant={movementStatusVariant(movement.status)}>{movementStatusLabel(movement.status)}</Badge>
               </div>
               <div className="sm:text-right">
                 {movement.status === "reconciled" ? (
@@ -1231,6 +1631,8 @@ export default function FinanceiroPage() {
                       </button>
                     )}
                   </div>
+                ) : movement.status === "cancelled" || movement.status === "reversed" || movement.status === "reversal" ? (
+                  <span className="text-xs font-semibold text-gray-400">Sem ação</span>
                 ) : (
                   <Button size="sm" variant="outline" onClick={() => reconcileMovement(movement)} isLoading={reconcilingId === movement.id}>
                     Conciliar
@@ -1289,6 +1691,267 @@ function DreLine({ label, value, strong, highlight, muted }: { label: string; va
         {value < 0 ? "-" : ""}{formatBRL(Math.abs(value))}
       </span>
     </div>
+  )
+}
+
+function ProfitSummaryLine({ label, value, highlight, tone }: { label: string; value: number; highlight?: boolean; tone?: "green" | "red" | "navy" }) {
+  const valueTone = tone === "green" ? "text-emerald-700" : tone === "red" ? "text-red-600" : "text-navy-900"
+  const highlightFrame = tone === "red"
+    ? "bg-gradient-to-br from-rose-50/80 via-white to-white ring-rose-100"
+    : "bg-gradient-to-br from-emerald-50/70 via-white to-white ring-emerald-100"
+  return (
+    <div className={cn(
+      "grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-3 py-2.5",
+      highlight && cn("mt-1 rounded-2xl px-3 py-3 ring-1", highlightFrame)
+    )}>
+      <span className={cn(
+        "min-w-0 truncate text-sm",
+        highlight ? "font-semibold text-navy-700" : "text-gray-500"
+      )}>{label}</span>
+      <span className={cn(
+        "whitespace-nowrap text-right font-bold tabular-nums",
+        highlight ? "text-base sm:text-lg" : "text-sm",
+        valueTone
+      )}>
+        {value < 0 ? "-" : ""}{formatBRL(Math.abs(value))}
+      </span>
+    </div>
+  )
+}
+
+type ProfitWithdrawalRow = {
+  movementId: string
+  date: string
+  description: string
+  amount: number
+  accumulated: number
+}
+
+type ProfitFutureRisk = {
+  items: Array<{ id: string; originalDate: string | null; date: string; description: string; amount: number; isCardInvoice: boolean }>
+  futureTotal: number
+  projectedCashAfter: number | null
+  nextMonthKey: string
+  nextMonthLabel: string
+} | null
+
+function ProfitMovementTimeline({ netProfit, withdrawals, futureRisk, currentMonthLabel }: { netProfit: number; withdrawals: ProfitWithdrawalRow[]; futureRisk: ProfitFutureRisk; currentMonthLabel: string }) {
+  const withdrawalsToShow = withdrawals.slice(0, 5)
+  const futureItems = futureRisk?.items?.slice(0, 3) ?? []
+  const hasNetProfit = netProfit > 0
+  const hasAny = hasNetProfit || withdrawalsToShow.length > 0 || futureItems.length > 0
+
+  if (!hasAny) {
+    return (
+      <div className="mt-6 rounded-2xl border border-dashed border-gray-200 bg-gray-50/70 p-4 text-sm text-gray-500">
+        Nenhuma movimentação de lucro ou compromisso futuro relevante neste período.
+      </div>
+    )
+  }
+
+  const lastWithdrawalIndex = withdrawalsToShow.length - 1
+  const showCurrentSection = hasNetProfit || withdrawalsToShow.length > 0
+  const showFutureSection = futureItems.length > 0
+
+  return (
+    <div className="relative mt-5">
+      <span
+        aria-hidden
+        className="pointer-events-none absolute left-[76px] top-12 bottom-6 hidden w-px bg-gradient-to-b from-transparent via-gray-200 to-transparent sm:block"
+      />
+      <div className="space-y-0.5">
+        {showCurrentSection && (
+          <TimelineSectionLabel tone="emerald">PERÍODO ATUAL · {currentMonthLabel}</TimelineSectionLabel>
+        )}
+        {hasNetProfit && (
+          <TimelineEvent
+            icon={TrendingUp}
+            tone="green"
+            label="Lucro gerado no período"
+            sub="DRE gerencial · resultado líquido"
+            value={`+${formatBRL(netProfit)}`}
+          />
+        )}
+        {withdrawalsToShow.map((movement, index) => {
+          const parts = timelineDateParts(movement.date)
+          return (
+            <TimelineEvent
+              key={movement.movementId}
+              icon={ArrowDownRight}
+              tone="red"
+              pulse={index === lastWithdrawalIndex}
+              dateDay={parts.day}
+              dateMonth={parts.monthAbbr}
+              label={movement.description}
+              sub={`Acumulado: ${formatBRL(movement.accumulated)}`}
+              value={`-${formatBRL(movement.amount)}`}
+            />
+          )
+        })}
+        {showFutureSection && (
+          <TimelineSectionLabel tone="amber" badge="ALERTA">
+            COMPROMISSOS FUTUROS · {futureRisk?.nextMonthLabel || ""} (M+1)
+          </TimelineSectionLabel>
+        )}
+        {futureItems.map((item) => {
+          const parts = timelineDateParts(item.originalDate || item.date)
+          return (
+            <TimelineEvent
+              key={`future-${item.id}`}
+              icon={AlertTriangle}
+              tone="amber"
+              pulse
+              badge="M+1"
+              dateDay={parts.day}
+              dateMonth={parts.monthAbbr}
+              label={item.description}
+              sub={`Conta a pagar prevista${item.isCardInvoice ? " · cartão" : ""}`}
+              value={`-${formatBRL(item.amount)}`}
+            />
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function TimelineSectionLabel({ tone, badge, children }: { tone: "emerald" | "amber"; badge?: string; children: React.ReactNode }) {
+  return (
+    <div className="mb-1 mt-5 flex items-center justify-between gap-3 px-2 sm:pl-[108px]">
+      <span className={cn(
+        "text-[11px] font-bold uppercase tracking-[0.08em]",
+        tone === "amber" ? "text-amber-700" : "text-emerald-700"
+      )}>{children}</span>
+      {badge && (
+        <span className="shrink-0 rounded-full border border-amber-200 bg-amber-100/70 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700">{badge}</span>
+      )}
+    </div>
+  )
+}
+
+function TimelineEvent({ icon: Icon, tone, label, sub, value, pulse, badge, dateDay, dateMonth }: {
+  icon: React.ComponentType<{ className?: string }>;
+  tone: "green" | "red" | "amber";
+  label: string;
+  sub: string;
+  value: string;
+  pulse?: boolean;
+  badge?: string;
+  dateDay?: string;
+  dateMonth?: string;
+}) {
+  const iconWrap =
+    tone === "green" ? "bg-emerald-50 ring-emerald-100 text-emerald-600" :
+    tone === "amber" ? "bg-amber-100 ring-amber-200 text-amber-700" :
+    "bg-rose-50 ring-rose-100 text-rose-600"
+  const pingColor =
+    tone === "green" ? "bg-emerald-300/40" :
+    tone === "amber" ? "bg-amber-400/45" :
+    "bg-rose-400/50"
+  const valueColor =
+    tone === "green" ? "text-emerald-600" :
+    tone === "amber" ? "text-amber-700" :
+    "text-rose-600"
+  const badgeClass =
+    tone === "amber" ? "border-amber-200 bg-amber-100/80 text-amber-700" :
+    "border-rose-200 bg-rose-100/80 text-rose-700"
+  return (
+    <div className="group grid grid-cols-[44px_40px_minmax(0,1fr)_auto] items-start gap-3 rounded-xl px-2 py-2.5 transition-[background-color,transform] duration-200 hover:bg-gray-50/80 hover:translate-x-[1px]">
+      <div className="pt-1 text-right tabular-nums">
+        {dateDay ? (
+          <>
+            <div className="text-sm font-bold text-gray-700 leading-none">{dateDay}</div>
+            <div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400">{dateMonth}</div>
+          </>
+        ) : (
+          <div className="text-sm font-bold text-gray-300 leading-none">—</div>
+        )}
+      </div>
+      <div className="relative flex h-full justify-center pt-0.5">
+        <span className="relative flex h-7 w-7 items-center justify-center">
+          {pulse && <span aria-hidden className={cn("absolute inset-0 rounded-full animate-ping", pingColor)} />}
+          <span className={cn("relative inline-flex h-7 w-7 items-center justify-center rounded-full ring-4 ring-white transition-transform duration-200 group-hover:scale-105", iconWrap)}>
+            <Icon className="h-3.5 w-3.5" />
+          </span>
+        </span>
+      </div>
+      <div className="min-w-0 pt-0.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <p title={label} className="min-w-0 truncate text-sm font-semibold text-navy-900 transition-colors duration-200 group-hover:text-navy-950">{label}</p>
+          {badge && (
+            <span className={cn("shrink-0 rounded-full border px-1.5 py-px text-[9px] font-bold uppercase tracking-wide", badgeClass)}>{badge}</span>
+          )}
+        </div>
+        <p className="mt-0.5 text-xs text-gray-500"><span className="tabular-nums">{sub}</span></p>
+      </div>
+      <p className={cn("self-center whitespace-nowrap text-sm font-bold tabular-nums transition-transform duration-200 group-hover:scale-[1.02]", valueColor)}>{value}</p>
+    </div>
+  )
+}
+
+function ProfitWithdrawalRateBar({ rate, status }: { rate: number; status: "exceeded" | "attention" | "available" }) {
+  const [animatedRate, setAnimatedRate] = useState(0)
+  useEffect(() => {
+    const target = Math.min(100, Math.max(0, rate))
+    const id = requestAnimationFrame(() => setAnimatedRate(target))
+    return () => cancelAnimationFrame(id)
+  }, [rate])
+  const barColor = status === "exceeded" ? "bg-rose-500" : status === "attention" ? "bg-amber-500" : "bg-emerald-500"
+  return (
+    <div className="relative h-1.5 overflow-hidden rounded-full bg-white/90 ring-1 ring-gray-100">
+      <div
+        className={cn("relative h-full rounded-full transition-[width] duration-[1100ms] ease-out", barColor)}
+        style={{ width: `${animatedRate}%` }}
+      >
+        <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 w-10 bg-gradient-to-r from-transparent via-white/55 to-transparent animate-bar-shine" />
+      </div>
+    </div>
+  )
+}
+
+function ProfitAvailabilitySkeleton() {
+  return (
+    <Card className="overflow-hidden border-gray-100 bg-white/95 shadow-sm">
+      <div className="grid animate-pulse lg:grid-cols-[1.12fr_0.88fr]">
+        <div className="border-b border-gray-100/80 p-5 lg:border-b-0 lg:border-r lg:p-6">
+          <div className="grid gap-4 sm:grid-cols-[1fr_132px]">
+            <div>
+              <div className="h-5 w-44 rounded-full bg-gray-100" />
+              <div className="mt-3 h-4 w-72 max-w-full rounded-full bg-gray-100" />
+            </div>
+            <div className="h-14 rounded-full bg-gray-100" />
+          </div>
+          <div className="mt-7 space-y-5">
+            {[0, 1, 2].map((item) => (
+              <div key={item} className="grid gap-3 sm:grid-cols-[28px_minmax(0,1fr)_96px] sm:items-center">
+                <div className="hidden h-3 w-3 rounded-full bg-gray-100 sm:block" />
+                <div>
+                  <div className="h-4 w-64 max-w-full rounded-full bg-gray-100" />
+                  <div className="mt-2 h-3 w-32 rounded-full bg-gray-100" />
+                </div>
+                <div className="h-4 w-24 rounded-full bg-gray-100" />
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="p-5 lg:p-6">
+          <div className="mb-5 flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="h-5 w-40 rounded-full bg-gray-100" />
+              <div className="mt-3 h-4 w-48 rounded-full bg-gray-100" />
+            </div>
+            <div className="h-7 w-24 rounded-full bg-gray-100" />
+          </div>
+          <div className="rounded-3xl bg-gray-50 p-4">
+            <div className="h-5 rounded-full bg-gray-100" />
+            <div className="mt-5 h-5 rounded-full bg-gray-100" />
+            <div className="mt-6 h-12 rounded-2xl bg-gray-100" />
+          </div>
+          <div className="mt-5 h-2 rounded-full bg-gray-100" />
+          <div className="mt-3 h-3 w-56 max-w-full rounded-full bg-gray-100" />
+        </div>
+      </div>
+    </Card>
   )
 }
 
