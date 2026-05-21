@@ -120,6 +120,11 @@ export async function GET() {
       grade: row.grade,
       imei: row.imei,
       serial_number: row.serial_number,
+      purchase_price: row.purchase_price != null ? Number(row.purchase_price) : null,
+      catalog_id: (row.catalog_id as string | null) ?? null,
+      category: (row.category as string | null) ?? null,
+      notes: (row.notes as string | null) ?? null,
+      condition_notes: (row.condition_notes as string | null) ?? null,
     }
 
     const commercialStatus = getInventoryCommercialStatus(operationalItem)
