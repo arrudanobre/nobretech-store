@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, type Key as ReactKey } from "react"
 import { supabase } from "@/lib/supabase"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -355,7 +355,7 @@ function MonthRhythmBlock({ data, mode, onChangeMode }: { data: MonthRhythmData 
                 {status === "above" ? "Acima do mês passado" : status === "below" ? "Atenção · abaixo do mês passado" : "Empatando com o mês passado"}
               </p>
               <p className="text-[11px] leading-tight text-gray-500">
-                Você está {Math.abs(ratePct)}% {status === "above" ? "à frente" : status === "below" ? "atrás" : "no mesmo ritmo"} no mesmo dia do mês.
+                Você está {Math.abs(ratePct).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}% {status === "above" ? "acima" : status === "below" ? "abaixo" : "no mesmo nível"} de {previousMonthShort} no mesmo dia do mês.
               </p>
             </div>
           </div>
@@ -425,7 +425,7 @@ function MonthRhythmBlock({ data, mode, onChangeMode }: { data: MonthRhythmData 
                   <stop offset="100%" stopColor="#10b981" stopOpacity={0.0} />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" strokeOpacity={0.45} />
               <XAxis dataKey="day" tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
               <YAxis
                 tick={{ fontSize: 11, fill: "#94a3b8" }}
@@ -473,14 +473,15 @@ function MonthRhythmBlock({ data, mode, onChangeMode }: { data: MonthRhythmData 
               <ReferenceLine
                 y={previousTotal}
                 stroke="#f59e0b"
-                strokeDasharray="6 4"
-                strokeOpacity={0.8}
+                strokeDasharray="4 6"
+                strokeOpacity={0.35}
                 label={{
                   value: `Fechamento ${previousMonthShort} (${formatBRL(previousTotal)})`,
                   position: "insideTopLeft",
-                  fill: "#b45309",
+                  fill: "#d97706",
                   fontSize: 10,
-                  fontWeight: 600,
+                  fontWeight: 500,
+                  fillOpacity: 0.75,
                   offset: 10,
                 }}
               />
@@ -511,7 +512,21 @@ function MonthRhythmBlock({ data, mode, onChangeMode }: { data: MonthRhythmData 
                 dataKey="current"
                 stroke="#10b981"
                 strokeWidth={2.6}
-                dot={false}
+                dot={(dotProps: { cx?: number; cy?: number; payload?: { day?: number }; key?: ReactKey | null }) => {
+                  const { cx, cy, payload, key } = dotProps
+                  if (!payload || cx == null || cy == null || payload.day !== data.currentDay) {
+                    return <g key={key ?? undefined} />
+                  }
+                  return (
+                    <g key={key ?? undefined}>
+                      <circle cx={cx} cy={cy} r={6} fill="#10b981" fillOpacity={0.35}>
+                        <animate attributeName="r" values="6;14;6" dur="1.8s" repeatCount="indefinite" />
+                        <animate attributeName="opacity" values="0.45;0;0.45" dur="1.8s" repeatCount="indefinite" />
+                      </circle>
+                      <circle cx={cx} cy={cy} r={4.5} fill="#059669" stroke="#ffffff" strokeWidth={2.5} />
+                    </g>
+                  )
+                }}
                 activeDot={{ r: 5, fill: "#059669", stroke: "#a7f3d0", strokeWidth: 3 }}
                 isAnimationActive
                 animationDuration={900}
@@ -535,7 +550,7 @@ function MonthRhythmBlock({ data, mode, onChangeMode }: { data: MonthRhythmData 
         </div>
 
         {/* Insights column */}
-        <div className="grid grid-cols-1 gap-2.5">
+        <div className="grid grid-cols-1 gap-2.5 lg:h-[280px] lg:grid-rows-3">
           <InsightCard
             icon={TrendingUp}
             tone={status === "above" ? "emerald" : status === "below" ? "amber" : "slate"}
