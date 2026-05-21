@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, type Key as ReactKey } from "react"
+import { useEffect, useState, type Key as ReactKey, type ReactNode } from "react"
 import { supabase } from "@/lib/supabase"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -69,6 +69,35 @@ const CACHE_KEY = "dashboard_data_v6"
 const CACHE_TTL = 3 * 60 * 1000 // 3 minutos
 
 type DashboardPeriodPreset = "current_month" | "previous_month" | "last_30_days" | "custom"
+
+function ChartSkeleton() {
+  return (
+    <div className="flex h-full min-h-0 w-full animate-pulse items-end gap-2 rounded-2xl bg-slate-50/80 p-4">
+      <div className="h-[24%] flex-1 rounded-t-xl bg-slate-200/70" />
+      <div className="h-[44%] flex-1 rounded-t-xl bg-slate-200/70" />
+      <div className="h-[62%] flex-1 rounded-t-xl bg-slate-200/70" />
+      <div className="h-[38%] flex-1 rounded-t-xl bg-slate-200/70" />
+      <div className="h-[72%] flex-1 rounded-t-xl bg-slate-200/70" />
+      <div className="h-[52%] flex-1 rounded-t-xl bg-slate-200/70" />
+      <div className="h-[66%] flex-1 rounded-t-xl bg-slate-200/70" />
+    </div>
+  )
+}
+
+function LazyChart({ children, className, fallback }: { children: ReactNode; className: string; fallback?: ReactNode }) {
+  const [ready, setReady] = useState(false)
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setReady(true))
+    return () => cancelAnimationFrame(frame)
+  }, [])
+
+  return (
+    <div className={className}>
+      {ready ? children : fallback ?? <ChartSkeleton />}
+    </div>
+  )
+}
 
 const DASHBOARD_PERIOD_OPTIONS: Array<{ label: string; value: DashboardPeriodPreset }> = [
   { label: "Este mês", value: "current_month" },
@@ -416,7 +445,7 @@ function MonthRhythmBlock({ data, mode, onChangeMode }: { data: MonthRhythmData 
 
       {/* Chart + insights */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_280px]">
-        <div className="relative h-[280px] min-w-0 rounded-2xl border border-slate-100 bg-white p-2">
+        <LazyChart className="relative h-[280px] min-w-0 rounded-2xl border border-slate-100 bg-white p-2">
           <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={50}>
             <LineChart data={lineData} margin={{ top: 16, right: 24, left: 0, bottom: 0 }}>
               <defs>
@@ -547,7 +576,7 @@ function MonthRhythmBlock({ data, mode, onChangeMode }: { data: MonthRhythmData 
               <span className="h-1.5 w-3 rounded-full bg-amber-500" style={{ backgroundImage: "repeating-linear-gradient(90deg, #f59e0b 0 4px, transparent 4px 7px)" }} /> Fechamento {previousMonthShort}
             </span>
           </div>
-        </div>
+        </LazyChart>
 
         {/* Insights column */}
         <div className="grid grid-cols-1 gap-2.5 lg:h-[280px] lg:grid-rows-3">
@@ -1634,45 +1663,47 @@ export default function DashboardPage() {
                   <span className="rounded-full bg-royal-100 px-3 py-1 text-royal-700">Receita bruta</span>
                   <span className="rounded-full bg-success-100 px-3 py-1 text-success-700">Lucro líquido</span>
                 </div>
-                <ResponsiveContainer width="100%" height={250}>
-                  <BarChart data={salesComparisonData} barGap={8} margin={{ top: 28, right: 8, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                    <XAxis dataKey="label" tick={{ fontSize: 12, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
-                    <YAxis
-                      tick={{ fontSize: 12, fill: "#94a3b8" }}
-                      axisLine={false}
-                      tickLine={false}
-                      tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`}
-                    />
-                    <Tooltip
-                      formatter={(value, name) => [
-                        formatBRL(Number(value)),
-                        name === "gross" ? "Receita bruta" : "Lucro líquido",
-                      ]}
-                      contentStyle={{ borderRadius: "12px", border: "1px solid #e2e8f0", fontSize: "13px" }}
-                    />
-                    <Bar dataKey="gross" fill="#3A6BC4" radius={[8, 8, 0, 0]}>
-                      <LabelList
-                        dataKey="gross"
-                        position="top"
-                        formatter={(value: unknown) => formatChartLabel(Number(value))}
-                        fill="#2F5EB6"
-                        fontSize={11}
-                        fontWeight={700}
+                <LazyChart className="relative h-[250px] min-w-0">
+                  <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={50}>
+                    <BarChart data={salesComparisonData} barGap={8} margin={{ top: 28, right: 8, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                      <XAxis dataKey="label" tick={{ fontSize: 12, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
+                      <YAxis
+                        tick={{ fontSize: 12, fill: "#94a3b8" }}
+                        axisLine={false}
+                        tickLine={false}
+                        tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`}
                       />
-                    </Bar>
-                    <Bar dataKey="net" fill="#36B37E" radius={[8, 8, 0, 0]}>
-                      <LabelList
-                        dataKey="net"
-                        position="top"
-                        formatter={(value: unknown) => formatChartLabel(Number(value))}
-                        fill="#169B62"
-                        fontSize={11}
-                        fontWeight={700}
+                      <Tooltip
+                        formatter={(value, name) => [
+                          formatBRL(Number(value)),
+                          name === "gross" ? "Receita bruta" : "Lucro líquido",
+                        ]}
+                        contentStyle={{ borderRadius: "12px", border: "1px solid #e2e8f0", fontSize: "13px" }}
                       />
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+                      <Bar dataKey="gross" fill="#3A6BC4" radius={[8, 8, 0, 0]}>
+                        <LabelList
+                          dataKey="gross"
+                          position="top"
+                          formatter={(value: unknown) => formatChartLabel(Number(value))}
+                          fill="#2F5EB6"
+                          fontSize={11}
+                          fontWeight={700}
+                        />
+                      </Bar>
+                      <Bar dataKey="net" fill="#36B37E" radius={[8, 8, 0, 0]}>
+                        <LabelList
+                          dataKey="net"
+                          position="top"
+                          formatter={(value: unknown) => formatChartLabel(Number(value))}
+                          fill="#169B62"
+                          fontSize={11}
+                          fontWeight={700}
+                        />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </LazyChart>
               </>
             )}
           </div>
@@ -1689,24 +1720,26 @@ export default function DashboardPage() {
               <p className="text-sm text-gray-400 text-center py-16">Nenhuma venda com categoria nos últimos 3 meses.</p>
             ) : (
               <div className="grid grid-cols-1 items-center gap-4 sm:grid-cols-[1fr_0.9fr]">
-                <ResponsiveContainer width="100%" height={210}>
-                  <PieChart>
-                    <Pie
-                      data={categoryData}
-                      innerRadius={58}
-                      outerRadius={84}
-                      paddingAngle={8}
-                      cornerRadius={10}
-                      dataKey="value"
-                      stroke="none"
-                    >
-                      {categoryData.map((entry) => (
-                        <Cell key={entry.name} fill={entry.color} />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(value) => `${Number(value)}%`} />
-                  </PieChart>
-                </ResponsiveContainer>
+                <LazyChart className="relative h-[210px] min-w-0">
+                  <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={50}>
+                    <PieChart>
+                      <Pie
+                        data={categoryData}
+                        innerRadius={58}
+                        outerRadius={84}
+                        paddingAngle={8}
+                        cornerRadius={10}
+                        dataKey="value"
+                        stroke="none"
+                      >
+                        {categoryData.map((entry) => (
+                          <Cell key={entry.name} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip formatter={(value) => `${Number(value)}%`} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </LazyChart>
                 <div className="space-y-2 text-sm">
                   {categoryData.map((c) => (
                     <div key={c.name} className="flex items-center gap-2 rounded-xl bg-gray-50 px-3 py-2">
