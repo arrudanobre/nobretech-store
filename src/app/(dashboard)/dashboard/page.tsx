@@ -1,13 +1,15 @@
 "use client"
 
-import { useEffect, useState, type Key as ReactKey, type ReactNode } from "react"
+import { useEffect, useRef, useState, type Key as ReactKey, type ReactNode } from "react"
 import { supabase } from "@/lib/supabase"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
 import { daysBetween, formatBRL, getProductName } from "@/lib/helpers"
+import { cn } from "@/lib/utils"
 import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
+import { getInventoryCapitalValue, getInventoryQuantity, getInventoryUnitCost } from "@/lib/inventory/costing"
 import {
   DollarSign,
   Package,
@@ -25,7 +27,6 @@ import {
   Gauge,
   Activity,
   BarChart3,
-  CheckCircle2,
   CircleDollarSign,
   ClipboardList,
   Sparkles,
@@ -42,11 +43,9 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  ResponsiveContainer,
   PieChart,
   Pie,
   Cell,
-  LabelList,
   LineChart,
   Line,
   ReferenceLine,
@@ -84,17 +83,53 @@ function ChartSkeleton() {
   )
 }
 
-function LazyChart({ children, className, fallback }: { children: ReactNode; className: string; fallback?: ReactNode }) {
+type ChartSize = { width: number; height: number }
+
+function LazyChart({ children, className, fallback }: { children: ReactNode | ((size: ChartSize) => ReactNode); className: string; fallback?: ReactNode }) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
   const [ready, setReady] = useState(false)
+  const [size, setSize] = useState<ChartSize>({ width: 0, height: 0 })
 
   useEffect(() => {
-    const frame = requestAnimationFrame(() => setReady(true))
-    return () => cancelAnimationFrame(frame)
+    let frame = 0
+    let resizeFrame = 0
+
+    const checkSize = () => {
+      const element = containerRef.current
+      if (!element) return
+      const rect = element.getBoundingClientRect()
+      const nextSize = {
+        width: Math.floor(rect.width),
+        height: Math.floor(rect.height),
+      }
+      if (nextSize.width > 0 && nextSize.height > 0) {
+        setSize(nextSize)
+        setReady(true)
+      }
+    }
+
+    frame = requestAnimationFrame(checkSize)
+    const observer = typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(() => {
+          cancelAnimationFrame(resizeFrame)
+          resizeFrame = requestAnimationFrame(checkSize)
+        })
+      : null
+
+    if (containerRef.current && observer) {
+      observer.observe(containerRef.current)
+    }
+
+    return () => {
+      cancelAnimationFrame(frame)
+      cancelAnimationFrame(resizeFrame)
+      observer?.disconnect()
+    }
   }, [])
 
   return (
-    <div className={className}>
-      {ready ? children : fallback ?? <ChartSkeleton />}
+    <div ref={containerRef} className={className}>
+      {ready ? (typeof children === "function" ? children(size) : children) : fallback ?? <ChartSkeleton />}
     </div>
   )
 }
@@ -155,6 +190,7 @@ type StockTurnoverItem = {
   category: string
   days: number
   quantity: number
+  unitCost: number
   value: number
   suggested: number
   tone: "healthy" | "watch" | "stuck"
@@ -270,16 +306,6 @@ function saleDateDayLabel(saleDate?: string, createdAt?: string) {
 
 function isCompletedSale(sale: { sale_status?: string | null }) {
   return (sale.sale_status || "completed") === "completed"
-}
-
-function formatChartLabel(value: number) {
-  if (!value) return ""
-  const abs = Math.abs(value)
-  if (abs >= 1000) {
-    const compact = (abs / 1000).toFixed(abs >= 10000 ? 0 : 1).replace(".", ",")
-    return `${value < 0 ? "-" : ""}R$ ${compact}k`
-  }
-  return formatBRL(value)
 }
 
 type DashboardTone = "navy" | "green" | "blue" | "yellow" | "red" | "gray"
@@ -446,8 +472,9 @@ function MonthRhythmBlock({ data, mode, onChangeMode }: { data: MonthRhythmData 
       {/* Chart + insights */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_280px]">
         <LazyChart className="relative h-[280px] min-w-0 rounded-2xl border border-slate-100 bg-white p-2">
-          <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={50}>
-            <LineChart data={lineData} margin={{ top: 16, right: 24, left: 0, bottom: 0 }}>
+          {({ width, height }) => (
+            <>
+            <LineChart width={width} height={height} data={lineData} margin={{ top: 16, right: 24, left: 0, bottom: 0 }}>
               <defs>
                 <linearGradient id="rhythmFutureFill" x1="0" x2="0" y1="0" y2="1">
                   <stop offset="0%" stopColor="#10b981" stopOpacity={0.08} />
@@ -564,18 +591,19 @@ function MonthRhythmBlock({ data, mode, onChangeMode }: { data: MonthRhythmData 
                 fill="url(#rhythmFutureFill)"
               />
             </LineChart>
-          </ResponsiveContainer>
-          <div className="absolute left-3 top-3 flex flex-wrap gap-1.5 text-[11px] font-semibold">
-            <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700 ring-1 ring-emerald-100">
-              <span className="h-1.5 w-3 rounded-full bg-emerald-500" /> {currentMonthShort} acumulado
-            </span>
-            <span className="flex items-center gap-1 rounded-full bg-slate-50 px-2 py-0.5 text-slate-600 ring-1 ring-slate-100">
-              <span className="h-1.5 w-3 rounded-full bg-slate-400" style={{ backgroundImage: "repeating-linear-gradient(90deg, #94a3b8 0 4px, transparent 4px 7px)" }} /> {previousMonthShort} acumulado
-            </span>
-            <span className="flex items-center gap-1 rounded-full bg-amber-50/80 px-2 py-0.5 text-amber-700 ring-1 ring-amber-100">
-              <span className="h-1.5 w-3 rounded-full bg-amber-500" style={{ backgroundImage: "repeating-linear-gradient(90deg, #f59e0b 0 4px, transparent 4px 7px)" }} /> Fechamento {previousMonthShort}
-            </span>
-          </div>
+            <div className="absolute left-3 top-3 flex flex-wrap gap-1.5 text-[11px] font-semibold">
+              <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700 ring-1 ring-emerald-100">
+                <span className="h-1.5 w-3 rounded-full bg-emerald-500" /> {currentMonthShort} acumulado
+              </span>
+              <span className="flex items-center gap-1 rounded-full bg-slate-50 px-2 py-0.5 text-slate-600 ring-1 ring-slate-100">
+                <span className="h-1.5 w-3 rounded-full bg-slate-400" style={{ backgroundImage: "repeating-linear-gradient(90deg, #94a3b8 0 4px, transparent 4px 7px)" }} /> {previousMonthShort} acumulado
+              </span>
+              <span className="flex items-center gap-1 rounded-full bg-amber-50/80 px-2 py-0.5 text-amber-700 ring-1 ring-amber-100">
+                <span className="h-1.5 w-3 rounded-full bg-amber-500" style={{ backgroundImage: "repeating-linear-gradient(90deg, #f59e0b 0 4px, transparent 4px 7px)" }} /> Fechamento {previousMonthShort}
+              </span>
+            </div>
+            </>
+          )}
         </LazyChart>
 
         {/* Insights column */}
@@ -688,23 +716,33 @@ function DashboardMetricCard({
   subtitle,
   icon: Icon,
   tone = "blue",
+  status,
+  statusTone,
 }: {
   title: string
   value: string
   subtitle: string
   icon: typeof DollarSign
   tone?: DashboardTone
+  status?: string
+  statusTone?: "green" | "yellow" | "red" | "blue" | "gray"
 }) {
   const classes = toneClasses[tone]
   const muted = tone === "navy" ? "text-white/60" : "text-gray-500"
   const label = tone === "navy" ? "text-white/55" : "text-gray-400"
+  const statusClass =
+    statusTone === "green" ? "bg-emerald-50 text-emerald-700 ring-emerald-100" :
+    statusTone === "yellow" ? "bg-amber-50 text-amber-700 ring-amber-100" :
+    statusTone === "red" ? "bg-rose-50 text-rose-700 ring-rose-100" :
+    statusTone === "blue" ? "bg-sky-50 text-sky-700 ring-sky-100" :
+    "bg-slate-50 text-slate-600 ring-slate-100"
 
   return (
-    <div className={`min-w-0 rounded-2xl border p-4 shadow-sm ${classes.card}`}>
+    <div className={`group min-w-0 rounded-2xl border p-4 shadow-sm transition-all duration-200 hover:-translate-y-px hover:shadow-md ${classes.card}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className={`text-xs font-bold uppercase tracking-wider ${label}`}>{title}</p>
-          <p className={`mt-3 break-words text-xl font-semibold leading-tight tracking-normal sm:text-2xl ${classes.value}`}>
+          <p className={`mt-3 break-words text-xl font-semibold leading-tight tracking-normal tabular-nums sm:text-2xl ${classes.value}`}>
             {value}
           </p>
           <p className={`mt-2 text-xs leading-snug ${muted}`}>{subtitle}</p>
@@ -713,6 +751,262 @@ function DashboardMetricCard({
           <Icon className={`h-5 w-5 ${classes.iconText}`} />
         </div>
       </div>
+      {status && (
+        <div className="mt-3">
+          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ${statusClass}`}>
+            <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
+            {status}
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function RuleDisclosure({ title = "Entenda esta recomendação", children, tone = "slate" }: { title?: string; children: ReactNode; tone?: "slate" | "white" | "navy" }) {
+  const summaryToneClass =
+    tone === "navy"
+      ? "border-white/10 bg-white/5 text-white/70 hover:border-white/25 hover:bg-white/10 hover:text-white focus-visible:ring-white/30"
+    : tone === "white"
+      ? "border-slate-200 bg-white text-gray-500 hover:border-slate-300 hover:text-navy-900 focus-visible:ring-royal-200"
+      : "border-slate-200 bg-white text-gray-500 hover:border-slate-300 hover:text-navy-900 focus-visible:ring-royal-200"
+  const titleToneClass =
+    tone === "navy"
+      ? "text-white"
+      : "text-navy-900"
+  const panelToneClass =
+    tone === "navy"
+      ? "border-white/10 bg-white/5 text-white/80"
+      : "border-slate-200 bg-white text-gray-600"
+  return (
+    <details className="group relative">
+      <summary
+        aria-label="Entenda esta recomendação"
+        title="Entenda esta recomendação"
+        className={`list-none cursor-pointer inline-flex h-8 w-8 items-center justify-center rounded-full border text-[11px] font-semibold shadow-sm transition-all hover:-translate-y-px focus-visible:outline-none focus-visible:ring-2 [&::-webkit-details-marker]:hidden ${summaryToneClass}`}
+      >
+        <Info className="h-3.5 w-3.5" />
+      </summary>
+      <div className={`mt-2 rounded-xl border p-3 text-[12px] leading-relaxed shadow-sm ${panelToneClass}`}>
+        <p className={`mb-2 text-[11px] font-bold uppercase tracking-[0.08em] ${titleToneClass}`}>{title}</p>
+        {children}
+      </div>
+    </details>
+  )
+}
+
+function suggestReprice({ cost, currentPrice, days }: { cost: number; currentPrice: number; days: number }): { proposed: number; discountPct: number; newMarginPct: number } | null {
+  if (!currentPrice || currentPrice <= 0 || !cost || cost <= 0) return null
+  let discountPct = 0
+  if (days >= 45) discountPct = 0.08
+  else if (days >= 30) discountPct = 0.05
+  else if (days >= 15) discountPct = 0.025
+  else return null
+  let proposed = currentPrice * (1 - discountPct)
+  proposed = Math.round(proposed / 10) * 10
+  const minPrice = Math.ceil(cost * 1.08 / 10) * 10
+  if (proposed < minPrice) {
+    if (currentPrice <= minPrice) return null
+    proposed = minPrice
+  }
+  if (proposed >= currentPrice) return null
+  const newMarginPct = ((proposed - cost) / proposed) * 100
+  if (newMarginPct < 8) return null
+  return {
+    proposed,
+    discountPct: Math.round(discountPct * 1000) / 10,
+    newMarginPct: Math.round(newMarginPct * 10) / 10,
+  }
+}
+
+function PulsoDaLoja({ healthTone, healthLabel, periodSales, periodProfit, periodAvgMargin, monthRhythm, stuckCount, stuckValue, problemsCount, warrantiesCount }: {
+  healthTone: "green" | "yellow" | "red"
+  healthLabel: string
+  periodSales: number
+  periodProfit: number
+  periodAvgMargin: number
+  monthRhythm: MonthRhythmData | null
+  stuckCount: number
+  stuckValue: number
+  problemsCount: number
+  warrantiesCount: number
+}) {
+  const rhythmDiff = monthRhythm
+    ? monthRhythm.currentAccumRevenue - monthRhythm.previousAccumAtSameDayRevenue
+    : 0
+  const rhythmRate = monthRhythm && monthRhythm.previousAccumAtSameDayRevenue > 0
+    ? Math.round((rhythmDiff / monthRhythm.previousAccumAtSameDayRevenue) * 1000) / 10
+    : 0
+  const previousMonthShort = monthRhythm?.previousMonthLabel.split(" ")[0] ?? "mês anterior"
+  const ringBg =
+    healthTone === "green" ? "bg-emerald-50 ring-emerald-100/70 text-emerald-600" :
+    healthTone === "yellow" ? "bg-amber-50 ring-amber-100/70 text-amber-600" :
+    "bg-rose-50 ring-rose-100/70 text-rose-600"
+
+  const hasCriticalCommercial = periodProfit < 0 || (periodAvgMargin <= 0 && periodSales > 0)
+  const hasMarginRisk = periodAvgMargin > 0 && periodAvgMargin < 5
+  const hasRhythmRisk = rhythmDiff < 0
+  const hasPostSaleRisk = warrantiesCount > 0 || problemsCount > 0
+  const hasStockRisk = stuckCount > 0
+
+  const headlineText =
+    hasCriticalCommercial
+      ? "Crítico: resultado comercial exige ação imediata."
+    : hasStockRisk && rhythmDiff > 0
+      ? "Ritmo forte, com atenção ao estoque parado."
+    : hasMarginRisk
+      ? "Vendas saudáveis, mas margem está apertada."
+    : hasRhythmRisk
+      ? "Atenção: vendas abaixo do mês anterior."
+    : healthTone === "green" && rhythmDiff > 0 && hasPostSaleRisk
+      ? "Ritmo forte, com atenção ao pós-venda."
+    : healthTone === "green" && rhythmDiff > 0
+      ? "Ritmo forte de vendas com lucro saudável."
+    : healthTone === "green"
+      ? "Operação saudável. Sem alertas críticos no momento."
+    : "Indicadores pedem monitoramento próximo."
+
+  const rhythmStr = `${rhythmRate >= 0 ? "+" : ""}${rhythmRate.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+
+  const risks: Array<{ text: ReactNode; cta?: { label: string; href: string }; weight: number }> = []
+  if (hasCriticalCommercial) risks.push({ text: <><strong>{formatBRL(periodProfit)}</strong> de resultado negativo no período.</>, cta: { label: "Ver financeiro", href: "/financeiro" }, weight: 100 })
+  if (hasStockRisk) risks.push({ text: <><strong>{stuckCount} item(ns)</strong> parados <strong>+45 dias</strong> travando <strong>{formatBRL(stuckValue)}</strong> em estoque.</>, cta: { label: "Ver estoque", href: "/estoque" }, weight: 80 })
+  if (problemsCount > 0) risks.push({ text: <><strong>{problemsCount} problema(s)</strong> ativo(s) na assistência.</>, cta: { label: "Ver problemas", href: "/problemas" }, weight: 70 })
+  if (hasMarginRisk) risks.push({ text: <>Margem apertada em <strong>{periodAvgMargin}%</strong>. Avaliar mix.</>, cta: { label: "Ver financeiro", href: "/financeiro" }, weight: 60 })
+  if (warrantiesCount > 0) risks.push({ text: <><strong>{warrantiesCount} garantia(s)</strong> vencendo em <strong>30 dias</strong>.</>, cta: { label: "Ver garantias", href: "/garantias" }, weight: 40 })
+  risks.sort((a, b) => b.weight - a.weight)
+
+  const opps: ReactNode[] = []
+  if (rhythmDiff > 0) opps.push(<>Mês atual <strong>{formatBRL(rhythmDiff)} acima</strong> de <strong>{previousMonthShort}</strong> no mesmo dia.</>)
+  if (periodProfit > 0 && periodAvgMargin >= 10) opps.push(<>Lucro saudável: <strong>{formatBRL(periodProfit)}</strong> com margem <strong>{periodAvgMargin}%</strong>.</>)
+  if (periodSales > 0 && rhythmDiff >= 0 && opps.length === 0) opps.push(<>Receita acumulada: <strong>{formatBRL(periodSales)}</strong> no período.</>)
+
+  const primaryRisk = risks[0]?.text ?? <>Sem riscos relevantes mapeados agora.</>
+  const primaryOpp = opps[0] ?? <>Continuar gerando vendas para manter o ritmo.</>
+
+  const fallbackOppCta = rhythmDiff > 0 ? { label: "Criar divulgação", href: "/marketing/divulgacao" } : { label: "Ver prioridades", href: "/estoque" }
+  const cta = risks[0]?.cta ?? fallbackOppCta
+
+  return (
+    <section className="rounded-3xl border border-slate-200/70 bg-white p-5 shadow-sm sm:p-6">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_260px]">
+        {/* LEFT: header + 3 mini stats + CTA */}
+        <div className="min-w-0">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ring-1 ${ringBg}`}>
+                <Activity className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-syne text-lg font-bold text-navy-900">Pulso da loja</h3>
+                <Badge variant={healthTone === "green" ? "green" : healthTone === "yellow" ? "yellow" : "red"} className="mt-1">
+                  <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-current align-middle" />
+                  {healthLabel}
+                </Badge>
+              </div>
+            </div>
+            <span className="hidden shrink-0 items-center gap-1.5 rounded-full bg-emerald-50/70 px-3 py-1 text-[10px] font-semibold text-emerald-700 ring-1 ring-emerald-100/70 sm:inline-flex">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+              Atualizado agora
+            </span>
+          </div>
+
+          <div className="mt-4">
+            <p className="text-lg font-semibold text-navy-900">{headlineText}</p>
+            <p className="mt-1 text-sm text-gray-500">
+              {monthRhythm && rhythmRate !== 0 ? (
+                <>Mês atual está <strong className="font-semibold text-navy-700 tabular-nums">{rhythmStr}</strong> {rhythmDiff >= 0 ? "acima" : "abaixo"} de <strong className="font-semibold text-navy-700">{previousMonthShort}</strong> no mesmo dia. Lucro do período: <strong className="font-semibold text-navy-700 tabular-nums">{formatBRL(periodProfit)}</strong>.</>
+              ) : (
+                <>Comparativo com mês anterior ainda em formação.</>
+              )}
+            </p>
+          </div>
+
+          <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <PulsoMiniStat label="Vendas no período" value={formatBRL(periodSales)} hint={monthRhythm && rhythmDiff > 0 ? `↑ ${rhythmRate.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}% vs ${previousMonthShort}` : monthRhythm && rhythmDiff < 0 ? `↓ ${Math.abs(rhythmRate).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}% vs ${previousMonthShort}` : "comparativo em formação"} tone={rhythmDiff >= 0 ? "emerald" : "rose"} />
+            <PulsoMiniStat label="Lucro no período" value={formatBRL(periodProfit)} hint={`${periodAvgMargin}% de margem`} tone={periodProfit >= 0 ? "emerald" : "rose"} />
+            <PulsoMiniStat label={`Ritmo vs ${previousMonthShort}`} value={`${rhythmRate >= 0 ? "+" : ""}${rhythmRate.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`} hint={rhythmDiff >= 0 ? `Acima de ${previousMonthShort}` : `Abaixo de ${previousMonthShort}`} tone={rhythmDiff >= 0 ? "emerald" : "rose"} />
+          </div>
+
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <Link
+              href={cta.href}
+              className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
+            >
+              {cta.label}
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+            <RuleDisclosure title="Como o status foi definido">
+              <div className="space-y-3">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">O que foi detectado</p>
+                  <p className="mt-1">
+                    A loja está com status <strong className="text-navy-900">{healthLabel}</strong>, lucro de <strong className="tabular-nums text-navy-900">{formatBRL(periodProfit)}</strong> no período e margem média de <strong className="tabular-nums text-navy-900">{periodAvgMargin}%</strong>.
+                    {monthRhythm ? <> O ritmo está <strong className="tabular-nums text-navy-900">{rhythmRate >= 0 ? "+" : ""}{rhythmRate.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</strong> em relação a {previousMonthShort} no mesmo dia.</> : null}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Por que importa</p>
+                  <p className="mt-1">
+                    {healthTone === "red"
+                      ? "Quando lucro ou margem entram em zona crítica, a operação pode vender sem gerar caixa suficiente para sustentar o mês."
+                      : healthTone === "yellow"
+                      ? "O painel encontrou pontos que ainda não travam a operação, mas já merecem acompanhamento para evitar perda de margem, capital parado ou ruído no pós-venda."
+                      : "Os sinais principais estão equilibrados. O foco agora é manter o ritmo comercial e acompanhar oportunidades antes que virem urgência."}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">O que fazer agora</p>
+                  <p className="mt-1">
+                    {risks.length > 0
+                      ? <>Comece pelo risco principal mostrado ao lado: {primaryRisk}</>
+                      : <>Use o momento saudável para reforçar divulgação, revisar o mix vencedor e manter o acompanhamento do estoque.</>}
+                  </p>
+                </div>
+                <div className="border-t border-slate-100 pt-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Como o sistema decidiu</p>
+                  <p className="mt-1 text-gray-500">
+                    O painel combina resultado, margem, ritmo de vendas, estoque parado, problemas em aberto e garantias próximas. Se algum ponto pede ação, o status sobe para atenção ou crítico; se os sinais estão sob controle, fica saudável.
+                  </p>
+                </div>
+              </div>
+            </RuleDisclosure>
+          </div>
+        </div>
+
+        {/* RIGHT: risk + opportunity stacked */}
+        <div className="grid grid-cols-1 gap-3">
+          <div className="rounded-2xl border border-amber-100/70 bg-amber-50/40 p-3.5">
+            <div className="flex items-center gap-2">
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+                <AlertTriangle className="h-3.5 w-3.5" />
+              </div>
+              <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-amber-700">Principal risco</p>
+            </div>
+            <p className="mt-2 text-[13px] leading-snug text-navy-900">{primaryRisk}</p>
+          </div>
+          <div className="rounded-2xl border border-emerald-100/70 bg-emerald-50/40 p-3.5">
+            <div className="flex items-center gap-2">
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
+                <TrendingUp className="h-3.5 w-3.5" />
+              </div>
+              <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-emerald-700">Melhor oportunidade</p>
+            </div>
+            <p className="mt-2 text-[13px] leading-snug text-navy-900">{primaryOpp}</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function PulsoMiniStat({ label, value, hint, tone }: { label: string; value: string; hint: string; tone: "emerald" | "rose" }) {
+  const hintClass = tone === "emerald" ? "text-emerald-600" : "text-rose-600"
+  return (
+    <div className="rounded-2xl border border-slate-200/70 bg-white px-3.5 py-3 transition-colors hover:bg-slate-50/40">
+      <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-gray-400">{label}</p>
+      <p className="mt-1.5 text-xl font-bold tabular-nums text-navy-900">{value}</p>
+      <p className={`mt-1 text-[11px] font-medium ${hintClass}`}>{hint}</p>
     </div>
   )
 }
@@ -727,8 +1021,8 @@ function DashboardSection({
   title: string
   description: string
   icon: typeof DollarSign
-  children: React.ReactNode
-  action?: React.ReactNode
+  children: ReactNode
+  action?: ReactNode
 }) {
   return (
     <section className="overflow-hidden rounded-2xl border border-gray-100 bg-card shadow-sm">
@@ -964,24 +1258,26 @@ export default function DashboardPage() {
       ])
 
       const inventory = ((inventoryRes.data as any[]) ?? []).filter((i) => (i.type || "own") === "own")
-      const invested = inventory.reduce((acc, i) => acc + (i.purchase_price ?? 0), 0)
+      const invested = inventory.reduce((acc, item) => acc + getInventoryCapitalValue(item), 0)
       setTotalInvested(invested)
       setStockCount(inventory.length)
 
       const activeTurnoverItems: StockTurnoverItem[] = inventory.map((item: any) => {
-        const quantity = Math.max(1, Number(item.quantity || 1))
+        const quantity = getInventoryQuantity(item)
         const days = Math.max(0, daysBetween(item.purchase_date))
         const category = item.catalog?.category
           ? String(item.catalog.category).charAt(0).toUpperCase() + String(item.catalog.category).slice(1)
           : "Outros"
 
+        const unitCost = getInventoryUnitCost(item)
         return {
           id: item.id,
           name: getProductName(item),
           category,
           days,
           quantity,
-          value: Number(item.purchase_price || 0) * quantity,
+          unitCost,
+          value: getInventoryCapitalValue(item),
           suggested: Number(item.suggested_price || 0),
           tone: turnoverTone(days),
         }
@@ -1077,9 +1373,9 @@ export default function DashboardPage() {
       }))
       setSalesChartData(nextSalesChartData)
 
-      const daysInMonth = now.getDate()
+      const daysInCurrentMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
       const dayMap: Record<string, SalesComparisonPoint> = {}
-      for (let day = 1; day <= daysInMonth; day++) {
+      for (let day = 1; day <= daysInCurrentMonth; day++) {
         const label = String(day).padStart(2, "0")
         dayMap[label] = { label, gross: 0, net: 0 }
       }
@@ -1089,7 +1385,9 @@ export default function DashboardPage() {
         dayMap[day].gross += Number(s.sale_price || 0)
         dayMap[day].net += getSaleProfit(s)
       })
-      const nextDailyComparison = Object.values(dayMap).filter((point) => point.gross > 0 || point.net > 0)
+      const nextDailyComparison = Object.values(dayMap)
+        .filter((point) => point.gross > 0 || point.net > 0)
+        .sort((a, b) => a.label.localeCompare(b.label))
       setDailySalesComparison(nextDailyComparison)
 
       const monthComparisonMap: Record<string, SalesComparisonPoint> = {}
@@ -1326,10 +1624,34 @@ export default function DashboardPage() {
     setPeriodEnd(range.end)
   }
 
-  const healthTone: "green" | "yellow" | "red" =
-    periodProfit < 0 || problemsCount > 0 ? "red" : turnoverSummary.watchCount > 0 || turnoverSummary.stuckCount > 0 ? "yellow" : "green"
-  const healthLabel =
-    healthTone === "red" ? "Atenção" : healthTone === "yellow" ? "Monitorar" : "Operação saudável"
+  const rhythmDiffForHealth = monthRhythm
+    ? monthRhythm.currentAccumRevenue - monthRhythm.previousAccumAtSameDayRevenue
+    : 0
+  const isRhythmFallingSharply = Boolean(
+    monthRhythm
+    && monthRhythm.previousAccumAtSameDayRevenue > 0
+    && monthRhythm.currentAccumRevenue < monthRhythm.previousAccumAtSameDayRevenue * 0.85
+  )
+  const isCritical = periodProfit < 0 || (periodAvgMargin <= 0 && periodSales > 0)
+  const isAttention = !isCritical && (
+    turnoverSummary.stuckCount > 0
+    || problemsCount > 0
+    || (periodAvgMargin > 0 && periodAvgMargin < 5)
+    || isRhythmFallingSharply
+  )
+  const healthTone: "green" | "yellow" | "red" = isCritical ? "red" : isAttention ? "yellow" : "green"
+  const healthLabel = healthTone === "red" ? "Crítico" : healthTone === "yellow" ? "Atenção" : "Saudável"
+  const decisionTag = turnoverSummary.stuckCount > 0
+    ? { label: "Girar estoque", variant: "yellow" as const }
+    : problemsCount > 0
+    ? { label: "Pós-venda", variant: "red" as const }
+    : warrantiesCount > 0
+    ? { label: "Pós-venda", variant: "yellow" as const }
+    : periodProfit < 0
+    ? { label: "Financeiro", variant: "red" as const }
+    : rhythmDiffForHealth > 0
+    ? { label: "Comercial", variant: "green" as const }
+    : { label: "Ação sugerida", variant: "blue" as const }
   const topCategory = categoryData[0]
   const stockPressure =
     turnoverSummary.stuckCount > 0
@@ -1337,40 +1659,50 @@ export default function DashboardPage() {
       : turnoverSummary.watchCount > 0
         ? `${turnoverSummary.watchCount} item(ns) em observação`
         : "Estoque sem alerta crítico"
-  const decisionItems = [
-    turnoverSummary.priorityItems[0]
-      ? `Priorize ${turnoverSummary.priorityItems[0].name}, com ${turnoverSummary.priorityItems[0].days} dias em estoque.`
-      : "Sem item prioritário para giro neste momento.",
-    topCategory
-      ? `${topCategory.name} concentra ${topCategory.value}% das vendas recentes.`
-      : "Ainda não há mix suficiente para analisar categorias vendidas.",
-    problemsCount > 0
-      ? `${problemsCount} problema(s) aberto(s) podem afetar pós-venda.`
-      : "Pós-venda sem problemas abertos.",
-  ]
+  const topPriorityStock = turnoverSummary.priorityItems[0]
+  const operationalPriority = problemsCount > 0
+    ? { title: "Ver problemas em aberto", reason: `${problemsCount} problema(s) ativo(s) na assistência.`, category: "Pós-venda", href: "/problemas", tone: "rose" as const }
+    : warrantiesCount > 0
+    ? { title: "Acompanhar garantias", reason: `${warrantiesCount} garantia(s) vencendo nos próximos 30 dias.`, category: "Pós-venda", href: "/garantias", tone: "amber" as const }
+    : periodProfit < 0
+    ? { title: "Revisar resultado financeiro", reason: `Resultado de ${formatBRL(periodProfit)} no período.`, category: "Financeiro", href: "/financeiro", tone: "rose" as const }
+    : { title: "Sem prioridade operacional", reason: "Nenhum alerta operacional crítico no momento.", category: "Operação", href: "/financeiro", tone: "emerald" as const }
+
+  const commercialOpportunity = topPriorityStock
+    ? {
+        title: `Priorizar ${topPriorityStock.name}`,
+        reason: `${topPriorityStock.days} dias em estoque · custo unitário ${formatBRL(topPriorityStock.unitCost)}${topPriorityStock.quantity > 1 ? ` · capital ${formatBRL(topPriorityStock.value)}` : ""}.`,
+        category: "Giro de estoque",
+        href: topPriorityStock.tone === "stuck" ? "/marketing/divulgacao" : `/estoque/${topPriorityStock.id}/editar`,
+        actionLabel: topPriorityStock.tone === "stuck" ? "Criar divulgação" : "Revisar preço",
+      }
+    : topCategory
+    ? {
+        title: `${topCategory.name} lidera o mix`,
+        reason: `${topCategory.value}% das vendas recentes nessa categoria.`,
+        category: "Comercial",
+        href: "/marketing/divulgacao",
+        actionLabel: "Criar divulgação",
+      }
+    : null
   const salesComparisonData =
     salesComparisonMode === "day" ? dailySalesComparison : monthlySalesComparison
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <section className="rounded-2xl border border-gray-100 bg-card p-4 shadow-sm sm:p-5">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-royal-100">
-              <CalendarDays className="h-5 w-5 text-royal-500" />
+      <section className="rounded-2xl border border-gray-100 bg-card px-4 py-3 shadow-sm sm:px-5">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-royal-100">
+              <CalendarDays className="h-4 w-4 text-royal-500" />
             </div>
             <div className="min-w-0">
-              <h2 className="font-syne text-lg font-semibold tracking-normal text-navy-900">Indicadores comerciais</h2>
-              <p className="mt-1 text-sm leading-relaxed text-gray-500">
-                Filtra vendas, lucro e margem. Capital em estoque, giro e gráficos seguem a visão operacional atual.
-              </p>
-              <Badge variant="blue" className="mt-3">
-                {selectedPeriodLabel}
-              </Badge>
+              <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-gray-400">Período</p>
+              <p className="text-sm font-semibold text-navy-900">{selectedPeriodLabel}</p>
             </div>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[620px]">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:min-w-[540px]">
             <Select
               label="Período"
               value={periodPreset}
@@ -1399,7 +1731,20 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      <OperationalAlertsCard />
+      <PulsoDaLoja
+        healthTone={healthTone}
+        healthLabel={healthLabel}
+        periodSales={periodSales}
+        periodProfit={periodProfit}
+        periodAvgMargin={periodAvgMargin}
+        monthRhythm={monthRhythm}
+        stuckCount={turnoverSummary.stuckCount}
+        stuckValue={turnoverSummary.stuckValue}
+        problemsCount={problemsCount}
+        warrantiesCount={warrantiesCount}
+      />
+
+      <OperationalAlertsCard collapsible defaultCollapsed />
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_1fr]">
         <div className="overflow-hidden rounded-2xl border border-gray-100 bg-gradient-to-br from-navy-950 via-navy-900 to-navy-800 text-white shadow-sm">
@@ -1409,11 +1754,11 @@ export default function DashboardPage() {
                 <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white/10">
                   <Sparkles className="h-5 w-5 text-white/80" />
                 </span>
-                <Badge variant={healthTone}>{healthLabel}</Badge>
+                <Badge variant={decisionTag.variant}>{decisionTag.label}</Badge>
               </div>
-              <h2 className="font-syne text-2xl font-semibold tracking-normal">Painel de decisão</h2>
+              <h2 className="font-syne text-2xl font-semibold tracking-normal">Decisão de hoje</h2>
               <p className="mt-2 text-sm leading-relaxed text-white/65">
-                Visão rápida do caixa operacional, vendas, margem e pontos que precisam de ação hoje.
+                Duas trilhas paralelas: prioridade operacional e oportunidade comercial.
               </p>
             </div>
             <div className="grid grid-cols-2 gap-3 sm:min-w-[360px]">
@@ -1429,44 +1774,161 @@ export default function DashboardPage() {
               </div>
             </div>
           </div>
-          <div className="grid gap-2 border-t border-white/10 p-5 sm:grid-cols-3 sm:p-6">
-            {decisionItems.map((item) => (
-              <div key={item} className="flex items-start gap-2 rounded-2xl bg-white/[0.06] p-3 text-sm text-white/70">
-                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success-300" />
-                <span>{item}</span>
+          <div className="grid gap-3 border-t border-white/10 p-5 sm:grid-cols-2 sm:p-6">
+            <div className={cn(
+              "rounded-2xl p-4 ring-1",
+              operationalPriority.tone === "rose" ? "bg-rose-500/10 ring-rose-400/20" :
+              operationalPriority.tone === "amber" ? "bg-amber-500/10 ring-amber-400/20" :
+              "bg-emerald-500/10 ring-emerald-400/20"
+            )}>
+              <div className="flex items-center justify-between gap-2">
+                <span className={cn(
+                  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide",
+                  operationalPriority.tone === "rose" ? "bg-rose-400/20 text-rose-200" :
+                  operationalPriority.tone === "amber" ? "bg-amber-400/20 text-amber-200" :
+                  "bg-emerald-400/20 text-emerald-200"
+                )}>
+                  Prioridade operacional · {operationalPriority.category}
+                </span>
               </div>
-            ))}
+              <p className="mt-2 text-sm font-bold text-white">{operationalPriority.title}</p>
+              <p className="mt-1 text-xs leading-snug text-white/65">{operationalPriority.reason}</p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Link href={operationalPriority.href} className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 px-3 py-1.5 text-[11px] font-bold text-white transition hover:bg-white/20">
+                  Ver detalhes <ArrowRight className="h-3 w-3" />
+                </Link>
+                <RuleDisclosure title="Como essa prioridade foi definida" tone="navy">
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-white/45">O que foi detectado</p>
+                      <p className="mt-1 text-white/85">{operationalPriority.reason}</p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-white/45">Por que importa</p>
+                      <p className="mt-1 text-white/75">
+                        {operationalPriority.category === "Pós-venda"
+                          ? "Pontos de pós-venda precisam aparecer cedo, porque atrasos em assistência ou garantia podem gerar cobrança do cliente e perda de confiança."
+                          : operationalPriority.category === "Financeiro"
+                          ? "Quando o resultado do período fica negativo, a loja precisa revisar margem, despesas e ritmo antes que a pressão chegue no caixa."
+                          : "Nenhum alerta operacional urgente apareceu agora. Isso libera a gestão para focar em venda, giro e acompanhamento preventivo."}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-white/45">O que fazer agora</p>
+                      <p className="mt-1 text-white/75">
+                        {operationalPriority.category === "Operação"
+                          ? "Mantenha o acompanhamento e use a trilha comercial ao lado para buscar a próxima venda."
+                          : "Abra os detalhes, confirme se há ação pendente e resolva o ponto antes que ele vire urgência operacional."}
+                      </p>
+                    </div>
+                    <div className="border-t border-white/10 pt-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-white/45">Como o sistema decidiu</p>
+                      <p className="mt-1 text-white/60">
+                        O painel olha primeiro para problemas abertos, depois para garantias próximas do vencimento e resultado financeiro. A prioridade exibida é o ponto que mais pede acompanhamento humano agora.
+                      </p>
+                    </div>
+                  </div>
+                </RuleDisclosure>
+              </div>
+            </div>
+            <div className="rounded-2xl bg-royal-500/10 p-4 ring-1 ring-royal-400/20">
+              <div className="flex items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-1 rounded-full bg-royal-400/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-royal-100">
+                  Oportunidade comercial · {commercialOpportunity?.category ?? "Comercial"}
+                </span>
+              </div>
+              {commercialOpportunity ? (
+                <>
+                  <p className="mt-2 text-sm font-bold text-white">{commercialOpportunity.title}</p>
+                  <p className="mt-1 text-xs leading-snug text-white/65">{commercialOpportunity.reason}</p>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <Link href={commercialOpportunity.href} className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-500 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm transition hover:bg-emerald-600">
+                      {commercialOpportunity.actionLabel} <ArrowRight className="h-3 w-3" />
+                    </Link>
+                    <RuleDisclosure title="Por que essa oportunidade apareceu" tone="navy">
+                      <div className="space-y-3">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-white/45">O que foi detectado</p>
+                          <p className="mt-1 text-white/85">{commercialOpportunity.reason}</p>
+                        </div>
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-white/45">Por que importa</p>
+                          {topPriorityStock ? (
+                            <p className="mt-1 text-white/75">
+                              Esse item está há <strong className="text-white">{topPriorityStock.days} dias</strong> em estoque.
+                              A partir de 10 dias, o painel começa a observar o giro com mais atenção; entre 10 e 44 dias, faz sentido revisar preço, anúncio ou exposição. Acima de 45 dias, o item passa a ser tratado como capital parado crítico.
+                              {topPriorityStock.unitCost > 0 ? <> O custo unitário é <strong className="tabular-nums text-white">{formatBRL(topPriorityStock.unitCost)}</strong>{topPriorityStock.quantity > 1 ? <> e o capital total preso nesse item é <strong className="tabular-nums text-white">{formatBRL(topPriorityStock.value)}</strong></> : null}.</> : null}
+                            </p>
+                          ) : (
+                            <p className="mt-1 text-white/75">
+                              A categoria aparece porque lidera o mix recente. Quando uma linha vende bem, ela pode orientar a próxima divulgação e ajudar a manter o ritmo comercial.
+                            </p>
+                          )}
+                        </div>
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-white/45">O que fazer agora</p>
+                          <p className="mt-1 text-white/75">
+                            {topPriorityStock
+                              ? "Reveja o preço, melhore a divulgação ou acompanhe mais de perto antes que o item prenda capital por tempo demais."
+                              : "Use a categoria vencedora como base para uma divulgação mais direta e com maior chance de conversão."}
+                          </p>
+                        </div>
+                      </div>
+                    </RuleDisclosure>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="mt-2 text-sm font-bold text-white">Sem oportunidade clara agora</p>
+                  <p className="mt-1 text-xs leading-snug text-white/65">Continue acompanhando o ritmo de vendas.</p>
+                </>
+              )}
+            </div>
           </div>
         </div>
 
         <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
           <DashboardMetricCard
-            title="Investido"
+            title="Capital em estoque"
             value={formatBRL(totalInvested)}
-            subtitle="capital em estoque"
+            subtitle={turnoverSummary.stuckCount > 0 ? `${stockCount} itens · ${formatBRL(turnoverSummary.stuckValue)} parados +45d` : `${stockCount} itens · sem capital travado`}
             icon={CircleDollarSign}
             tone="blue"
+            status={turnoverSummary.stuckCount > 0 ? "Atenção" : "Saudável"}
+            statusTone={turnoverSummary.stuckCount > 0 ? "yellow" : "green"}
           />
           <DashboardMetricCard
             title="Vendas"
             value={formatBRL(periodSales)}
-            subtitle="faturamento no período"
+            subtitle={monthRhythm && monthRhythm.previousAccumAtSameDayRevenue > 0
+              ? `${monthRhythm.currentAccumRevenue >= monthRhythm.previousAccumAtSameDayRevenue ? "Acima" : "Abaixo"} de ${monthRhythm.previousMonthLabel.split(" ")[0]} no mesmo dia`
+              : "faturamento no período"}
             icon={ShoppingCart}
             tone="green"
+            status={monthRhythm && monthRhythm.previousAccumAtSameDayRevenue > 0
+              ? monthRhythm.currentAccumRevenue >= monthRhythm.previousAccumAtSameDayRevenue ? "Ritmo forte" : "Abaixo"
+              : "Em andamento"}
+            statusTone={monthRhythm && monthRhythm.previousAccumAtSameDayRevenue > 0
+              ? monthRhythm.currentAccumRevenue >= monthRhythm.previousAccumAtSameDayRevenue ? "green" : "yellow"
+              : "gray"}
           />
           <DashboardMetricCard
             title="Lucro"
             value={formatBRL(periodProfit)}
-            subtitle="resultado no período"
+            subtitle={`${periodAvgMargin}% de margem média no período`}
             icon={TrendingUp}
             tone={periodProfit >= 0 ? "green" : "red"}
+            status={periodProfit < 0 ? "Crítico" : periodAvgMargin >= 10 ? "Saudável" : periodAvgMargin > 0 ? "Apertado" : "Monitorar"}
+            statusTone={periodProfit < 0 ? "red" : periodAvgMargin >= 10 ? "green" : periodAvgMargin > 0 ? "yellow" : "gray"}
           />
           <DashboardMetricCard
-            title="Margem"
+            title="Margem média"
             value={`${periodAvgMargin}%`}
-            subtitle="média no período"
+            subtitle="sobre vendas no período"
             icon={Percent}
             tone="yellow"
+            status={periodAvgMargin >= 15 ? "Forte" : periodAvgMargin >= 8 ? "Saudável" : periodAvgMargin > 0 ? "Monitorar" : "Crítico"}
+            statusTone={periodAvgMargin >= 15 ? "green" : periodAvgMargin >= 8 ? "green" : periodAvgMargin > 0 ? "yellow" : "red"}
           />
         </div>
       </div>
@@ -1509,9 +1971,9 @@ export default function DashboardPage() {
               <TimerReset className="w-5 h-5 text-royal-500" />
             </div>
             <div>
-              <h3 className="font-display font-semibold text-navy-900 font-syne">Giro de estoque</h3>
+              <h3 className="font-display font-semibold text-navy-900 font-syne">Radar de estoque</h3>
               <p className="text-sm text-gray-500">
-                Enxerga capital parado, tempo médio em estoque e quais itens precisam ser priorizados.
+                Capital parado, item prioritário e ação sugerida para girar mais rápido.
               </p>
             </div>
           </div>
@@ -1542,11 +2004,12 @@ export default function DashboardPage() {
             </div>
             <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
               <div className="flex items-center justify-between gap-2">
-                <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Parado</p>
+                <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Parado crítico</p>
                 <PackageSearch className="w-4 h-4 text-gray-400" />
               </div>
-              <p className="mt-3 text-2xl font-semibold tracking-normal text-navy-900">{turnoverSummary.stuckCount}</p>
-              <p className="mt-1 text-xs text-gray-500">+45 dias · {formatBRL(turnoverSummary.stuckValue)}</p>
+              <p className="mt-3 text-2xl font-semibold tracking-normal text-navy-900 tabular-nums">{turnoverSummary.stuckCount}</p>
+              <p className="mt-1 text-xs text-gray-500">+45 dias · <span className="tabular-nums">{formatBRL(turnoverSummary.stuckValue)}</span></p>
+              <p className="mt-0.5 text-[11px] text-gray-400">{turnoverSummary.watchCount} em observação (10-44d)</p>
             </div>
             <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
               <div className="flex items-center justify-between gap-2">
@@ -1578,8 +2041,16 @@ export default function DashboardPage() {
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
                 {turnoverSummary.priorityItems.map((item) => {
                   const tone = turnoverBadge(item.tone)
+                  const reprice = suggestReprice({ cost: item.unitCost, currentPrice: item.suggested, days: item.days })
+                  const baseAction = item.tone === "stuck"
+                    ? { label: "Divulgar", href: "/marketing/divulgacao", className: "bg-emerald-600 text-white hover:bg-emerald-700" }
+                    : item.tone === "watch"
+                    ? (reprice
+                        ? { label: "Reprecificar", href: `/estoque/${item.id}/editar`, className: "bg-amber-500 text-white hover:bg-amber-600" }
+                        : { label: "Revisar preço", href: `/estoque/${item.id}/editar`, className: "bg-amber-500 text-white hover:bg-amber-600" })
+                    : { label: "Monitorar", href: `/estoque/${item.id}`, className: "bg-slate-100 text-slate-700 hover:bg-slate-200" }
                   return (
-                    <Link key={item.id} href={`/estoque/${item.id}`} className="rounded-2xl border border-gray-100 bg-white p-4 hover:border-royal-200 hover:shadow-sm transition-all">
+                    <div key={item.id} className="rounded-2xl border border-slate-200/70 bg-white p-4 transition-all hover:-translate-y-px hover:shadow-sm">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <p className="font-semibold text-navy-900 truncate">{item.name}</p>
@@ -1592,18 +2063,76 @@ export default function DashboardPage() {
                       <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
                         <div>
                           <p className="text-gray-400">Estoque</p>
-                          <p className="font-semibold text-navy-900">{item.days}d</p>
+                          <p className="font-semibold text-navy-900 tabular-nums">{item.days}d</p>
                         </div>
                         <div>
-                          <p className="text-gray-400">Custo</p>
-                          <p className="font-semibold text-navy-900">{formatBRL(item.value)}</p>
+                          <p className="text-gray-400">Custo unitário</p>
+                          <p className="font-semibold text-navy-900 tabular-nums">{formatBRL(item.unitCost)}</p>
+                          {item.quantity > 1 && <p className="text-[10px] text-gray-400">Capital: <span className="tabular-nums">{formatBRL(item.value)}</span></p>}
                         </div>
                         <div>
                           <p className="text-gray-400">Sugerido</p>
-                          <p className="font-semibold text-navy-900">{item.suggested ? formatBRL(item.suggested) : "—"}</p>
+                          <p className="font-semibold text-navy-900 tabular-nums">{item.suggested ? formatBRL(item.suggested) : "—"}</p>
                         </div>
                       </div>
-                    </Link>
+                      {reprice ? (
+                        <div className="mt-3 rounded-xl border border-amber-100/70 bg-amber-50/40 px-3 py-2">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.06em] text-amber-700">Sugestão de reprecificação</p>
+                          <div className="mt-1 flex items-baseline justify-between gap-2">
+                            <span className="text-[11px] text-gray-500">Atual <span className="font-semibold text-navy-900 tabular-nums line-through">{formatBRL(item.suggested)}</span></span>
+                            <span className="text-sm font-bold tabular-nums text-amber-700">{formatBRL(reprice.proposed)}</span>
+                          </div>
+                          <p className="mt-1 text-[10px] text-gray-500">Desconto sugerido <strong className="text-amber-700">-{reprice.discountPct.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</strong> · margem estimada <strong className="text-navy-900">{reprice.newMarginPct.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</strong></p>
+                          <p className="mt-0.5 text-[10px] text-gray-400">Motivo: <strong className="text-gray-600">{item.days} dias em estoque</strong> · preserva margem mínima segura.</p>
+                          <div className="mt-1.5">
+                            <RuleDisclosure title="Como o preço sugerido foi calculado">
+                              <div className="space-y-3">
+                                <p>
+                                  Essa sugestão não altera o preço automaticamente. Ela serve como referência para decidir se vale acelerar o giro sem abrir mão de uma margem mínima segura.
+                                </p>
+                                <div className="space-y-1.5 rounded-lg bg-slate-50/80 p-2.5">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span>Preço atual</span>
+                                    <strong className="tabular-nums text-navy-900">{formatBRL(item.suggested)}</strong>
+                                  </div>
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span>Custo unitário</span>
+                                    <strong className="tabular-nums text-navy-900">{formatBRL(item.unitCost)}</strong>
+                                  </div>
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span>Tempo em estoque</span>
+                                    <strong className="text-navy-900">{item.days} dias</strong>
+                                  </div>
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span>Desconto sugerido pela faixa de dias</span>
+                                    <strong className="tabular-nums text-amber-700">-{reprice.discountPct.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</strong>
+                                  </div>
+                                  <div className="flex items-center justify-between gap-3 border-t border-slate-200/70 pt-1.5">
+                                    <span>Preço sugerido</span>
+                                    <strong className="tabular-nums text-amber-700">{formatBRL(reprice.proposed)}</strong>
+                                  </div>
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span>Margem estimada</span>
+                                    <strong className="tabular-nums text-navy-900">{reprice.newMarginPct.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</strong>
+                                  </div>
+                                </div>
+                                <p className="border-t border-slate-100 pt-2 text-[11px] text-gray-500">
+                                  O sistema usa faixas de tempo em estoque para sugerir uma redução gradual, arredonda o valor para facilitar a operação e preserva margem mínima de 8% para evitar um preço abaixo de um nível seguro.
+                                </p>
+                              </div>
+                            </RuleDisclosure>
+                          </div>
+                        </div>
+                      ) : item.tone === "watch" ? (
+                        <p className="mt-3 rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2 text-[11px] text-gray-500">Sugestão indisponível: falta custo unitário ou preço atual válido para calcular reprecificação segura.</p>
+                      ) : null}
+                      <div className="mt-3 flex items-center justify-between gap-2">
+                        <Link href={`/estoque/${item.id}`} className="text-[11px] font-semibold text-gray-500 hover:text-navy-900">Ver detalhe →</Link>
+                        <Link href={baseAction.href} className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-[11px] font-bold shadow-sm transition ${baseAction.className}`}>
+                          {baseAction.label}
+                        </Link>
+                      </div>
+                    </div>
                   )
                 })}
               </div>
@@ -1659,50 +2188,57 @@ export default function DashboardPage() {
               <p className="text-sm text-gray-400 text-center py-16">Nenhuma venda registrada para comparar.</p>
             ) : (
               <>
-                <div className="mb-3 flex flex-wrap gap-2 text-xs font-semibold">
-                  <span className="rounded-full bg-royal-100 px-3 py-1 text-royal-700">Receita bruta</span>
-                  <span className="rounded-full bg-success-100 px-3 py-1 text-success-700">Lucro líquido</span>
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs font-semibold">
+                  <div className="flex flex-wrap gap-2">
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-royal-50 px-3 py-1 text-royal-700 ring-1 ring-royal-100">
+                      <span className="h-2 w-2 rounded-sm bg-royal-500" /> Receita bruta
+                    </span>
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-success-50 px-3 py-1 text-success-700 ring-1 ring-success-100">
+                      <span className="h-2 w-2 rounded-sm bg-success-500" /> Lucro líquido
+                    </span>
+                  </div>
+                  <span className="text-[11px] font-normal text-gray-400">Passe o mouse para ver os valores por {salesComparisonMode === "day" ? "dia" : "mês"} · eixo cronológico</span>
                 </div>
                 <LazyChart className="relative h-[250px] min-w-0">
-                  <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={50}>
-                    <BarChart data={salesComparisonData} barGap={8} margin={{ top: 28, right: 8, left: 0, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                      <XAxis dataKey="label" tick={{ fontSize: 12, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
+                  {({ width, height }) => (
+                    <BarChart width={width} height={height} data={salesComparisonData} barGap={6} margin={{ top: 16, right: 8, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" strokeOpacity={0.45} />
+                      <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
                       <YAxis
-                        tick={{ fontSize: 12, fill: "#94a3b8" }}
+                        tick={{ fontSize: 11, fill: "#94a3b8" }}
                         axisLine={false}
                         tickLine={false}
-                        tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`}
+                        tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)}
+                        width={42}
                       />
                       <Tooltip
-                        formatter={(value, name) => [
-                          formatBRL(Number(value)),
-                          name === "gross" ? "Receita bruta" : "Lucro líquido",
-                        ]}
-                        contentStyle={{ borderRadius: "12px", border: "1px solid #e2e8f0", fontSize: "13px" }}
+                        cursor={{ fill: "rgba(148,163,184,0.08)" }}
+                        content={({ active, payload, label }) => {
+                          if (!active || !payload || payload.length === 0) return null
+                          const gross = payload.find((p) => p.dataKey === "gross")?.value as number | null | undefined
+                          const net = payload.find((p) => p.dataKey === "net")?.value as number | null | undefined
+                          return (
+                            <div className="rounded-2xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs shadow-md">
+                              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">{salesComparisonMode === "day" ? "Dia" : "Mês"}</p>
+                              <p className="text-base font-bold text-navy-900 leading-none">{label}</p>
+                              <div className="mt-2 space-y-1">
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="flex items-center gap-1.5 text-gray-500"><span className="h-2 w-2 rounded-sm bg-royal-500" /> Receita bruta</span>
+                                  <span className="font-semibold tabular-nums text-royal-700">{gross != null ? formatBRL(gross) : "—"}</span>
+                                </div>
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="flex items-center gap-1.5 text-gray-500"><span className="h-2 w-2 rounded-sm bg-success-500" /> Lucro líquido</span>
+                                  <span className="font-semibold tabular-nums text-success-700">{net != null ? formatBRL(net) : "—"}</span>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        }}
                       />
-                      <Bar dataKey="gross" fill="#3A6BC4" radius={[8, 8, 0, 0]}>
-                        <LabelList
-                          dataKey="gross"
-                          position="top"
-                          formatter={(value: unknown) => formatChartLabel(Number(value))}
-                          fill="#2F5EB6"
-                          fontSize={11}
-                          fontWeight={700}
-                        />
-                      </Bar>
-                      <Bar dataKey="net" fill="#36B37E" radius={[8, 8, 0, 0]}>
-                        <LabelList
-                          dataKey="net"
-                          position="top"
-                          formatter={(value: unknown) => formatChartLabel(Number(value))}
-                          fill="#169B62"
-                          fontSize={11}
-                          fontWeight={700}
-                        />
-                      </Bar>
+                      <Bar dataKey="gross" fill="#3A6BC4" radius={[6, 6, 0, 0]} maxBarSize={36} />
+                      <Bar dataKey="net" fill="#36B37E" radius={[6, 6, 0, 0]} maxBarSize={36} />
                     </BarChart>
-                  </ResponsiveContainer>
+                  )}
                 </LazyChart>
               </>
             )}
@@ -1721,8 +2257,8 @@ export default function DashboardPage() {
             ) : (
               <div className="grid grid-cols-1 items-center gap-4 sm:grid-cols-[1fr_0.9fr]">
                 <LazyChart className="relative h-[210px] min-w-0">
-                  <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={50}>
-                    <PieChart>
+                  {({ width, height }) => (
+                    <PieChart width={width} height={height}>
                       <Pie
                         data={categoryData}
                         innerRadius={58}
@@ -1738,7 +2274,7 @@ export default function DashboardPage() {
                       </Pie>
                       <Tooltip formatter={(value) => `${Number(value)}%`} />
                     </PieChart>
-                  </ResponsiveContainer>
+                  )}
                 </LazyChart>
                 <div className="space-y-2 text-sm">
                   {categoryData.map((c) => (
