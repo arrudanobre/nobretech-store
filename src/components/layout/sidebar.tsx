@@ -174,11 +174,10 @@ export function NobretechLogoMark() {
   )
 }
 
-export function Sidebar({ currentUser }: { currentUser: DashboardUser }) {
+export function Sidebar({ currentUser, collapsed, onToggleCollapsed }: { currentUser: DashboardUser; collapsed: boolean; onToggleCollapsed: () => void }) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const currentSearch = searchParams.toString()
-  const [collapsed, setCollapsed] = useState(false)
   const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({
     "/financeiro": pathname?.startsWith("/financeiro")
   })
@@ -329,7 +328,7 @@ export function Sidebar({ currentUser }: { currentUser: DashboardUser }) {
       {/* Collapse toggle */}
       <div className="p-3 border-t border-navy-800">
         <button
-          onClick={() => setCollapsed(!collapsed)}
+          onClick={onToggleCollapsed}
           className="w-full flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs text-white/40 hover:bg-navy-800 hover:text-white/60 transition-colors"
         >
           {collapsed ? "→" : "← Recolher"}
@@ -630,11 +629,37 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
   const [counts, setCounts] = useState<Record<string, number>>({ estoque: 0, garantias: 0 })
   const [refreshKey, setRefreshKey] = useState(0)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const pathname = usePathname()
   const isOrionPage = pathname?.startsWith("/orion")
   const brand = companyBrandParts(currentUser.companyName)
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), [])
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem("nobretech_sidebar_collapsed")
+      if (stored === "1") {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setSidebarCollapsed(true)
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  const toggleSidebarCollapsed = useCallback(() => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev
+      try {
+        window.localStorage.setItem("nobretech_sidebar_collapsed", next ? "1" : "0")
+      } catch {
+        // ignore
+      }
+      window.dispatchEvent(new Event("resize"))
+      return next
+    })
+  }, [])
 
   useEffect(() => {
     const fetchCounts = async () => {
@@ -690,10 +715,14 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
   return (
     <BadgeCountContext.Provider value={{ counts, refresh }}>
       <div className="min-h-screen bg-surface font-inter">
-        <Sidebar currentUser={currentUser} />
+        <Sidebar currentUser={currentUser} collapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebarCollapsed} />
         <MobileNav isOpen={mobileMenuOpen} onOpenChange={setMobileMenuOpen} currentUser={currentUser} />
         {/* Main content */}
-        <main className={cn("md:ml-64 pb-20 md:pb-0 min-h-screen min-w-0 overflow-x-hidden", isOrionPage ? "bg-[#05070d]" : "")}>
+        <main className={cn(
+          "pb-20 md:pb-0 min-h-screen min-w-0 overflow-x-hidden transition-[margin] duration-300 ease-out",
+          sidebarCollapsed ? "md:ml-20" : "md:ml-64",
+          isOrionPage ? "bg-[#05070d]" : "",
+        )}>
           {/* Top bar */}
           <header className={cn(
             "sticky top-0 z-30 backdrop-blur-xl border-b",
