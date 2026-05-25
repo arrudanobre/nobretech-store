@@ -127,13 +127,6 @@ export async function PUT(request: NextRequest) {
     })
   }
 
-  if (overall != null && productKind !== "sealed" && overall > 9.5) {
-    return NextResponse.json(
-      { data: null, error: { message: "Seminovos nunca recebem nota acima de 9,5." } },
-      { status: 400 },
-    )
-  }
-
   const existing = await pool.query<{ id: string }>(
     "SELECT id FROM catalog_condition_reviews WHERE inventory_item_id = $1::uuid AND company_id = $2::uuid LIMIT 1",
     [inventoryItemId, companyId],

@@ -28,9 +28,8 @@ const GRADE_CONDITION: Record<string, "sealed" | "seminovo" | "used" | "open_box
 }
 
 // Public score scale: 0 to 10, one decimal max.
-// Seminovo / usado is capped at 9.5 to avoid sounding precise or overstated.
 // Sealed scores 10 but UI must NOT render it as protagonist.
-const SEMINOVO_CAP = 9.5
+const SCORE_MAX = 10
 const SEMINOVO_FLOOR = 5.0
 
 export type ScoreTone = "emerald" | "lime" | "amber" | "orange" | "rose"
@@ -90,8 +89,7 @@ function roundToOneDecimal(value: number): number {
   return Math.round(value * 10) / 10
 }
 
-// Deterministic public score on the 0–10 scale. Caps seminovo at 9.5 so we
-// never show a "perfect" score for a used device. Returns null when grade is
+// Deterministic public score on the 0–10 scale. Returns null when grade is
 // missing so the UI can hide the score block.
 export function deriveNobretechScore(input: {
   grade: string | null | undefined
@@ -113,7 +111,7 @@ export function deriveNobretechScore(input: {
     value = base + (battery - 85) / 30
   }
 
-  value = Math.max(SEMINOVO_FLOOR, Math.min(SEMINOVO_CAP, value))
+  value = Math.max(SEMINOVO_FLOOR, Math.min(SCORE_MAX, value))
   return roundToOneDecimal(value)
 }
 
@@ -196,6 +194,6 @@ export function buildConditionReviewItems(input: {
 }
 
 function clamp(value: number): number {
-  const bounded = Math.max(SEMINOVO_FLOOR, Math.min(SEMINOVO_CAP, value))
+  const bounded = Math.max(SEMINOVO_FLOOR, Math.min(SCORE_MAX, value))
   return roundToOneDecimal(bounded)
 }

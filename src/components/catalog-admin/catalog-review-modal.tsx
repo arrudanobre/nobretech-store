@@ -40,7 +40,7 @@ const SECTIONS: ReviewSection[] = [
     notePlaceholder: "Observação sobre a tela",
     weight: 2,
     options: [
-      { id: "perfect", label: "Perfeita", score: 9.5 },
+      { id: "perfect", label: "Perfeita", score: 10 },
       { id: "tiny", label: "Riscos quase imperceptíveis", score: 8.8 },
       { id: "light", label: "Riscos leves", score: 8.0 },
       { id: "visible", label: "Riscos visíveis", score: 7.0, tone: "warning" },
@@ -54,7 +54,7 @@ const SECTIONS: ReviewSection[] = [
     notePlaceholder: "Observação sobre laterais",
     weight: 1,
     options: [
-      { id: "clean", label: "Sem marcas", score: 9.5 },
+      { id: "clean", label: "Sem marcas", score: 10 },
       { id: "light", label: "Marcas leves", score: 8.8 },
       { id: "moderate", label: "Marcas moderadas", score: 7.8 },
       { id: "strong", label: "Marcas fortes", score: 6.5, tone: "warning" },
@@ -68,7 +68,7 @@ const SECTIONS: ReviewSection[] = [
     notePlaceholder: "Observação sobre traseira",
     weight: 1,
     options: [
-      { id: "clean", label: "Sem marcas", score: 9.5 },
+      { id: "clean", label: "Sem marcas", score: 10 },
       { id: "light", label: "Marcas leves", score: 8.8 },
       { id: "moderate", label: "Marcas moderadas", score: 7.8 },
       { id: "defect", label: "Trincada ou muito marcada", score: 5.0, tone: "danger" },
@@ -95,7 +95,7 @@ const SECTIONS: ReviewSection[] = [
     notePlaceholder: "Observação sobre câmeras",
     weight: 1.5,
     options: [
-      { id: "normal", label: "Tudo normal", score: 9.5 },
+      { id: "normal", label: "Tudo normal", score: 10 },
       { id: "cosmetic", label: "Com observação estética", score: 8.5 },
       { id: "limited", label: "Alguma limitação", score: 7.0, tone: "warning" },
       { id: "defect", label: "Defeito em câmera", score: 5.0, tone: "danger" },
@@ -108,7 +108,7 @@ const SECTIONS: ReviewSection[] = [
     notePlaceholder: "Observação sobre biometria",
     weight: 1,
     options: [
-      { id: "normal", label: "Funcionando", score: 9.5 },
+      { id: "normal", label: "Funcionando", score: 10 },
       { id: "na", label: "Não se aplica", score: null },
       { id: "untested", label: "Não testado", score: null, tone: "warning" },
       { id: "defect", label: "Com defeito", score: 5.0, tone: "danger" },
@@ -121,7 +121,7 @@ const SECTIONS: ReviewSection[] = [
     notePlaceholder: "Observação sobre áudio ou microfone",
     weight: 0.75,
     options: [
-      { id: "normal", label: "Tudo normal", score: 9.5 },
+      { id: "normal", label: "Tudo normal", score: 10 },
       { id: "minor", label: "Pequena observação", score: 8.5 },
       { id: "limited", label: "Alguma limitação", score: 7.0, tone: "warning" },
       { id: "defect", label: "Defeito", score: 5.0, tone: "danger" },
@@ -134,7 +134,7 @@ const SECTIONS: ReviewSection[] = [
     notePlaceholder: "Observação sobre conectividade",
     weight: 0.75,
     options: [
-      { id: "normal", label: "Tudo normal", score: 9.5 },
+      { id: "normal", label: "Tudo normal", score: 10 },
       { id: "minor", label: "Com observação", score: 8.5 },
       { id: "limited", label: "Alguma limitação", score: 7.0, tone: "warning" },
       { id: "defect", label: "Defeito", score: 5.0, tone: "danger" },
@@ -147,7 +147,7 @@ const SECTIONS: ReviewSection[] = [
     notePlaceholder: "Observação geral do funcionamento",
     weight: 1.5,
     options: [
-      { id: "excellent", label: "Excelente", score: 9.5 },
+      { id: "excellent", label: "Excelente", score: 10 },
       { id: "good", label: "Bom", score: 8.8 },
       { id: "attention", label: "Exige atenção", score: 7.8, tone: "warning" },
       { id: "limited", label: "Limitação importante", score: 6.5, tone: "warning" },
@@ -188,7 +188,7 @@ type Props = {
 
 function scoreFromBatteryHealth(value: number | null): number | null {
   if (value == null) return null
-  if (value >= 95) return 9.5
+  if (value >= 95) return 10
   if (value >= 90) return 9.0
   if (value >= 85) return 8.4
   if (value >= 80) return 7.8
@@ -214,7 +214,7 @@ function roundScore(value: number): number {
   return Math.round(value * 10) / 10
 }
 
-function calculateOverall(scores: Record<ReviewKey, number | null>, isSealed: boolean): number | null {
+function calculateOverall(scores: Record<ReviewKey, number | null>): number | null {
   let totalWeight = 0
   let weighted = 0
   for (const section of SECTIONS) {
@@ -225,7 +225,7 @@ function calculateOverall(scores: Record<ReviewKey, number | null>, isSealed: bo
   }
   if (totalWeight === 0) return null
   const raw = weighted / totalWeight
-  return roundScore(isSealed ? Math.min(10, raw) : Math.min(9.5, raw))
+  return roundScore(Math.min(10, raw))
 }
 
 function optionClass(option: ReviewOption, active: boolean) {
@@ -295,7 +295,7 @@ export function CatalogReviewModal({ item, onClose, onSaved }: Props) {
     return next
   }, [item.batteryHealth, selected])
 
-  const liveOverall = calculateOverall(scores, isSealed)
+  const liveOverall = calculateOverall(scores)
   const hasBlockingDefect = Object.values(scores).some((score) => score != null && score <= 5)
   const hasWarnings = SECTIONS.some((section) => {
     const option = section.options.find((entry) => entry.id === selected[section.key])
@@ -360,7 +360,7 @@ export function CatalogReviewModal({ item, onClose, onSaved }: Props) {
           {liveOverall != null ? `${formatScore10(liveOverall)}/10` : "—"}
         </p>
         <p className="text-[11px] text-slate-300">
-          O sistema calcula a nota pelas respostas. Seminovos nunca passam de 9,5.
+          O sistema calcula a nota pelas respostas, sempre na escala de 0 a 10.
         </p>
         {hasBlockingDefect ? (
           <p className="mt-2 rounded-xl border border-rose-400/25 bg-rose-500/15 px-3 py-2 text-xs text-rose-100">

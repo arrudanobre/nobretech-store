@@ -43,21 +43,21 @@ export function ProductGallery({ images, productTitle }: Props) {
   const isSealedActive = !isRealActive
 
   return (
-    <div className="flex flex-col gap-3 sm:flex-row sm:gap-4">
-      <div className="relative order-1 flex-1">
+    <div className="flex min-w-0 max-w-full flex-col gap-3 sm:flex-row sm:gap-4">
+      <div className="relative order-1 min-w-0 flex-1">
         <div
           ref={stripRef}
           onScroll={handleScroll}
           role="region"
           aria-label="Galeria de fotos do produto"
-          className="relative flex w-full snap-x snap-mandatory overflow-x-auto overflow-y-hidden rounded-[28px] border border-white/[0.08] [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          className="relative flex w-full max-w-full snap-x snap-mandatory overflow-x-auto overflow-y-hidden rounded-[28px] border border-white/[0.08] [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
           {safeImages.map((image, index) => {
             const sealed = image.kind === "official_asset"
             return (
               <div
                 key={`${image.url}-${index}`}
-                className={`relative aspect-square w-full shrink-0 snap-center ${
+                className={`relative aspect-square w-full max-w-full shrink-0 snap-center ${
                   sealed
                     ? "bg-gradient-to-b from-white/[0.97] to-white/[0.88]"
                     : "bg-gradient-to-b from-white/[0.05] to-transparent"
@@ -116,7 +116,7 @@ export function ProductGallery({ images, productTitle }: Props) {
 
       {safeImages.length > 1 ? (
         <div
-          className="order-2 -mx-1 flex gap-2 overflow-x-auto px-1 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:mx-0 sm:max-h-[520px] sm:w-20 sm:shrink-0 sm:flex-col sm:overflow-y-auto sm:overflow-x-hidden sm:p-0"
+          className="order-2 flex max-w-full gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:max-h-[520px] sm:w-20 sm:shrink-0 sm:flex-col sm:overflow-y-auto sm:overflow-x-hidden sm:p-0"
           role="tablist"
           aria-label="Miniaturas do produto"
         >

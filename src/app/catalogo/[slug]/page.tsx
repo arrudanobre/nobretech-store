@@ -62,8 +62,8 @@ export default async function CatalogoProductPage({
 
   return (
     <CatalogShell>
-      <section className="px-4 pb-36 pt-3 sm:px-6 sm:pb-20 sm:pt-6">
-        <div className="mx-auto max-w-5xl">
+      <section className="overflow-x-hidden px-4 pb-36 pt-3 sm:px-6 sm:pb-20 sm:pt-6">
+        <div className="mx-auto max-w-5xl min-w-0">
           <Link
             href="/catalogo"
             className="inline-flex items-center gap-1.5 text-[12px] font-medium text-zinc-300 transition hover:text-white"
@@ -72,10 +72,10 @@ export default async function CatalogoProductPage({
             Voltar ao catálogo
           </Link>
 
-          <div className="mt-4 grid gap-7 lg:grid-cols-[1.1fr_0.9fr] lg:gap-10">
+          <div className="mt-4 grid min-w-0 gap-7 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-10">
             <ProductGallery images={product.images} productTitle={product.title} />
 
-            <div className="flex flex-col gap-5">
+            <div className="flex min-w-0 flex-col gap-5">
               <div>
                 <div className="flex flex-wrap items-center gap-1.5">
                   {isSealed ? (
@@ -177,7 +177,7 @@ export default async function CatalogoProductPage({
                 </div>
               </div>
 
-              <ul className="grid grid-cols-3 gap-2">
+              <ul className="grid min-w-0 grid-cols-3 gap-2">
                 <TrustItem icon={<ShieldCheck className="h-4 w-4" weight="duotone" />} label={product.warrantyLabel} />
                 <TrustItem icon={<Truck className="h-4 w-4" weight="duotone" />} label={product.availabilityLabel} />
                 <TrustItem icon={<SealCheck className="h-4 w-4" weight="duotone" />} label="Procedência verificada" />
@@ -185,8 +185,8 @@ export default async function CatalogoProductPage({
             </div>
           </div>
 
-          <div className="mt-10 grid gap-8 lg:grid-cols-[1.1fr_0.9fr]">
-            <div className="space-y-7">
+          <div className="mt-10 grid min-w-0 gap-8 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+            <div className="min-w-0 space-y-7">
               <section>
                 <h2 className="font-[family-name:var(--font-syne)] text-[18px] font-semibold">Sobre o aparelho</h2>
                 <p className="mt-2 text-[14px] leading-relaxed text-zinc-300">{product.description}</p>
@@ -210,7 +210,7 @@ export default async function CatalogoProductPage({
               </section>
             </div>
 
-            <div className="space-y-5">
+            <div className="min-w-0 space-y-5">
               {product.includedItems.length > 0 ? (
                 <section className="rounded-[24px] border border-white/[0.07] bg-white/[0.025] p-5 backdrop-blur">
                   <h2 className="font-[family-name:var(--font-syne)] text-[16px] font-semibold">
@@ -244,11 +244,11 @@ export default async function CatalogoProductPage({
                 <h2 className="font-[family-name:var(--font-syne)] text-[16px] font-semibold">
                   Informações adicionais
                 </h2>
-                <dl className="mt-3 divide-y divide-white/[0.05]">
+                <dl className="mt-3 min-w-0 divide-y divide-white/[0.05]">
                   {product.specs.map((spec) => (
-                    <div key={spec.label} className="flex items-center justify-between gap-3 py-2">
+                    <div key={spec.label} className="flex min-w-0 items-center justify-between gap-3 py-2">
                       <dt className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{spec.label}</dt>
-                      <dd className="text-[13px] font-medium text-white">{spec.value}</dd>
+                      <dd className="min-w-0 text-right text-[13px] font-medium text-white">{spec.value}</dd>
                     </div>
                   ))}
                 </dl>
@@ -280,9 +280,9 @@ export default async function CatalogoProductPage({
         </div>
       </section>
 
-      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-white/[0.07] bg-[#050607]/92 px-4 pb-[max(env(safe-area-inset-bottom),0.6rem)] pt-2.5 backdrop-blur-xl sm:hidden">
-        <div className="flex items-center gap-3">
-          <div className="leading-tight">
+      <div className="fixed inset-x-0 bottom-0 z-30 max-w-full border-t border-white/[0.07] bg-[#050607]/92 px-4 pb-[max(env(safe-area-inset-bottom),0.6rem)] pt-2.5 backdrop-blur-xl sm:hidden">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="min-w-0 leading-tight">
             <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
               {isSealed ? "Lacrado" : product.scoreLabel || product.conditionLabel}
             </p>
@@ -298,7 +298,7 @@ export default async function CatalogoProductPage({
               </p>
             ) : null}
           </div>
-          <div className="ml-auto">
+          <div className="ml-auto shrink-0">
             <ProductWhatsAppCta product={product} variant="sticky" />
           </div>
         </div>

@@ -29,7 +29,7 @@ export function ProductInstallmentOptions({
   if (!selectedOption) {
     if (!fallbackText) return null
     return (
-      <div className="mt-2 rounded-2xl border border-white/[0.08] bg-white/[0.035] px-3 py-2.5 text-[12.5px] leading-relaxed text-zinc-300">
+      <div className="mt-2 max-w-full rounded-2xl border border-white/[0.08] bg-white/[0.035] px-3 py-2.5 text-[12.5px] leading-relaxed text-zinc-300">
         <p>{fallbackText}</p>
         {fallbackTotalText ? <p>{fallbackTotalText}</p> : null}
         {fallbackNote ? <p className="text-[#F2D88A]/85">{fallbackNote}</p> : null}
@@ -38,10 +38,10 @@ export function ProductInstallmentOptions({
   }
 
   return (
-    <div className="relative mt-3">
+    <div className="relative mt-3 min-w-0 max-w-full">
       <div className="rounded-2xl border border-white/[0.08] bg-black/15 p-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
             <p className="flex items-center gap-1.5 text-[10.5px] font-medium uppercase tracking-[0.18em] text-zinc-500">
               <CreditCard className="h-3.5 w-3.5 text-[#F2D88A]" weight="duotone" />
               {selectedOption.installments === maxInstallments
@@ -65,7 +65,7 @@ export function ProductInstallmentOptions({
       </div>
 
       {isOpen ? (
-        <div className="mt-2 overflow-hidden rounded-[22px] border border-white/[0.1] bg-[#080D16]/95 shadow-[0_22px_62px_rgba(0,0,0,0.5)] backdrop-blur-xl">
+        <div className="mt-2 max-w-full overflow-hidden rounded-[22px] border border-white/[0.1] bg-[#080D16]/95 shadow-[0_22px_62px_rgba(0,0,0,0.5)] backdrop-blur-xl">
           <div className="max-h-[360px] overflow-y-auto p-2">
             {options.map((option) => {
               const isSelected = option.installments === selectedOption.installments

@@ -8,7 +8,7 @@ type Props = {
 
 export function CatalogShell({ children }: Props) {
   return (
-    <div className="relative min-h-screen bg-[#050607] text-white">
+    <div className="relative min-h-screen overflow-x-hidden bg-[#050607] text-white">
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(214,168,79,0.12),_transparent_38%),radial-gradient(circle_at_bottom,_rgba(34,197,94,0.05),_transparent_30%)]"
@@ -54,7 +54,7 @@ export function CatalogShell({ children }: Props) {
           </a>
         </div>
       </header>
-      <main className="relative z-10">{children}</main>
+      <main className="relative z-10 overflow-x-hidden">{children}</main>
       <footer className="relative z-10 border-t border-white/[0.05] px-4 py-7 text-center text-[11px] text-zinc-500 sm:px-6">
         <p>Nobretech Store · São Luís, MA</p>
         <p className="mt-1">Atendimento pelo WhatsApp e entrega presencial em São Luís.</p>
