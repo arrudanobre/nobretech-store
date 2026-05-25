@@ -62,6 +62,7 @@ const staticNavItems: (Omit<NavItem, "badge"> & { badge?: { count?: number; defa
   { label: "Dashboard", href: "/dashboard", icon: BarChart3 },
   { label: "ORION AI", href: "/orion", icon: BrainCircuit, permission: "finance.view" },
   { label: "Estoque", href: "/estoque", icon: Package, badge: { defaultCount: 0, color: "bg-royal-500", source: "db", countKey: "estoque" } },
+  { label: "Vitrine pública", href: "/vitrine", icon: Store },
   { label: "Vendas", href: "/vendas", icon: ShoppingCart },
   { label: "Central de Divulgação", href: "/marketing/divulgacao", icon: Megaphone },
   { label: "Avaliação de Recebimento", href: "/avaliacao", icon: Calculator },
@@ -632,6 +633,8 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const pathname = usePathname()
   const isOrionPage = pathname?.startsWith("/orion")
+  const isVitrinePage = pathname?.startsWith("/vitrine")
+  const isDarkPage = isOrionPage || isVitrinePage
   const brand = companyBrandParts(currentUser.companyName)
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), [])
@@ -721,12 +724,12 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
         <main className={cn(
           "pb-20 md:pb-0 min-h-screen min-w-0 overflow-x-hidden transition-[margin] duration-300 ease-out",
           sidebarCollapsed ? "md:ml-20" : "md:ml-64",
-          isOrionPage ? "bg-[#05070d]" : "",
+          isDarkPage ? "bg-[#05070d]" : "",
         )}>
           {/* Top bar */}
           <header className={cn(
             "sticky top-0 z-30 backdrop-blur-xl border-b",
-            isOrionPage ? "bg-[#05070d]/90 border-white/10" : "bg-surface/80 border-gray-100"
+            isDarkPage ? "bg-[#05070d]/90 border-white/10" : "bg-surface/80 border-gray-100"
           )}>
             <div className="flex items-center justify-between h-14 px-4 sm:px-6">
               <div className="flex items-center gap-2 md:hidden">
@@ -736,23 +739,23 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
                   onClick={() => setMobileMenuOpen(true)}
                   className={cn(
                     "mr-1 rounded-xl border p-2 shadow-sm",
-                    isOrionPage ? "border-white/10 bg-white/[0.08] text-white" : "border-gray-200 bg-white text-navy-900"
+                    isDarkPage ? "border-white/10 bg-white/[0.08] text-white" : "border-gray-200 bg-white text-navy-900"
                   )}
                 >
                   <Menu className="h-4 w-4" />
                 </button>
                 <NobretechLogoMark />
                 <div className="leading-tight">
-                  <span className={cn("block font-display font-bold text-sm font-syne", isOrionPage ? "text-white" : "text-navy-900")}>{brand.primary}</span>
-                  {brand.secondary ? <span className={cn("block text-[10px]", isOrionPage ? "text-white/40" : "text-gray-400")}>{brand.secondary}</span> : null}
+                  <span className={cn("block font-display font-bold text-sm font-syne", isDarkPage ? "text-white" : "text-navy-900")}>{brand.primary}</span>
+                  {brand.secondary ? <span className={cn("block text-[10px]", isDarkPage ? "text-white/40" : "text-gray-400")}>{brand.secondary}</span> : null}
                 </div>
               </div>
-              <h1 className={cn("hidden md:block font-display font-semibold font-syne", isOrionPage ? "text-white" : "text-navy-900")}>
+              <h1 className={cn("hidden md:block font-display font-semibold font-syne", isDarkPage ? "text-white" : "text-navy-900")}>
                 {title}
               </h1>
               <div className="flex items-center gap-2">
-                <NotificationBell dark={isOrionPage} />
-                <UserHeader currentUser={currentUser} dark={isOrionPage} />
+                <NotificationBell dark={isDarkPage} />
+                <UserHeader currentUser={currentUser} dark={isDarkPage} />
               </div>
             </div>
           </header>
