@@ -29,6 +29,7 @@ import { classifyLead, isActionableLead } from "@/lib/orion/lead-classification"
 import { enrichAnalysisWithConfidence } from "@/lib/orion/confidence-engine"
 import { deduplicateAnalysis } from "@/lib/orion/insight-deduplication"
 import { composeProductLabel } from "@/lib/orion/product-label"
+import { getInventoryCapitalValue, getInventoryCostBreakdown } from "@/lib/inventory/costing"
 import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
 import { calculateOperationalHealth } from "./operational-health-engine"
 import type { OperationalHealthScore } from "./operational-health-engine"
@@ -1098,18 +1099,23 @@ export async function collectOrionSnapshot(
   const revenuePrevious30d = salesPrevious30.reduce((sum, sale) => sum + sale.revenue, 0)
   const profit30d = sales30.reduce((sum, sale) => sum + sale.profit, 0)
 
-  const stockRows = stockResult.rows.map((row) => ({
-    id: String(row.id),
-    status: String(row.status || ""),
-    purchasePrice: number(row.purchase_price),
-    suggestedPrice: number(row.suggested_price),
-    purchaseDate: String(row.purchase_date || ""),
-    quantity: number(row.quantity || 1) || 1,
-    category: String(row.category || "Outros"),
-    name: safeName([row.product_model || row.category, row.color]),
-    color: row.color ? String(row.color) : null,
-    daysInStock: daysBetweenDates(String(row.purchase_date || "")),
-  }))
+  const stockRows = stockResult.rows.map((row) => {
+    const costBreakdown = getInventoryCostBreakdown(row)
+    return {
+      id: String(row.id),
+      status: String(row.status || ""),
+      purchasePrice: costBreakdown.unitCost,
+      unitCost: costBreakdown.unitCost,
+      suggestedPrice: number(row.suggested_price),
+      purchaseDate: String(row.purchase_date || ""),
+      quantity: costBreakdown.quantity,
+      capitalValue: costBreakdown.capitalValue,
+      category: String(row.category || "Outros"),
+      name: safeName([row.product_model || row.category, row.color]),
+      color: row.color ? String(row.color) : null,
+      daysInStock: daysBetweenDates(String(row.purchase_date || "")),
+    }
+  })
   const activeStock = filterOperationalStock(stockRows)
   const stuckItems = activeStock
     .filter((row) => row.daysInStock >= 30)
@@ -1334,7 +1340,7 @@ export async function collectOrionSnapshot(
       probableUnitCost: costs.length ? round(costs.reduce((sum, cost) => sum + cost, 0) / costs.length) : null,
       minRecentCost: costs.length ? round(Math.min(...costs)) : null,
       currentStockCount: matchingStock.reduce((sum, item) => sum + item.quantity, 0),
-      currentStockValue: round(matchingStock.reduce((sum, item) => sum + item.purchasePrice * item.quantity, 0)),
+      currentStockValue: round(matchingStock.reduce((sum, item) => sum + item.capitalValue, 0)),
       stuckStockCount: matchingStock.filter((item) => item.daysInStock >= 30).length,
       campaignDemandLeads: candidate.campaignDemandLeads,
       campaignLostLeads: candidate.campaignLostLeads,
@@ -1573,8 +1579,10 @@ export async function collectOrionSnapshot(
     name: item.name,
     category: item.category,
     purchasePrice: item.purchasePrice,
+    unitCost: item.unitCost,
     suggestedPrice: item.suggestedPrice,
     quantity: item.quantity,
+    capitalValue: item.capitalValue,
     daysInStock: item.daysInStock,
   }))
   const inventoryLiquidityQuality = buildInventoryLiquidityQuality({
@@ -1661,7 +1669,11 @@ export async function collectOrionSnapshot(
 
   const openLeads = leadsResult.rows.filter((lead) => isActionableLead(lead.status)).length
   const convertedLeads = leadsResult.rows.filter((lead) => lead.status === "sold" || saleFacts.some((sale) => sale.marketing_lead_id === lead.id)).length
-  const activeStockValue = activeStock.reduce((sum, row) => sum + row.purchasePrice * row.quantity, 0)
+  const activeStockValue = activeStock.reduce((sum, row) => sum + getInventoryCapitalValue({
+    unit_cost: row.unitCost,
+    purchase_price: row.purchasePrice,
+    quantity: row.quantity,
+  }), 0)
   const nextPayables = futureCommitments("expense")
   const nextReceivables = futureCommitments("income")
   const liquidityForecast = {

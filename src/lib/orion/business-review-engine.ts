@@ -1,5 +1,6 @@
 import type { OrionSnapshot } from "./types"
 import type { OrionSemanticPlan } from "./semantic-planner"
+import { getInventoryCapitalValue } from "@/lib/inventory/costing"
 
 export type OrionBusinessReview = {
   timeframeLabel: string
@@ -47,6 +48,24 @@ function roundCurrency(value: number) {
 function positive(value: unknown) {
   const parsed = Number(value ?? 0)
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 0
+}
+
+type StockCostingCandidate = {
+  purchasePrice?: number | string | null
+  purchase_price?: number | string | null
+  unitCost?: number | string | null
+  capitalValue?: number | string | null
+  quantity?: number | string | null
+}
+
+function stockInvestedCapital(item: StockCostingCandidate) {
+  const explicitCapital = positive(item.capitalValue)
+  if (explicitCapital > 0) return roundCurrency(explicitCapital)
+  return getInventoryCapitalValue({
+    unit_cost: item.unitCost ?? item.purchasePrice,
+    purchase_price: item.purchase_price ?? item.purchasePrice,
+    quantity: item.quantity,
+  })
 }
 
 function riskFromDays(daysInStock: number | null): "low" | "medium" | "high" {
@@ -131,7 +150,7 @@ export function buildBusinessReview(input: BuildBusinessReviewInput): OrionBusin
   const stuckItems = stockItems.slice(0, 8).map((item) => ({
     label: item.name,
     daysInStock: typeof item.daysInStock === "number" ? item.daysInStock : null,
-    investedCapital: typeof item.purchasePrice === "number" ? roundCurrency(item.purchasePrice) : null,
+    investedCapital: stockInvestedCapital(item),
     estimatedProfit: typeof item.suggestedPrice === "number" && typeof item.purchasePrice === "number"
       ? roundCurrency(item.suggestedPrice - item.purchasePrice)
       : null,

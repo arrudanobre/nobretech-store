@@ -1,6 +1,7 @@
 import { buildReinvestmentDecision, type ReinvestmentDecision } from "./reinvestment-intelligence-engine"
 import type { OrionSemanticPlan } from "./semantic-planner"
 import type { OrionSnapshot } from "./types"
+import { getInventoryCapitalValue } from "@/lib/inventory/costing"
 
 export type OrionToolName =
   | "finance.cashPosition"
@@ -53,6 +54,24 @@ function readNumber(value: unknown) {
 
 function positive(value: unknown) {
   return Math.max(0, readNumber(value))
+}
+
+type StockCostingCandidate = {
+  purchasePrice?: number | string | null
+  purchase_price?: number | string | null
+  unitCost?: number | string | null
+  capitalValue?: number | string | null
+  quantity?: number | string | null
+}
+
+function getStockInvestedCapital(item: StockCostingCandidate) {
+  const explicitCapital = readNumber(item.capitalValue)
+  if (explicitCapital > 0) return roundCurrency(explicitCapital)
+  return getInventoryCapitalValue({
+    unit_cost: item.unitCost ?? item.purchasePrice,
+    purchase_price: item.purchase_price ?? item.purchasePrice,
+    quantity: item.quantity,
+  })
 }
 
 function statusFromData(hasData: boolean, caveats: string[]): OrionToolStatus {
@@ -275,7 +294,7 @@ function buildStuckItems(snapshot: OrionSnapshot): OrionToolResult {
     label: item.name,
     category: item.category,
     daysInStock: item.daysInStock,
-    investedCapital: item.purchasePrice,
+    investedCapital: getStockInvestedCapital(item),
     suggestedPrice: item.suggestedPrice,
     estimatedGrossProfit: roundCurrency(readNumber(item.suggestedPrice) - readNumber(item.purchasePrice)),
     risk: item.daysInStock >= 60 ? "high" : item.daysInStock >= 30 ? "medium" : "low",
