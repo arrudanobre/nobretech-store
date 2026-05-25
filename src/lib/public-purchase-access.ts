@@ -1224,6 +1224,7 @@ export async function ensureSalePublicAccess(saleId: string, companyId?: string)
               public_access_locked_until = NULL
           WHERE id = $1
             AND COALESCE(sale_status, 'completed') = 'completed'
+            AND COALESCE(customer_type, 'identified') <> 'walk_in'
             AND ($4::uuid IS NULL OR company_id = $4::uuid)
           RETURNING *
         `,
@@ -1246,6 +1247,7 @@ export async function regenerateSalePublicPin(saleId: string, companyId?: string
           public_access_locked_until = NULL
       WHERE id = $1
         AND COALESCE(sale_status, 'completed') = 'completed'
+        AND COALESCE(customer_type, 'identified') <> 'walk_in'
         AND public_access_token IS NOT NULL
         AND ($3::uuid IS NULL OR company_id = $3::uuid)
       RETURNING *

@@ -40,6 +40,11 @@ type ReceivableItem = Receivable & {
 
 const METHODS = ["Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência"]
 
+function saleCustomerLabel(sale: { customer_type?: string | null; walk_in_label?: string | null; customer?: { full_name?: string | null } | null }) {
+  if (sale.customer_type === "walk_in") return sale.walk_in_label || "Cliente avulso"
+  return sale.customer?.full_name || null
+}
+
 function toDateOnly(date?: string | null) {
   if (!date) return todayISO()
   const value = String(date)
@@ -116,8 +121,8 @@ export default function ContasReceberPage() {
           .eq("is_active", true)
           .eq("cash_flow_type", "income")
           .order("sort_order", { ascending: true }),
-        (supabase.from("sales") as any).select("id, sale_date, payment_due_date, sale_status, sale_price, net_amount, payment_method, customer_id, customer:customer_id(full_name), inventory:inventory_id(catalog:catalog_id(model)), sales_additional_items(id)").neq("sale_status", "cancelled").order("sale_date", { ascending: true }),
-        (supabase.from("sale_payments") as any).select("id, sale_id, payment_method, amount, status, due_date, received_date, financial_account_id, transaction_id, sale:sale_id(id, sale_date, sale_status, customer:customer_id(full_name), inventory:inventory_id(catalog:catalog_id(model)), sales_additional_items(id))").neq("status", "cancelled").order("due_date", { ascending: true }),
+        (supabase.from("sales") as any).select("id, sale_date, payment_due_date, sale_status, sale_price, net_amount, payment_method, customer_id, customer_type, walk_in_label, customer:customer_id(full_name), inventory:inventory_id(catalog:catalog_id(model)), sales_additional_items(id)").neq("sale_status", "cancelled").order("sale_date", { ascending: true }),
+        (supabase.from("sale_payments") as any).select("id, sale_id, payment_method, amount, status, due_date, received_date, financial_account_id, transaction_id, sale:sale_id(id, sale_date, sale_status, customer_type, walk_in_label, customer:customer_id(full_name), inventory:inventory_id(catalog:catalog_id(model)), sales_additional_items(id))").neq("status", "cancelled").order("due_date", { ascending: true }),
         (supabase.from("transactions") as any).select("*").eq("type", "income").neq("status", "cancelled").order("due_date", { ascending: true }),
       ])
       if (accountsRes.error) throw new Error(accountsRes.error.message)
@@ -149,7 +154,7 @@ export default function ContasReceberPage() {
         .filter((saleId: string) => saleId && !salesById.has(saleId))))
       if (missingPaymentSaleIds.length > 0) {
         const { data: linkedSales, error: linkedSalesError } = await (supabase.from("sales") as any)
-          .select("id, sale_date, payment_due_date, sale_status, sale_price, net_amount, payment_method, customer_id, inventory_id, customer:customer_id(full_name), inventory:inventory_id(catalog:catalog_id(model)), sales_additional_items(id)")
+          .select("id, sale_date, payment_due_date, sale_status, sale_price, net_amount, payment_method, customer_id, inventory_id, customer_type, walk_in_label, customer:customer_id(full_name), inventory:inventory_id(catalog:catalog_id(model)), sales_additional_items(id)")
           .in("id", missingPaymentSaleIds)
           .neq("sale_status", "cancelled")
         if (linkedSalesError) throw new Error(linkedSalesError.message)
@@ -170,7 +175,7 @@ export default function ContasReceberPage() {
           sale_id: payment.sale_id,
           category: "Venda",
           description: `Venda · ${modelName} · ${formatPaymentMethod(payment.payment_method)}`,
-          customer_name: sale.customer?.full_name || null,
+          customer_name: saleCustomerLabel(sale),
           product_summary: `${modelName}${additionalCount > 0 ? ` + ${additionalCount} item${additionalCount > 1 ? "s" : ""}` : ""}`,
           additional_count: additionalCount,
           amount: Number(payment.amount || 0),
@@ -195,7 +200,7 @@ export default function ContasReceberPage() {
           id: sale.id,
           category: "Venda",
           description: `Venda · ${modelName}`,
-          customer_name: sale.customer?.full_name || null,
+          customer_name: saleCustomerLabel(sale),
           product_summary: `${modelName}${additionalCount > 0 ? ` + ${additionalCount} item${additionalCount > 1 ? "s" : ""}` : ""}`,
           additional_count: additionalCount,
           amount: Number(sale.net_amount ?? sale.sale_price ?? 0),
@@ -669,7 +674,7 @@ function ReceivableRow({
     <tr className="transition-colors hover:bg-gray-50/70">
       <td className="px-5 py-4">
         <div className="flex flex-wrap items-center gap-2">
-          <p className="font-semibold text-navy-900">{isSaleReceivable(item) ? item.customer_name || "Cliente não informado" : item.description || item.category}</p>
+          <p className="font-semibold text-navy-900">{isSaleReceivable(item) ? item.customer_name || "Cliente avulso" : item.description || item.category}</p>
           {item.sale_status === "reserved" && <Badge variant="yellow">Reservada</Badge>}
         </div>
         <p className="text-xs text-gray-500">
@@ -724,7 +729,7 @@ function ReceivableMobileCard(props: ReceivableItemProps) {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="truncate font-semibold text-navy-900">{isSaleReceivable(item) ? item.customer_name || "Cliente não informado" : item.description || item.category}</p>
+            <p className="truncate font-semibold text-navy-900">{isSaleReceivable(item) ? item.customer_name || "Cliente avulso" : item.description || item.category}</p>
             {item.sale_status === "reserved" && <Badge variant="yellow">Reservada</Badge>}
           </div>
           <p className="text-xs text-gray-500">

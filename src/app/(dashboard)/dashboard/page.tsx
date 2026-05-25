@@ -241,6 +241,11 @@ function relativeTime(dateStr: string): string {
   return `${days} dia${days > 1 ? "s" : ""} atrás`
 }
 
+function saleCustomerLabel(sale: { customer_type?: string | null; walk_in_label?: string | null; customer?: { full_name?: string | null } | null }) {
+  if (sale.customer_type === "walk_in") return sale.walk_in_label || "Cliente avulso"
+  return sale.customer?.full_name || "Cliente"
+}
+
 function daysUntil(dateStr: string): number {
   return Math.ceil((new Date(dateStr).getTime() - Date.now()) / 86400000)
 }
@@ -1248,7 +1253,7 @@ export default function DashboardPage() {
           .limit(6),
 
         (supabase.from("sales") as any)
-          .select("sale_price, created_at, customer:customer_id(full_name), inventory:inventory_id(catalog:catalog_id(model, brand))")
+          .select("sale_price, created_at, customer_type, walk_in_label, customer:customer_id(full_name), inventory:inventory_id(catalog:catalog_id(model, brand))")
           .order("created_at", { ascending: false })
           .limit(6),
 
@@ -1554,7 +1559,7 @@ export default function DashboardPage() {
       setRecentActivity(
         recentSales.map((s: any) => ({
           action: "Venda realizada",
-          detail: `${s.inventory?.catalog?.brand ?? ""} ${s.inventory?.catalog?.model ?? "—"} → ${s.customer?.full_name ?? "Cliente"}`,
+          detail: `${s.inventory?.catalog?.brand ?? ""} ${s.inventory?.catalog?.model ?? "—"} → ${saleCustomerLabel(s)}`,
           time: relativeTime(s.created_at),
         }))
       )
@@ -1587,7 +1592,7 @@ export default function DashboardPage() {
           })),
           recentActivity: recentSales.map((s: any) => ({
             action: "Venda realizada",
-            detail: `${s.inventory?.catalog?.brand ?? ""} ${s.inventory?.catalog?.model ?? "—"} → ${s.customer?.full_name ?? "Cliente"}`,
+            detail: `${s.inventory?.catalog?.brand ?? ""} ${s.inventory?.catalog?.model ?? "—"} → ${saleCustomerLabel(s)}`,
             time: relativeTime(s.created_at),
           })),
           turnoverSummary: nextTurnoverSummary,

@@ -488,7 +488,10 @@ async function getRawInventory(companyId: string, filters: InventoryReportFilter
           s.id AS sale_id,
           s.sale_date::text AS sale_date,
           GREATEST(COALESCE(s.sale_price, 0) - COALESCE(at.upsell_total, 0), 0) AS sale_value,
-          c.full_name AS customer_name
+          CASE
+            WHEN s.customer_type = 'walk_in' THEN COALESCE(NULLIF(s.walk_in_label, ''), 'Cliente avulso')
+            ELSE c.full_name
+          END AS customer_name
         FROM sales s
         LEFT JOIN additional_totals at ON at.sale_id = s.id
         LEFT JOIN customers c ON c.id = s.customer_id
@@ -503,7 +506,10 @@ async function getRawInventory(companyId: string, filters: InventoryReportFilter
           s.id AS sale_id,
           s.sale_date::text AS sale_date,
           COALESCE(sai.sale_price, 0) AS sale_value,
-          c.full_name AS customer_name,
+          CASE
+            WHEN s.customer_type = 'walk_in' THEN COALESCE(NULLIF(s.walk_in_label, ''), 'Cliente avulso')
+            ELSE c.full_name
+          END AS customer_name,
           sai.type AS additional_type,
           sai.name AS additional_item_name
         FROM sales_additional_items sai

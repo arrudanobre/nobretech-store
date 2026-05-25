@@ -17,6 +17,14 @@ function getWarrantyProductName(w: any) {
   return `${catalog.model || ""}${catalog.variant ? ` ${catalog.variant}` : ""}${catalog.storage ? ` ${catalog.storage}` : ""}${catalog.color ? ` ${catalog.color}` : ""}`.trim()
 }
 
+function warrantyCustomerLabel(w: {
+  sales?: { customer_type?: string | null; walk_in_label?: string | null } | null
+  customers?: { full_name?: string | null } | null
+}) {
+  if (w.sales?.customer_type === "walk_in") return w.sales.walk_in_label || "Cliente avulso"
+  return w.customers?.full_name || "Sem cliente cadastrado"
+}
+
 function getWarrantyPeriod(w: any) {
   const start = w.sales?.sale_date || w.sales?.warranty_start || w.start_date
   const months = Number(w.sales?.warranty_months || 0)
@@ -75,7 +83,10 @@ export default function WarrantiesPage() {
             warranty_months,
             warranty_start,
             warranty_end,
-            sale_status
+            sale_status,
+            customer_type,
+            walk_in_label,
+            walk_in_phone
           ),
           inventory (
             id,
@@ -187,9 +198,10 @@ export default function WarrantiesPage() {
 
       const catalog = w.inventory?.product_catalog || {}
       const fullModel = `${catalog.model || "—"}${catalog.variant ? " " + catalog.variant : ""} ${catalog.storage || ""} ${catalog.color || ""}`.trim()
-      const customerName = w.customers?.full_name || "—"
-      const cpf = w.customers?.cpf || "—"
-      const phone = w.customers?.phone || "—"
+      const isWalkInSale = w.sales?.customer_type === "walk_in"
+      const customerName = warrantyCustomerLabel(w)
+      const cpf = isWalkInSale ? "—" : w.customers?.cpf || "—"
+      const phone = isWalkInSale ? w.sales?.walk_in_phone || "—" : w.customers?.phone || "—"
       const imei = w.inventory?.imei || "—"
       const grade = w.inventory?.grade || "—"
       const battery = w.inventory?.battery_health ? `${w.inventory.battery_health}%` : "—"
@@ -429,12 +441,13 @@ export default function WarrantiesPage() {
     try {
       const catalog = w.inventory?.product_catalog || {}
       const productName = `${catalog.model || "Aparelho"}${catalog.variant ? ` ${catalog.variant}` : ""}${catalog.storage ? ` ${catalog.storage}` : ""}${catalog.color ? ` ${catalog.color}` : ""}`.trim()
+      const isWalkInSale = w.sales?.customer_type === "walk_in"
       const documentData: SaleDocumentData = {
         saleId: w.sales?.id || w.id,
         saleDate: w.sales?.sale_date || w.start_date,
-        customerName: w.customers?.full_name || "Cliente",
-        customerCpf: w.customers?.cpf || null,
-        customerPhone: w.customers?.phone || null,
+        customerName: warrantyCustomerLabel(w),
+        customerCpf: isWalkInSale ? null : w.customers?.cpf || null,
+        customerPhone: isWalkInSale ? w.sales?.walk_in_phone || null : w.customers?.phone || null,
         paymentMethod: w.sales?.payment_method || "",
         saleNotes: w.notes || w.inventory?.condition_notes || null,
         item: {
@@ -463,12 +476,13 @@ export default function WarrantiesPage() {
     try {
       const catalog = w.inventory?.product_catalog || {}
       const productName = `${catalog.model || "Aparelho"}${catalog.variant ? ` ${catalog.variant}` : ""}${catalog.storage ? ` ${catalog.storage}` : ""}${catalog.color ? ` ${catalog.color}` : ""}`.trim()
+      const isWalkInSale = w.sales?.customer_type === "walk_in"
       const documentData: SaleDocumentData = {
         saleId: w.sales?.id || w.id,
         saleDate: w.sales?.sale_date || w.start_date,
-        customerName: w.customers?.full_name || "Cliente",
-        customerCpf: w.customers?.cpf || null,
-        customerPhone: w.customers?.phone || null,
+        customerName: warrantyCustomerLabel(w),
+        customerCpf: isWalkInSale ? null : w.customers?.cpf || null,
+        customerPhone: isWalkInSale ? w.sales?.walk_in_phone || null : w.customers?.phone || null,
         paymentMethod: w.sales?.payment_method || "",
         saleNotes: w.notes || w.inventory?.condition_notes || null,
         item: {
@@ -502,7 +516,7 @@ export default function WarrantiesPage() {
       (filter === "expired" && w.status === "expired") ||
       (filter === "voided" && w.status === "voided")
 
-    const customerName = w.customers?.full_name || ""
+    const customerName = warrantyCustomerLabel(w)
     const productModel = w.inventory?.product_catalog?.model || ""
     const matchSearch =
       !search ||
@@ -591,7 +605,7 @@ export default function WarrantiesPage() {
               <tbody className="divide-y divide-gray-50">
                 {filtered.map((w) => {
                   const productName = getWarrantyProductName(w)
-                  const customerName = w.customers?.full_name || "Cliente não identificado"
+                  const customerName = warrantyCustomerLabel(w)
                   const salePrice = Number(w.sales?.sale_price || 0)
                   const statusMeta = getWarrantyStatusMeta(w)
 
@@ -651,7 +665,7 @@ export default function WarrantiesPage() {
           <div className="lg:hidden divide-y divide-gray-50">
             {filtered.map((w) => {
               const productName = getWarrantyProductName(w)
-              const customerName = w.customers?.full_name || "Cliente não identificado"
+              const customerName = warrantyCustomerLabel(w)
               const salePrice = Number(w.sales?.sale_price || 0)
               const statusMeta = getWarrantyStatusMeta(w)
 

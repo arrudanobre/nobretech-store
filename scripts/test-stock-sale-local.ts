@@ -141,6 +141,13 @@ function salePayload(input: {
   ctx: SeedContext
   main: InventorySeed
   total: number
+  customerType?: "identified" | "walk_in"
+  walkInLabel?: string | null
+  walkInPhone?: string | null
+  walkInNotes?: string | null
+  paymentMethod?: string
+  paymentStatus?: string
+  paymentDueDate?: string
   quantity?: number
   selectedVariantId?: string | null
   selectedVariantName?: string | null
@@ -156,20 +163,28 @@ function salePayload(input: {
   }>
 }) {
   const date = today()
+  const customerType = input.customerType || "identified"
+  const paymentMethod = input.paymentMethod || "pix"
+  const paymentStatus = input.paymentStatus || "received"
+  const paymentDueDate = input.paymentDueDate || date
   return {
     inventoryId: input.main.id,
-    customerId: input.ctx.customerId,
-    customerName: `Cliente ${TAG}`,
+    customerType,
+    customerId: customerType === "walk_in" ? null : input.ctx.customerId,
+    customerName: customerType === "walk_in" ? input.walkInLabel || "Cliente avulso" : `Cliente ${TAG}`,
+    walkInLabel: customerType === "walk_in" ? input.walkInLabel || "Cliente avulso" : null,
+    walkInPhone: customerType === "walk_in" ? input.walkInPhone || null : null,
+    walkInNotes: customerType === "walk_in" ? input.walkInNotes || null : null,
     finalTotal: input.total,
     netAmount: input.total,
     cardFeePct: 0,
-    paymentMethod: "pix",
+    paymentMethod,
     warrantyMonths: 3,
     warrantyStart: date,
     warrantyEnd: addMonths(date, 3),
     sourceType: "own",
     saleStatus: "completed",
-    paymentDueDate: date,
+    paymentDueDate,
     saleDate: date,
     saleOrigin: "local_stock_test",
     packagingType: "nobretech_box",
@@ -184,10 +199,10 @@ function salePayload(input: {
     additionalItems: input.additionalItems || [],
     payments: [
       {
-        paymentMethod: "pix",
+        paymentMethod,
         amount: input.total,
-        status: "received",
-        dueDate: date,
+        status: paymentStatus,
+        dueDate: paymentDueDate,
         financialAccountId: input.ctx.accountId,
         notes: TAG,
       },
@@ -340,6 +355,114 @@ async function main() {
     const ctx = await seedBase(client, tracker)
     console.log(`Banco local: ${databaseUrl}`)
     console.log(`Empresa de teste: ${ctx.companyId}`)
+
+    const customersBeforeWalkIn = await scalar<{ count: string }>(
+      client,
+      "SELECT COUNT(*)::text AS count FROM customers WHERE company_id = $1::uuid",
+      [ctx.companyId]
+    )
+    const walkInAccessory = await seedInventory(client, ctx, {
+      name: "Capa Y para iPad",
+      productType: "accessory",
+      quantity: 4,
+      price: 38.49,
+    })
+    const walkInSale = await callSalesPost(
+      ctx,
+      salePayload({
+        ctx,
+        main: walkInAccessory,
+        total: 90,
+        customerType: "walk_in",
+        walkInLabel: "Cliente balcão",
+        walkInPhone: null,
+        walkInNotes: "Venda avulsa local de acessório",
+      })
+    )
+    assert(walkInSale.status === 200 && walkInSale.body.data?.saleId, walkInSale.body.error?.message || `Venda avulsa HTTP ${walkInSale.status}`)
+    const walkInAfterSale = await inventoryState(client, walkInAccessory.id)
+    const walkInPersisted = await scalar<{
+      customer_id: string | null
+      customer_type: string
+      walk_in_label: string | null
+      public_access_enabled: boolean | null
+      public_access_token: string | null
+      payments_count: string
+      transactions_count: string
+      movements_count: string
+      customers_count: string
+      unit_cost: string
+      gross_profit: string
+    }>(
+      client,
+      `SELECT
+         s.customer_id,
+         s.customer_type,
+         s.walk_in_label,
+         s.public_access_enabled,
+         s.public_access_token,
+         (SELECT COUNT(*)::text FROM sale_payments WHERE sale_id = s.id) AS payments_count,
+         (SELECT COUNT(*)::text FROM transactions WHERE source_type = 'sale_payment' AND notes = $2) AS transactions_count,
+         (SELECT COUNT(*)::text FROM financial_account_movements fam JOIN transactions t ON t.id = fam.source_id WHERE fam.source = 'account_receivable' AND t.notes = $2) AS movements_count,
+         (SELECT COUNT(*)::text FROM customers WHERE company_id = s.company_id) AS customers_count,
+         i.purchase_price::text AS unit_cost,
+         (s.sale_price - i.purchase_price)::text AS gross_profit
+       FROM sales s
+       JOIN inventory i ON i.id = s.inventory_id
+       WHERE s.id = $1::uuid`,
+      [walkInSale.body.data.saleId, `sale_id:${walkInSale.body.data.saleId}`]
+    )
+    console.log("DEPOIS venda avulsa acessorio", { inventory: walkInAfterSale, sale: walkInPersisted })
+    assert(walkInPersisted.customer_id === null, "Venda avulsa nao deveria vincular customer_id")
+    assert(walkInPersisted.customer_type === "walk_in", "Venda avulsa nao persistiu customer_type=walk_in")
+    assert(walkInPersisted.walk_in_label === "Cliente balcão", "Venda avulsa nao persistiu label opcional")
+    assert(walkInPersisted.public_access_enabled === false, "Venda avulsa nao deveria habilitar portal publico")
+    assert(walkInPersisted.public_access_token === null, "Venda avulsa nao deveria gerar token publico")
+    assert(Number(walkInAfterSale.quantity) === 3, "Venda avulsa de acessorio nao baixou uma unidade")
+    assert(walkInAfterSale.commercial_status === "available", "Acessorio avulso com saldo deveria continuar disponivel")
+    assert(walkInPersisted.payments_count === "1", "Venda avulsa nao criou sale_payment")
+    assert(walkInPersisted.transactions_count === "1", "Venda avulsa nao criou transaction financeira")
+    assert(walkInPersisted.movements_count === "1", "Venda avulsa pix recebido nao sincronizou extrato")
+    assert(walkInPersisted.customers_count === customersBeforeWalkIn.count, "Venda avulsa criou cliente indevido")
+    assert(Math.abs(Number(walkInPersisted.unit_cost) - 38.49) < 0.01, "Venda avulsa nao preservou custo unitario da Capa Y")
+    assert(Math.abs(Number(walkInPersisted.gross_profit) - 51.51) < 0.01, "Lucro bruto da Capa Y avulsa nao bate com venda-custo")
+
+    const walkInCardAccessory = await seedInventory(client, ctx, {
+      name: "Adaptador USB-C avulso",
+      productType: "accessory",
+      quantity: 2,
+      price: 45,
+    })
+    const walkInCardSale = await callSalesPost(
+      ctx,
+      salePayload({
+        ctx,
+        main: walkInCardAccessory,
+        total: 120,
+        customerType: "walk_in",
+        walkInLabel: "João da rua",
+        paymentMethod: "credit_3x",
+        paymentStatus: "pending",
+        paymentDueDate: addMonths(today(), 1),
+      })
+    )
+    assert(walkInCardSale.status === 200 && walkInCardSale.body.data?.saleId, walkInCardSale.body.error?.message || `Venda avulsa cartao HTTP ${walkInCardSale.status}`)
+    const walkInCardFinance = await scalar<{ payment_status: string; transaction_status: string; transaction_count: string }>(
+      client,
+      `SELECT
+         sp.status AS payment_status,
+         t.status AS transaction_status,
+         (SELECT COUNT(*)::text FROM transactions WHERE notes = $2) AS transaction_count
+       FROM sale_payments sp
+       LEFT JOIN transactions t ON t.source_type = 'sale_payment' AND t.source_id = sp.id
+       WHERE sp.sale_id = $1::uuid
+       LIMIT 1`,
+      [walkInCardSale.body.data.saleId, `sale_id:${walkInCardSale.body.data.saleId}`]
+    )
+    console.log("DEPOIS venda avulsa cartao parcelado", walkInCardFinance)
+    assert(walkInCardFinance.payment_status === "pending", "Cartao avulso deveria manter sale_payment pendente")
+    assert(walkInCardFinance.transaction_status === "pending", "Cartao avulso deveria gerar conta a receber pendente")
+    assert(walkInCardFinance.transaction_count === "1", "Cartao avulso nao deveria duplicar transaction")
 
     const unit = await seedInventory(client, ctx, {
       name: "iPhone unitario",

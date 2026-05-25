@@ -174,8 +174,12 @@ function stockStateForQuantity(quantity: number, emptyStockStatus: "sold" | "res
 
 type ValidatedInput = {
   inventoryId: string
+  customerType: "identified" | "walk_in"
   customerId: string | null
   customerName: string | null
+  walkInLabel: string | null
+  walkInPhone: string | null
+  walkInNotes: string | null
   finalTotal: number
   netAmount: number
   cardFeePct: number
@@ -241,6 +245,13 @@ function parseAndValidateInput(
 
   const productName = safeString(b.productName, 300)
   if (!productName) return { ok: false, error: "productName obrigatório." }
+
+  const rawCustomerType = safeString(b.customerType, 30)
+  const customerType = rawCustomerType === "walk_in" ? "walk_in" : "identified"
+  const customerId = isUuid(b.customerId) ? b.customerId : null
+  if (customerType === "identified" && !customerId) {
+    return { ok: false, error: "Cliente identificado obrigatório." }
+  }
 
   if (!Array.isArray(b.payments) || b.payments.length === 0) {
     return { ok: false, error: "Pagamentos são obrigatórios." }
@@ -322,8 +333,12 @@ function parseAndValidateInput(
     ok: true,
     input: {
       inventoryId,
-      customerId: isUuid(b.customerId) ? b.customerId : null,
+      customerType,
+      customerId: customerType === "walk_in" ? null : customerId,
       customerName: safeString(b.customerName, 300),
+      walkInLabel: safeString(b.walkInLabel, 160),
+      walkInPhone: safeString(b.walkInPhone, 40),
+      walkInNotes: safeString(b.walkInNotes, 500),
       finalTotal,
       netAmount: safeNumber(b.netAmount),
       cardFeePct: safeNumber(b.cardFeePct),
@@ -566,22 +581,28 @@ export async function POST(request: NextRequest) {
     // 4. INSERT sale
     const saleRes = await client.query<{ id: string }>(
       `INSERT INTO sales (
-        company_id, inventory_id, customer_id, sale_price, net_amount, card_fee_pct,
+        company_id, inventory_id, customer_id, customer_type, walk_in_label, walk_in_phone, walk_in_notes,
+        sale_price, net_amount, card_fee_pct,
         payment_method, warranty_months, warranty_start, warranty_end, source_type,
         supplier_name, supplier_cost, sale_status, payment_due_date, sale_date,
         sale_origin, marketing_campaign_id, marketing_lead_id, lead_notes,
         packaging_type, packaging_notes, notes, has_trade_in
       ) VALUES (
-        $1::uuid, $2::uuid, $3, $4, $5, $6,
-        $7, $8, $9::date, $10::date, $11,
-        $12, $13, $14, $15, $16::date,
-        $17, $18, $19, $20,
-        $21, $22, $23, false
+        $1::uuid, $2::uuid, $3, $4, $5, $6, $7,
+        $8, $9, $10,
+        $11, $12, $13::date, $14::date, $15,
+        $16, $17, $18, $19, $20::date,
+        $21, $22, $23, $24,
+        $25, $26, $27, false
       ) RETURNING id`,
       [
         companyId,
         input.inventoryId,
         input.customerId || null,
+        input.customerType,
+        input.customerType === "walk_in" ? input.walkInLabel || "Cliente avulso" : null,
+        input.customerType === "walk_in" ? input.walkInPhone || null : null,
+        input.customerType === "walk_in" ? input.walkInNotes || null : null,
         input.finalTotal,
         input.netAmount,
         input.cardFeePct,

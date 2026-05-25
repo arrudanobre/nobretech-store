@@ -125,6 +125,10 @@ export interface Sale {
   company_id?: string
   inventory_id: string
   customer_id?: string
+  customer_type?: 'identified' | 'walk_in'
+  walk_in_label?: string | null
+  walk_in_phone?: string | null
+  walk_in_notes?: string | null
   sale_price: number
   payment_method: string
   card_fee_pct?: number

@@ -27,6 +27,11 @@ function formatSalePaymentSummary(payments?: SalePayment[] | null, legacyMethod?
   return formatPayment(paymentMethodSummary(payments, legacyMethod))
 }
 
+function saleCustomerLabel(sale: { customer_type?: string | null; walk_in_label?: string | null; customers?: { full_name?: string | null } | null }) {
+  if (sale.customer_type === "walk_in") return sale.walk_in_label || "Cliente avulso"
+  return sale.customers?.full_name || "Sem cliente cadastrado"
+}
+
 function getSaleFeeSettings(sale: any) {
   if (!sale?.payment_method || sale.card_fee_pct === null || sale.card_fee_pct === undefined) {
     return {}
@@ -183,7 +188,7 @@ export default function SalesPage() {
 
   const filtered = sales.filter((s) => {
     const productName = getProductName(s.inventory || {}) || ""
-    const customerName = s.customers?.full_name || ""
+    const customerName = saleCustomerLabel(s)
     return (
       !search ||
       productName.toLowerCase().includes(search.toLowerCase()) ||
@@ -272,7 +277,7 @@ export default function SalesPage() {
                   const statusMeta = getSaleStatusMeta(s.sale_status)
                   const warrantyMeta = getWarrantyBadge(s)
                   const productName = getProductName(s.inventory || {})
-                  const customerName = s.customers?.full_name || "—"
+                  const customerName = saleCustomerLabel(s)
                   const upsellItems = additionalItems.filter((i: any) => i.type === "upsell")
                   const tradeInValue = Number(s.trade_in?.trade_in_value || 0)
                   const suggestedMainValue = Number(s.inventory?.suggested_price || 0) * parseQtyFromNotes(s.notes)
@@ -379,7 +384,7 @@ export default function SalesPage() {
               const statusMeta = getSaleStatusMeta(s.sale_status)
               const warrantyMeta = getWarrantyBadge(s)
               const productName = getProductName(s.inventory || {})
-              const customerName = s.customers?.full_name || "—"
+              const customerName = saleCustomerLabel(s)
               const upsellItems = additionalItems.filter((i: any) => i.type === "upsell")
               const tradeInValue = Number(s.trade_in?.trade_in_value || 0)
               const suggestedMainValue = Number(s.inventory?.suggested_price || 0) * parseQtyFromNotes(s.notes)

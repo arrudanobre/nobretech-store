@@ -685,6 +685,10 @@ function getSaleItemKind(product: {
   return "device"
 }
 
+type SaleCustomerType = "identified" | "walk_in"
+
+const WALK_IN_CUSTOMER_LABEL = "Cliente avulso"
+
 const saleAvailableVariants = (product?: {
   imei?: string | null
   serial_number?: string | null
@@ -726,7 +730,9 @@ function NewSaleContent() {
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedProduct, setSelectedProduct] = useState<InventoryProduct | null>(null)
   const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null)
+  const [saleCustomerType, setSaleCustomerType] = useState<SaleCustomerType>("identified")
   const [customer, setCustomer] = useState({ name: "", cpf: "", phone: "", email: "" })
+  const [walkInCustomer, setWalkInCustomer] = useState({ label: "", phone: "", notes: "" })
   const [customerNotes, setCustomerNotes] = useState("")
   const [customerEditableNotes, setCustomerEditableNotes] = useState("")
   const [existingCustomerFound, setExistingCustomerFound] = useState(false)
@@ -1346,6 +1352,20 @@ function NewSaleContent() {
     setCustomer((prev) => ({ ...prev, [field]: value }))
   }
 
+  const updateWalkInCustomer = (field: keyof typeof walkInCustomer, value: string) => {
+    if (field === "phone") value = formatPhone(value)
+    setWalkInCustomer((prev) => ({ ...prev, [field]: value }))
+  }
+
+  const setSaleType = (type: SaleCustomerType) => {
+    setSaleCustomerType(type)
+    if (type === "walk_in") {
+      setExistingCustomerFound(false)
+      setCustomerNotes("")
+      setCustomerEditableNotes("")
+    }
+  }
+
   // Lookup customer by CPF as they type
   const handleCpfChange = async (value: string) => {
     const formatted = maskCPF(value)
@@ -1500,11 +1520,11 @@ function NewSaleContent() {
       if (!userData?.company_id) throw new Error("Empresa não encontrada")
       const companyId = userData.company_id
 
-      // 1. Create or find customer
+      // 1. Create or find customer only for identified sales.
       let customerId = null
 
       // Search by CPF if available, otherwise search by name+email
-      if (customer.name) {
+      if (saleCustomerType === "identified" && customer.name) {
         let searchQuery
         if (customer.cpf && customer.cpf.length >= 14) {
           searchQuery = ((supabase
@@ -1593,8 +1613,12 @@ function NewSaleContent() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           inventoryId: selectedProduct!.id,
+          customerType: saleCustomerType,
           customerId,
-          customerName: customer.name || null,
+          customerName: saleCustomerType === "identified" ? customer.name || null : walkInCustomer.label.trim() || WALK_IN_CUSTOMER_LABEL,
+          walkInLabel: saleCustomerType === "walk_in" ? walkInCustomer.label.trim() || WALK_IN_CUSTOMER_LABEL : null,
+          walkInPhone: saleCustomerType === "walk_in" ? walkInCustomer.phone || null : null,
+          walkInNotes: saleCustomerType === "walk_in" ? walkInCustomer.notes.trim() || null : null,
           finalTotal,
           netAmount: saleEconomics.storeCashReceives,
           cardFeePct: saleEconomics.feePct || 0,
@@ -1675,9 +1699,9 @@ function NewSaleContent() {
         const documentData: SaleDocumentData = {
           saleId: sale.id,
           saleDate: today,
-          customerName: customer.name,
-          customerCpf: customer.cpf || null,
-          customerPhone: customer.phone || null,
+          customerName: saleCustomerType === "walk_in" ? walkInCustomer.label.trim() || WALK_IN_CUSTOMER_LABEL : customer.name,
+          customerCpf: saleCustomerType === "walk_in" ? null : customer.cpf || null,
+          customerPhone: saleCustomerType === "walk_in" ? walkInCustomer.phone || null : customer.phone || null,
           paymentMethod: selectedPaymentLabel,
           saleNotes: documentNotes || null,
           additionalItems: additionalItemsSummary,
@@ -2146,9 +2170,12 @@ function NewSaleContent() {
         : "Revisar dados"
   const paymentValidationTone = paymentValidation.ok ? "success" : paymentDifference < 0 ? "danger" : "warning"
   const hasPaymentReady = Boolean(selectedProduct && paymentValidation.ok)
+  const isWalkInSale = saleCustomerType === "walk_in"
+  const customerReady = isWalkInSale || Boolean(customer.name && validateCPF(customer.cpf))
+  const customerSummaryLabel = isWalkInSale ? walkInCustomer.label.trim() || WALK_IN_CUSTOMER_LABEL : customer.name || "Cliente identificado pendente"
   const saleSteps = [
     { label: "Produto", done: Boolean(selectedProduct) },
-    { label: "Cliente", done: Boolean(customer.name && validateCPF(customer.cpf)) },
+    { label: "Cliente", done: customerReady },
     { label: "Itens e adicionais", done: Boolean(selectedProduct) },
     { label: "Pagamento", done: hasPaymentReady },
     { label: "Revisão", done: false },
@@ -2157,7 +2184,7 @@ function NewSaleContent() {
   const normalizedCurrentStep = currentStepIndex === -1 ? saleSteps.length - 1 : currentStepIndex
   const pendingChecklist = [
     { label: "Selecionar produto principal", done: Boolean(selectedProduct) },
-    { label: "Informar cliente válido", done: Boolean(customer.name && validateCPF(customer.cpf)) },
+    { label: isWalkInSale ? "Confirmar venda avulsa" : "Informar cliente válido", done: customerReady },
     { label: "Fechar pagamentos", done: hasPaymentReady },
     ...(selectedProduct?.type === "supplier" ? [{ label: "Informar custo do fornecedor", done: Boolean(supplierCostInput) }] : []),
     ...(!paymentValidation.ok ? [{ label: paymentValidation.message || "Revisar pagamentos", done: false }] : []),
@@ -2169,8 +2196,7 @@ function NewSaleContent() {
 
   const canFinishSale = Boolean(
     selectedProduct &&
-    customer.name &&
-    validateCPF(customer.cpf) &&
+    customerReady &&
     salePrice &&
     hasPaymentReady &&
     (selectedProduct?.type !== "supplier" || supplierCostInput) &&
@@ -2195,6 +2221,9 @@ function NewSaleContent() {
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant={isReservation ? "yellow" : "green"} dot>
               {isReservation ? "Reserva" : "Venda imediata"}
+            </Badge>
+            <Badge variant={isWalkInSale ? "yellow" : "blue"} dot>
+              {isWalkInSale ? "Venda avulsa" : customerSummaryLabel}
             </Badge>
             {hasTradeIn && <Badge variant="blue" dot>Trade-in ativo</Badge>}
             {!paymentValidation.ok && customerAmountDue > 0 && <Badge variant="gray" dot>Pagamento pendente</Badge>}
@@ -2383,37 +2412,99 @@ function NewSaleContent() {
             )}
           </SectionCard>
 
-          <SectionCard eyebrow="2. Cliente" title="Dados do cliente" description="CPF válido continua sendo usado para localizar ou cadastrar o cliente.">
-            {existingCustomerFound && (
-              <div className="mb-3 rounded-xl border border-success-500/20 bg-success-100/20 p-3 text-sm font-medium text-green-800">
-                Cliente encontrado e preenchido automaticamente.
-              </div>
-            )}
-            <div className="grid gap-3 md:grid-cols-2">
-              <Input label="Nome completo" value={customer.name} onChange={(event) => updateCustomer("name", event.target.value)} />
-              <Input
-                label="CPF"
-                value={customer.cpf}
-                onChange={(event) => handleCpfChange(event.target.value)}
-                error={customer.cpf.length >= 14 && !validateCPF(customer.cpf) ? "CPF inválido" : undefined}
-              />
-              <Input label="Telefone" value={customer.phone} onChange={(event) => updateCustomer("phone", event.target.value)} />
-              <Input label="E-mail" type="email" value={customer.email} onChange={(event) => updateCustomer("email", event.target.value)} />
+          <SectionCard eyebrow="2. Cliente" title="Tipo de venda" description="Venda identificada mantém cadastro, CPF, portal e garantia como hoje. Venda avulsa registra a operação sem criar cliente fake.">
+            <div className="grid gap-2 rounded-2xl border border-gray-100 bg-surface p-2 sm:grid-cols-2">
+              {([
+                { value: "identified", label: "Cliente identificado", detail: "Usa CPF/cadastro e mantém portal do cliente." },
+                { value: "walk_in", label: "Venda avulsa", detail: "Sem CPF obrigatório e sem cadastro de cliente." },
+              ] as Array<{ value: SaleCustomerType; label: string; detail: string }>).map((option) => {
+                const active = saleCustomerType === option.value
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setSaleType(option.value)}
+                    className={`rounded-xl border px-3 py-3 text-left transition ${
+                      active
+                        ? "border-royal-500 bg-white shadow-sm ring-2 ring-royal-500/10"
+                        : "border-transparent bg-transparent hover:bg-white/70"
+                    }`}
+                  >
+                    <span className="block text-sm font-bold text-navy-900">{option.label}</span>
+                    <span className="mt-0.5 block text-xs text-gray-500">{option.detail}</span>
+                  </button>
+                )
+              })}
             </div>
-            {customerNotes && (
-              <div className="mt-3 rounded-xl border border-royal-500/10 bg-royal-100/20 p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-royal-600">Observações do cliente</p>
-                <p className="text-sm text-navy-900">{customerNotes}</p>
+
+            {saleCustomerType === "identified" ? (
+              <>
+                {existingCustomerFound && (
+                  <div className="mt-3 rounded-xl border border-success-500/20 bg-success-100/20 p-3 text-sm font-medium text-green-800">
+                    Cliente encontrado e preenchido automaticamente.
+                  </div>
+                )}
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <Input label="Nome completo" value={customer.name} onChange={(event) => updateCustomer("name", event.target.value)} />
+                  <Input
+                    label="CPF"
+                    value={customer.cpf}
+                    onChange={(event) => handleCpfChange(event.target.value)}
+                    error={customer.cpf.length >= 14 && !validateCPF(customer.cpf) ? "CPF inválido" : undefined}
+                  />
+                  <Input label="Telefone" value={customer.phone} onChange={(event) => updateCustomer("phone", event.target.value)} />
+                  <Input label="E-mail" type="email" value={customer.email} onChange={(event) => updateCustomer("email", event.target.value)} />
+                </div>
+                {customerNotes && (
+                  <div className="mt-3 rounded-xl border border-royal-500/10 bg-royal-100/20 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-royal-600">Observações do cliente</p>
+                    <p className="text-sm text-navy-900">{customerNotes}</p>
+                  </div>
+                )}
+                {!existingCustomerFound && customer.cpf.length >= 14 && (
+                  <Input
+                    label="Observações do cliente"
+                    placeholder="Ex: prefere WhatsApp, histórico de compra..."
+                    value={customerEditableNotes}
+                    onChange={(event) => setCustomerEditableNotes(event.target.value)}
+                    className="mt-3"
+                  />
+                )}
+              </>
+            ) : (
+              <div className="mt-3 space-y-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
+                <div>
+                  <p className="text-sm font-bold text-amber-950">Cliente avulso</p>
+                  <p className="mt-1 text-sm text-amber-900">
+                    Use venda avulsa quando não houver necessidade de identificar o cliente. A venda será registrada oficialmente, com baixa no estoque e financeiro, mas sem cadastro de cliente.
+                  </p>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Input
+                    label="Nome/apelido opcional"
+                    placeholder="Cliente avulso"
+                    value={walkInCustomer.label}
+                    onChange={(event) => updateWalkInCustomer("label", event.target.value)}
+                  />
+                  <Input
+                    label="Telefone opcional"
+                    placeholder="Telefone, se quiser registrar"
+                    value={walkInCustomer.phone}
+                    onChange={(event) => updateWalkInCustomer("phone", event.target.value)}
+                  />
+                </div>
+                <Textarea
+                  label="Observação opcional"
+                  placeholder="Ex.: venda rápida de acessório no balcão/rua"
+                  value={walkInCustomer.notes}
+                  onChange={(event) => updateWalkInCustomer("notes", event.target.value)}
+                />
+                {selectedProduct && getSaleItemKind(selectedProduct) === "device" && (
+                  <div className="rounded-xl border border-amber-300 bg-white/70 p-3 text-sm text-amber-950">
+                    Para aparelho, cliente identificado é recomendado por garantia, procedência e portal. Continue como venda avulsa apenas se essa for a decisão operacional.
+                  </div>
+                )}
               </div>
-            )}
-            {!existingCustomerFound && customer.cpf.length >= 14 && (
-              <Input
-                label="Observações do cliente"
-                placeholder="Ex: prefere WhatsApp, histórico de compra..."
-                value={customerEditableNotes}
-                onChange={(event) => setCustomerEditableNotes(event.target.value)}
-                className="mt-3"
-              />
             )}
           </SectionCard>
 

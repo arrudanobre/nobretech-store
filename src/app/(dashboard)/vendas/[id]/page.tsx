@@ -76,6 +76,21 @@ const packagingLabel = (type?: string | null, notes?: string | null) => {
   return "Não informado"
 }
 
+type SaleCustomerSnapshot = {
+  customer_type?: string | null
+  walk_in_label?: string | null
+  walk_in_phone?: string | null
+}
+
+type SaleCustomerRecord = {
+  full_name?: string | null
+  phone?: string | null
+}
+
+const walkInLabel = (sale?: SaleCustomerSnapshot | null) => sale?.walk_in_label || "Cliente avulso"
+const customerDisplayName = (sale?: SaleCustomerSnapshot | null, customer?: SaleCustomerRecord | null) => sale?.customer_type === "walk_in" ? walkInLabel(sale) : customer?.full_name || "Sem cliente cadastrado"
+const customerDisplayPhone = (sale?: SaleCustomerSnapshot | null, customer?: SaleCustomerRecord | null) => sale?.customer_type === "walk_in" ? sale?.walk_in_phone || null : customer?.phone || null
+
 const auditField = (data: unknown, key: string) => {
   if (!data || typeof data !== "object") return undefined
   return (data as Record<string, unknown>)[key]
@@ -404,6 +419,9 @@ export default function SaleDetailPage() {
   const publicPurchaseUrl = sale?.public_access_token
     ? buildPublicPurchaseUrl(sale.public_access_token)
     : ""
+  const isWalkInSale = sale?.customer_type === "walk_in"
+  const displayCustomerName = customerDisplayName(sale, customer)
+  const displayCustomerPhone = customerDisplayPhone(sale, customer)
   const paymentSummary = salePaymentStatusSummary(salePayments)
   const paymentDocumentLines = salePayments
     .filter((payment) => payment.status !== "cancelled")
@@ -513,9 +531,9 @@ export default function SaleDetailPage() {
       const documentData: SaleDocumentData = {
         saleId: sale?.id || id,
         saleDate: sale?.sale_date,
-        customerName: customer?.full_name || "Cliente",
-        customerCpf: customer?.cpf || null,
-        customerPhone: customer?.phone || null,
+        customerName: displayCustomerName,
+        customerCpf: isWalkInSale ? null : customer?.cpf || null,
+        customerPhone: displayCustomerPhone,
         paymentMethod: paymentLabel(),
         payments: paymentDocumentLines,
         saleNotes: sale?.notes || product?.condition_notes || null,
@@ -586,9 +604,9 @@ export default function SaleDetailPage() {
       await generateReceiptPDF({
         saleId: sale?.id || id,
         saleDate: sale?.sale_date,
-        customerName: customer?.full_name || "Cliente",
-        customerCpf: customer?.cpf || null,
-        customerPhone: customer?.phone || null,
+        customerName: displayCustomerName,
+        customerCpf: isWalkInSale ? null : customer?.cpf || null,
+        customerPhone: displayCustomerPhone,
         paymentMethod: paymentLabel(),
         payments: paymentDocumentLines,
         saleNotes: sale?.notes || product?.condition_notes || null,
@@ -640,9 +658,9 @@ export default function SaleDetailPage() {
       await generateWarrantyTermDocument({
         saleId: sale?.id || id,
         saleDate: sale?.sale_date,
-        customerName: customer?.full_name || "Cliente",
-        customerCpf: customer?.cpf || null,
-        customerPhone: customer?.phone || null,
+        customerName: displayCustomerName,
+        customerCpf: isWalkInSale ? null : customer?.cpf || null,
+        customerPhone: displayCustomerPhone,
         paymentMethod: paymentLabel(),
         saleNotes: sale?.notes || null,
         additionalItems: null,
@@ -750,8 +768,8 @@ export default function SaleDetailPage() {
         if (product?.condition_notes) drawRow("Observações:", product.condition_notes, false)
 
         drawSection("Dados da Venda")
-        drawRow("Cliente:", customer?.full_name || "—")
-        drawRow("CPF:", customer?.cpf || "—")
+        drawRow("Cliente:", displayCustomerName)
+        if (!isWalkInSale && customer?.cpf) drawRow("CPF:", customer.cpf)
         drawRow("Preço:", formatBRL(sale?.sale_price))
         drawRow("Pagamento:", paymentLabel())
         drawRow("Data:", formatDate(sale?.sale_date))
@@ -815,13 +833,13 @@ export default function SaleDetailPage() {
         doc.text("NobreTech Store", M + 10, y + 17)
 
         doc.line(W - M - 60, y + 12, W - M - 20, y + 12)
-        doc.text(customer?.full_name || "Cliente", W / 2 + 10, y + 17, { align: "center" })
+        doc.text(displayCustomerName, W / 2 + 10, y + 17, { align: "center" })
 
         doc.setFontSize(8)
         doc.setTextColor(150, 150, 150)
         doc.text(`Emitido em: ${new Date().toLocaleString("pt-BR")}`, M, 285)
 
-        doc.save(`Laudo_Inspecao_${customer?.full_name || "cliente"}.pdf`)
+        doc.save(`Laudo_Inspecao_${displayCustomerName || "cliente"}.pdf`)
       }
 
       if (type === "warranty") {
@@ -845,9 +863,9 @@ export default function SaleDetailPage() {
 
         y += 4
         drawSection("Proprietário")
-        drawRow("Nome:", customer?.full_name || "—")
-        drawRow("CPF:", customer?.cpf || "—")
-        if (customer?.phone) drawRow("Telefone:", customer.phone)
+        drawRow("Nome:", displayCustomerName)
+        if (!isWalkInSale && customer?.cpf) drawRow("CPF:", customer.cpf)
+        if (displayCustomerPhone) drawRow("Telefone:", displayCustomerPhone)
 
         y += 4
         drawSection("Período de Cobertura")
@@ -938,9 +956,9 @@ export default function SaleDetailPage() {
 
         y += 12
         doc.line(M + 10, y, M + 75, y); doc.text("NobreTech Store", M + 10, y + 5)
-        doc.line(W - M - 70, y, W - M - 20, y); doc.text(customer?.full_name || "Cliente", W / 2 + 5, y + 5, { align: "center" })
+        doc.line(W - M - 70, y, W - M - 20, y); doc.text(displayCustomerName, W / 2 + 5, y + 5, { align: "center" })
 
-        doc.save(`Certificado_Garantia_${customer?.full_name || "cliente"}.pdf`)
+        doc.save(`Certificado_Garantia_${displayCustomerName || "cliente"}.pdf`)
       }
 
       toast({ title: "Arquivo gerado!", type: "success" })
@@ -1164,7 +1182,7 @@ export default function SaleDetailPage() {
   const failCount = checklist.filter((i: any) => i.status === "fail").length
   const customerLabelData: VerifiedPurchaseCustomerLabelData = {
     publicUrl: publicPurchaseUrl,
-    customerFirstName: getFirstName(customer?.full_name),
+    customerFirstName: getFirstName(displayCustomerName),
     purchaseCode: buildPurchaseCode(sale?.id || id),
     pin: normalizePin(sale?.public_access_pin),
     warrantyEnd: sale?.warranty_end || null,
@@ -1345,7 +1363,7 @@ export default function SaleDetailPage() {
         )}
       </div>
 
-      {isCompletedSale && (
+      {isCompletedSale && !isWalkInSale && (
         <div className="bg-card rounded-2xl border border-gray-100 p-4 sm:p-6 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="flex gap-3">
@@ -1770,12 +1788,21 @@ export default function SaleDetailPage() {
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
-            <p className="text-sm font-semibold text-navy-900">{customer?.full_name || "—"}</p>
-            <p className="text-xs text-gray-500">{customer?.phone || "—"}</p>
+            <p className="text-sm font-semibold text-navy-900">{displayCustomerName}</p>
+            <p className="text-xs text-gray-500">{displayCustomerPhone || "Sem telefone cadastrado"}</p>
           </div>
           <div>
-            <p className="text-xs text-gray-500">CPF: {customer?.cpf || "—"}</p>
-            <p className="text-xs text-gray-500">{customer?.email || "—"}</p>
+            {isWalkInSale ? (
+              <>
+                <p className="text-xs text-gray-500">Venda avulsa</p>
+                <p className="text-xs text-gray-500">{sale.walk_in_notes || "Sem cliente cadastrado"}</p>
+              </>
+            ) : (
+              <>
+                <p className="text-xs text-gray-500">CPF: {customer?.cpf || "—"}</p>
+                <p className="text-xs text-gray-500">{customer?.email || "—"}</p>
+              </>
+            )}
           </div>
           <div className="rounded-xl bg-surface p-3">
             <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Origem do cliente</p>

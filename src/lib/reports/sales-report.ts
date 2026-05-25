@@ -157,6 +157,8 @@ type RawSaleRow = {
   payment_due_date: string | null
   notes: string | null
   customer_name: string | null
+  customer_type?: string | null
+  walk_in_label?: string | null
   imei: string | null
   imei2: string | null
   serial_number: string | null
@@ -630,7 +632,12 @@ async function getRawSales(companyId: string, filters: SalesReportFilters) {
         tipc.color AS trade_in_color,
         fs.payment_due_date::text,
         fs.notes,
-        c.full_name AS customer_name,
+        CASE
+          WHEN fs.customer_type = 'walk_in' THEN COALESCE(NULLIF(fs.walk_in_label, ''), 'Cliente avulso')
+          ELSE c.full_name
+        END AS customer_name,
+        fs.customer_type,
+        fs.walk_in_label,
         i.imei,
         i.imei2,
         i.serial_number,

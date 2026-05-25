@@ -467,6 +467,10 @@ export interface Database {
           company_id: string | null;
           inventory_id: string;
           customer_id: string | null;
+          customer_type: string;
+          walk_in_label: string | null;
+          walk_in_phone: string | null;
+          walk_in_notes: string | null;
           sale_price: number;
           payment_method: string | null;
           card_fee_pct: number | null;
@@ -495,6 +499,10 @@ export interface Database {
           company_id?: string | null;
           inventory_id: string;
           customer_id?: string | null;
+          customer_type?: string;
+          walk_in_label?: string | null;
+          walk_in_phone?: string | null;
+          walk_in_notes?: string | null;
           sale_price: number;
           payment_method?: string | null;
           card_fee_pct?: number | null;
@@ -523,6 +531,10 @@ export interface Database {
           company_id?: string | null;
           inventory_id?: string;
           customer_id?: string | null;
+          customer_type?: string;
+          walk_in_label?: string | null;
+          walk_in_phone?: string | null;
+          walk_in_notes?: string | null;
           sale_price?: number;
           payment_method?: string | null;
           card_fee_pct?: number | null;
