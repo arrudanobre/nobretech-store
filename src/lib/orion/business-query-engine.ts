@@ -1,7 +1,18 @@
 import "server-only"
 
 import { pool } from "@/lib/db"
-import { classifyTransaction } from "@/lib/financial/money-classification-engine"
+import {
+  isCanceledTransaction,
+  isInventoryAssetTransaction,
+  isOwnerCapitalReimbursement,
+  isOwnerEquityMovement,
+  isPendingTransaction,
+  isProfitWithdrawal,
+  isReconciledTransaction,
+  isSalePaymentTransaction,
+  isValidCommercialSale,
+  shouldAffectOperationalDre,
+} from "@/lib/finance/finance-source-of-truth"
 import type { OrionFinancialOperationalContext } from "@/lib/orion/financial-context-consumer"
 import { buildFinancialDecisionResponse, buildFinancialTraceabilityResponse, formatFinancialDecisionResponse } from "@/lib/orion/financial-decision-response"
 import { isFinancialReinvestmentDecisionRequest, isFinancialTraceabilityRequest, isFinancialWithdrawalDecisionRequest } from "@/lib/orion/financial-traceability-router"
@@ -680,25 +691,27 @@ async function buildSalesContext(companyId: string, toolsUsed: OrionBusinessTool
     additionalBySale.set(item.sale_id, current)
   }
 
-  const sales: SaleContextItem[] = result.rows.map((sale) => {
-    const totals = calcSaleTotals({
-      salePrice: sale.sale_price,
-      mainCost: sale.purchase_price,
-      supplierCost: sale.supplier_cost,
-      qty: parseQtyFromNotes(sale.notes),
-      additionalItems: additionalBySale.get(sale.id) || [],
+  const sales: SaleContextItem[] = result.rows
+    .filter((sale) => isValidCommercialSale({ sale_status: sale.sale_status || "completed" }))
+    .map((sale) => {
+      const totals = calcSaleTotals({
+        salePrice: sale.sale_price,
+        mainCost: sale.purchase_price,
+        supplierCost: sale.supplier_cost,
+        qty: parseQtyFromNotes(sale.notes),
+        additionalItems: additionalBySale.get(sale.id) || [],
+      })
+      return {
+        id: sale.id,
+        date: String(sale.sale_date),
+        product: productLabel(sale.product_category, sale.product_name, sale.color),
+        revenue: round(number(sale.sale_price)),
+        profit: round(totals.lucroTotal),
+        marginPct: round(totals.margemTotal, 1),
+        paymentMethod: sale.payment_method,
+        status: String(sale.sale_status || "completed"),
+      }
     })
-    return {
-      id: sale.id,
-      date: String(sale.sale_date),
-      product: productLabel(sale.product_category, sale.product_name, sale.color),
-      revenue: round(number(sale.sale_price)),
-      profit: round(totals.lucroTotal),
-      marginPct: round(totals.margemTotal, 1),
-      paymentMethod: sale.payment_method,
-      status: String(sale.sale_status || "completed"),
-    }
-  })
 
   const productProfit = new Map<string, { revenue: number; profit: number; count: number }>()
   for (const sale of sales) {
@@ -868,16 +881,18 @@ async function buildFinancialContext(companyId: string, toolsUsed: OrionBusiness
   const transactions = result.rows.map((tx) => ({
     ...tx,
     amount: number(tx.amount),
-  }))
-  const classifyTx = (tx: TransactionContextItem) => classifyTransaction(tx)
-  const isOwnerEquity = (tx: TransactionContextItem) => classifyTx(tx).affectsOwnerEquity
+  })).filter((tx) => !isCanceledTransaction(tx))
   const isOperational = (tx: TransactionContextItem) => {
-    const classification = classifyTx(tx)
-    return classification.affectsCash
-      && !["inventory_purchase", "owner_contribution", "owner_withdrawal", "owner_capital_return", "owner_profit_withdrawal", "transfer", "adjustment", "reversal", "receivable", "payable", "unknown"].includes(classification.movementType)
+    if (!isReconciledTransaction(tx) || isPendingTransaction(tx)) return false
+    if (isInventoryAssetTransaction(tx) || isOwnerEquityMovement(tx)) return false
+    if (isProfitWithdrawal(tx) || isOwnerCapitalReimbursement(tx)) return false
+    return shouldAffectOperationalDre(tx) || isSalePaymentTransaction(tx)
   }
-  const reconciled = transactions.filter((tx) => tx.status === "reconciled")
-  const dreTransactions = transactions.filter((tx) => tx.statementSection === "dre")
+  const reconciled = transactions.filter((tx) => isReconciledTransaction(tx))
+  const dreTransactions = transactions.filter((tx) => tx.statementSection === "dre"
+    && shouldAffectOperationalDre(tx)
+    && !isInventoryAssetTransaction(tx)
+    && !isOwnerEquityMovement(tx))
 
   return {
     cash: {
@@ -905,7 +920,7 @@ async function buildFinancialContext(companyId: string, toolsUsed: OrionBusiness
       income: round(reconciled.filter((tx) => tx.type === "income").reduce((sum, tx) => sum + tx.amount, 0)),
       expense: round(reconciled.filter((tx) => tx.type === "expense").reduce((sum, tx) => sum + tx.amount, 0)),
       operational: round(reconciled.filter(isOperational).reduce((sum, tx) => sum + (tx.type === "income" ? tx.amount : -tx.amount), 0)),
-      ownerEquity: round(reconciled.filter(isOwnerEquity).reduce((sum, tx) => sum + (tx.type === "income" ? tx.amount : -tx.amount), 0)),
+      ownerEquity: round(reconciled.filter((tx) => isOwnerEquityMovement(tx)).reduce((sum, tx) => sum + (tx.type === "income" ? tx.amount : -tx.amount), 0)),
     },
     dre: {
       revenue: round(dreTransactions.filter((tx) => tx.financialType === "revenue").reduce((sum, tx) => sum + tx.amount, 0)),
