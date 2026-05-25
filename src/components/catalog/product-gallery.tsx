@@ -21,8 +21,25 @@ export function ProductGallery({ images, productTitle }: Props) {
   const [lightboxIndex, setLightboxIndex] = useState(0)
   const [zoomed, setZoomed] = useState(false)
   const [zoomOrigin, setZoomOrigin] = useState({ x: 50, y: 50 })
+  const [hoverCapable, setHoverCapable] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const [hoverOrigin, setHoverOrigin] = useState({ x: 50, y: 50 })
   const stripRef = useRef<HTMLDivElement | null>(null)
   const active = safeImages[activeIndex]
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return
+    const mq = window.matchMedia("(hover: hover) and (pointer: fine)")
+    const update = () => setHoverCapable(mq.matches)
+    update()
+    mq.addEventListener("change", update)
+    return () => mq.removeEventListener("change", update)
+  }, [])
+
+  function resetHover() {
+    setHovered(false)
+    setHoverOrigin({ x: 50, y: 50 })
+  }
 
   function handleScroll(event: React.UIEvent<HTMLDivElement>) {
     const target = event.currentTarget
@@ -31,6 +48,7 @@ export function ProductGallery({ images, productTitle }: Props) {
     const next = Math.round(target.scrollLeft / slideWidth)
     if (next !== activeIndex && next >= 0 && next < safeImages.length) {
       setActiveIndex(next)
+      resetHover()
     }
   }
 
@@ -38,11 +56,13 @@ export function ProductGallery({ images, productTitle }: Props) {
     const node = stripRef.current
     if (!node) {
       setActiveIndex(index)
+      resetHover()
       return
     }
     const slideWidth = node.clientWidth
     node.scrollTo({ left: slideWidth * index, behavior: "smooth" })
     setActiveIndex(index)
+    resetHover()
   }
 
   function previousIndex(index = activeIndex) {
@@ -68,6 +88,16 @@ export function ProductGallery({ images, productTitle }: Props) {
     const rect = event.currentTarget.getBoundingClientRect()
     if (rect.width <= 0 || rect.height <= 0) return
     setZoomOrigin({
+      x: Math.min(100, Math.max(0, ((event.clientX - rect.left) / rect.width) * 100)),
+      y: Math.min(100, Math.max(0, ((event.clientY - rect.top) / rect.height) * 100)),
+    })
+  }
+
+  function updateHoverOrigin(event: React.PointerEvent<HTMLElement>) {
+    if (event.pointerType !== "mouse") return
+    const rect = event.currentTarget.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return
+    setHoverOrigin({
       x: Math.min(100, Math.max(0, ((event.clientX - rect.left) / rect.width) * 100)),
       y: Math.min(100, Math.max(0, ((event.clientY - rect.top) / rect.height) * 100)),
     })
@@ -119,17 +149,29 @@ export function ProductGallery({ images, productTitle }: Props) {
           >
             {safeImages.map((image, index) => {
               const isReal = image.kind === "real_photo"
+              const canZoom = hoverCapable && index === activeIndex
+              const isZooming = canZoom && hovered
               return (
                 <div
                   key={`${image.url}-${index}`}
                   className="relative aspect-square w-full max-w-full shrink-0 snap-center p-2.5 sm:p-3"
                 >
                   <div
+                    onPointerEnter={canZoom ? (event) => {
+                      if (event.pointerType !== "mouse") return
+                      setHovered(true)
+                      updateHoverOrigin(event)
+                    } : undefined}
+                    onPointerLeave={canZoom ? () => {
+                      setHovered(false)
+                      setHoverOrigin({ x: 50, y: 50 })
+                    } : undefined}
+                    onPointerMove={canZoom ? updateHoverOrigin : undefined}
                     className={`relative h-full w-full overflow-hidden rounded-[24px] border shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] ${
                       isReal
                         ? "border-white/[0.08] bg-[radial-gradient(circle_at_50%_22%,rgba(255,255,255,0.08),transparent_44%),linear-gradient(135deg,rgba(255,255,255,0.05),rgba(255,255,255,0.015),rgba(0,0,0,0.18))]"
                         : "border-white/70 bg-[radial-gradient(circle_at_center,rgba(255,255,255,1),rgba(245,245,245,0.92)_62%,rgba(214,168,79,0.08))]"
-                    }`}
+                    } ${canZoom ? "cursor-zoom-in" : ""}`}
                   >
                     <Image
                       src={image.url}
@@ -138,8 +180,17 @@ export function ProductGallery({ images, productTitle }: Props) {
                       sizes="(max-width: 640px) 100vw, 50vw"
                       priority={index === 0}
                       unoptimized={shouldBypassImageOptimization(image)}
-                      className="object-contain p-7 drop-shadow-[0_20px_42px_rgba(0,0,0,0.25)] sm:p-10"
+                      className="object-contain p-7 drop-shadow-[0_20px_42px_rgba(0,0,0,0.25)] transition-transform duration-150 ease-out will-change-transform sm:p-10"
+                      style={canZoom ? {
+                        transform: isZooming ? "scale(2.15)" : "scale(1)",
+                        transformOrigin: `${hoverOrigin.x}% ${hoverOrigin.y}%`,
+                      } : undefined}
                     />
+                    {isZooming ? (
+                      <div className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-white/15 bg-black/55 px-3 py-1 text-[10px] font-medium uppercase tracking-[0.18em] text-zinc-200 backdrop-blur">
+                        Mova o mouse para ver detalhes
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               )
@@ -165,15 +216,23 @@ export function ProductGallery({ images, productTitle }: Props) {
               </button>
             </>
           ) : null}
-          <button
-            type="button"
-            onClick={() => openLightbox(activeIndex)}
-            className="absolute bottom-3 right-3 z-10 inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-black/60 px-3 py-1.5 text-[11px] font-medium text-zinc-100 shadow-[0_12px_30px_rgba(0,0,0,0.35)] backdrop-blur transition hover:border-[#D6A84F]/45 hover:text-[#F4D57A]"
-            aria-label="Ampliar foto"
-          >
-            <MagnifyingGlassPlus className="h-3.5 w-3.5" weight="bold" />
-            Ampliar
-          </button>
+          {!hoverCapable ? (
+            <button
+              type="button"
+              onClick={() => openLightbox(activeIndex)}
+              className="absolute bottom-3 right-3 z-10 inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-black/60 px-3 py-1.5 text-[11px] font-medium text-zinc-100 shadow-[0_12px_30px_rgba(0,0,0,0.35)] backdrop-blur transition hover:border-[#D6A84F]/45 hover:text-[#F4D57A]"
+              aria-label="Ampliar foto"
+            >
+              <MagnifyingGlassPlus className="h-3.5 w-3.5" weight="bold" />
+              Ampliar
+            </button>
+          ) : null}
+          {hoverCapable && !hovered ? (
+            <div className="pointer-events-none absolute bottom-3 right-3 z-10 inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-black/45 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.18em] text-zinc-300 backdrop-blur">
+              <MagnifyingGlassPlus className="h-3 w-3" weight="bold" />
+              Passe o mouse
+            </div>
+          ) : null}
         </div>
         <div className="pointer-events-none absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-black/55 px-2.5 py-1 text-[10px] font-medium text-zinc-100 backdrop-blur">
           {isRealActive ? (
