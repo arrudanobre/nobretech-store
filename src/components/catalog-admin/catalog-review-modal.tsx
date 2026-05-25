@@ -81,9 +81,9 @@ const SECTIONS: ReviewSection[] = [
     notePlaceholder: "Ex.: saude 86%, bateria trocada, peca original...",
     weight: 1.5,
     options: [
-      { id: "excellent", label: "Excelente", score: 9.2 },
-      { id: "good", label: "Boa", score: 8.5 },
-      { id: "ok", label: "Aceitável", score: 7.5 },
+      { id: "excellent", label: "Excelente", score: 10 },
+      { id: "good", label: "Boa", score: 9 },
+      { id: "ok", label: "Aceitável", score: 8 },
       { id: "attention", label: "Precisa atenção", score: 6.5, tone: "warning" },
       { id: "unknown", label: "Não informado", score: null, tone: "warning" },
     ],
@@ -189,9 +189,8 @@ type Props = {
 function scoreFromBatteryHealth(value: number | null): number | null {
   if (value == null) return null
   if (value >= 95) return 10
-  if (value >= 90) return 9.0
-  if (value >= 85) return 8.4
-  if (value >= 80) return 7.8
+  if (value >= 90) return 9
+  if (value >= 80) return 8
   return 6.5
 }
 

@@ -13,6 +13,7 @@ import {
 } from "@/lib/catalog/pricing"
 import { loadCatalogPaymentSettings } from "@/lib/catalog/payment-settings"
 import { getCatalogWarrantyLabel } from "@/lib/catalog/warranty"
+import { computeOverallScoreFromReview } from "@/lib/catalog/readiness"
 import { defaultMessageForProduct } from "@/lib/catalog/whatsapp"
 import type {
   PublicCatalogCategorySlug,
@@ -280,6 +281,17 @@ function buildHighlights(input: { grade: string | null; warrantyLabel: string; a
   return ["Fotos reais", input.warrantyLabel, input.availabilityLabel]
 }
 
+// Legacy reviews saved per-item scores below the option's intended max (e.g.
+// 9.5 instead of 10 for "Funcionando normalmente"). Snap saved scores at or
+// above the legacy cap up to a clean 10 so the UI matches the chosen option.
+const ITEM_MAX_SNAP_THRESHOLD = 9.5
+
+function normalizeItemScore(value: number | null | undefined): number | null {
+  if (value == null) return null
+  if (value >= ITEM_MAX_SNAP_THRESHOLD) return 10
+  return Math.round(value * 10) / 10
+}
+
 function reviewToConditionItems(
   row: InventoryRow,
   isSealed: boolean,
@@ -297,7 +309,8 @@ function reviewToConditionItems(
   if (!row.review_id) return []
   const items: PublicCatalogConditionItem[] = []
   const push = (key: string, label: string, score: unknown, notes: string | null) => {
-    const value = priceToNumberOrNull(score as string | number | null)
+    const rawValue = priceToNumberOrNull(score as string | number | null)
+    const value = normalizeItemScore(rawValue)
     if (value == null && !notes) return
     const stateLabel = value == null ? undefined : conditionStateLabel(key, value)
     const cleanNotes = cleanConditionNotes(notes, stateLabel)
@@ -319,6 +332,21 @@ function reviewToConditionItems(
   push("connectivity", "Conectividade", row.connectivity_score, row.connectivity_notes)
   push("functions", "Funcionamento geral", row.general_score, row.general_notes)
   return items
+}
+
+function recomputeOverallFromRow(row: InventoryRow): number | null {
+  if (!row.review_id) return null
+  return computeOverallScoreFromReview({
+    screen_score: normalizeItemScore(priceToNumberOrNull(row.screen_score as string | number | null)),
+    sides_score: normalizeItemScore(priceToNumberOrNull(row.sides_score as string | number | null)),
+    back_score: normalizeItemScore(priceToNumberOrNull(row.back_score as string | number | null)),
+    battery_score: normalizeItemScore(priceToNumberOrNull(row.battery_score as string | number | null)),
+    cameras_score: normalizeItemScore(priceToNumberOrNull(row.cameras_score as string | number | null)),
+    biometrics_score: normalizeItemScore(priceToNumberOrNull(row.biometrics_score as string | number | null)),
+    audio_score: normalizeItemScore(priceToNumberOrNull(row.audio_score as string | number | null)),
+    connectivity_score: normalizeItemScore(priceToNumberOrNull(row.connectivity_score as string | number | null)),
+    general_score: normalizeItemScore(priceToNumberOrNull(row.general_score as string | number | null)),
+  })
 }
 
 const CONDITION_STATE_OPTIONS: Record<string, Array<{ maxDistance?: number; score: number; label: string }>> = {
@@ -481,7 +509,7 @@ function mapRowToProduct(
     if (included.length === 0) return null
   }
 
-  const overall = priceToNumberOrNull(row.overall_score)
+  const overall = isSealed ? null : recomputeOverallFromRow(row) ?? priceToNumberOrNull(row.overall_score)
   const score = isSealed ? 10 : overall
   const scoreLabel = score != null ? getScoreLabel(score) : null
 
