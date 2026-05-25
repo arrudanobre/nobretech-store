@@ -3,18 +3,20 @@ import { NobretechLandingPage } from "@/components/landing/nobretech-landing-pag
 
 export const metadata: Metadata = {
   title: "Nobretech Store",
-  description: "Portal oficial de garantia e compra verificada da Nobretech Store.",
+  description: "Tecnologia com procedência, garantia e atendimento direto em São Luís.",
   openGraph: {
     title: "Nobretech Store",
-    description: "Portal oficial de garantia e compra verificada da Nobretech Store.",
-    url: "https://nobretechstore.com.br",
+    description: "Tecnologia com procedência, garantia e atendimento direto em São Luís.",
+    url: "https://www.nobretechstore.com.br",
     siteName: "Nobretech Store",
+    locale: "pt_BR",
+    type: "website",
     images: [
       {
         url: "/og-nobretech-v2.png",
         width: 1200,
         height: 630,
-        alt: "Nobretech Store - Compra verificada, garantia e transparência",
+        alt: "Nobretech Store - Tecnologia com procedência",
         type: "image/png",
       },
     ],
@@ -22,11 +24,11 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "Nobretech Store",
-    description: "Portal oficial de garantia e compra verificada da Nobretech Store.",
+    description: "Tecnologia com procedência, garantia e atendimento direto em São Luís.",
     images: [
       {
         url: "/og-nobretech-v2.png",
-        alt: "Nobretech Store - Compra verificada, garantia e transparência",
+        alt: "Nobretech Store - Tecnologia com procedência",
       },
     ],
   },

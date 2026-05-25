@@ -320,26 +320,36 @@ export function ProductGallery({ images, productTitle }: Props) {
           role="dialog"
           aria-modal="true"
           aria-label="Foto ampliada do produto"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setLightboxOpen(false)
+              setZoomed(false)
+            }
+          }}
         >
-          <div className="flex min-h-0 flex-1 flex-col p-3 sm:p-5">
-            <div className="mb-3 flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              setLightboxOpen(false)
+              setZoomed(false)
+            }}
+            className="fixed right-4 z-[60] flex h-11 w-11 items-center justify-center rounded-full border border-white/25 bg-black/70 text-white shadow-[0_12px_30px_rgba(0,0,0,0.55)] backdrop-blur transition hover:bg-black/85"
+            style={{ top: "max(env(safe-area-inset-top), 12px)" }}
+            aria-label="Fechar ampliação"
+          >
+            <X className="h-5 w-5" weight="bold" />
+          </button>
+          <div
+            className="flex min-h-0 flex-1 flex-col p-3 sm:p-5"
+            style={{ paddingTop: "max(env(safe-area-inset-top), 12px)" }}
+          >
+            <div className="mb-3 flex items-center justify-between gap-3 pr-14">
               <div className="min-w-0">
                 <p className="truncate text-[12px] font-medium text-zinc-200">{productTitle}</p>
                 <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
                   {lightboxIsReal ? "Foto real do aparelho" : "Imagem do modelo"} · {lightboxIndex + 1}/{safeImages.length}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setLightboxOpen(false)
-                  setZoomed(false)
-                }}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.05] text-zinc-200 transition hover:bg-white/[0.1]"
-                aria-label="Fechar zoom"
-              >
-                <X className="h-4 w-4" weight="bold" />
-              </button>
             </div>
 
             <div className="relative min-h-0 flex-1 overflow-hidden rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.08),transparent_50%),linear-gradient(135deg,rgba(255,255,255,0.05),rgba(0,0,0,0.35))]">

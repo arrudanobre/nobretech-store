@@ -17,6 +17,7 @@ import { ProductScoreBadge } from "@/components/catalog/product-score-badge"
 import { ProductConditionList } from "@/components/catalog/product-condition-list"
 import { ProductInstallmentOptions } from "@/components/catalog/product-installment-options"
 import { ProductWhatsAppCta } from "@/components/catalog/product-whatsapp-cta"
+import { ProductShareActions } from "@/components/catalog/product-share-actions"
 import { getPublicProductBySlug } from "@/lib/catalog/queries"
 import { formatScore10 } from "@/lib/catalog/score"
 import { formatBRL } from "@/lib/helpers"
@@ -34,15 +35,41 @@ export async function generateMetadata({
   const { slug } = await params
   const product = await getPublicProductBySlug(slug)
   if (!product) {
-    return {
-      title: "Aparelho não encontrado",
-    }
+    return { title: "Aparelho não encontrado" }
   }
-  const subtitle = product.subtitle ? ` ${product.subtitle}` : ""
+
+  const productUrl = `https://www.nobretechstore.com.br/catalogo/${product.slug}`
   const displayPrice = getCatalogDisplayPrice(product)
+  const hasPrice = Number.isFinite(displayPrice) && displayPrice > 0
+  const description = hasPrice
+    ? `${product.title} disponível por ${formatBRL(displayPrice)} na Nobretech Store. Veja fotos, condição, garantia e atendimento pelo WhatsApp.`
+    : `${product.title} disponível na Nobretech Store. Veja fotos, condição, garantia e atendimento pelo WhatsApp.`
+
+  const primaryImage = product.images[0]
+  const ogImageUrl = primaryImage?.url ?? "/og-nobretech-v2.png"
+  const ogImageAlt = primaryImage?.alt
+    ? `${product.title} — ${primaryImage.alt}`
+    : `${product.title} — Nobretech Store`
+
   return {
-    title: `${product.title}${subtitle}`,
-    description: `${product.title}${subtitle}. ${formatBRL(displayPrice)}. ${product.conditionLabel} com atendimento pelo WhatsApp.`,
+    title: `${product.title} | Nobretech Store`,
+    description,
+    alternates: { canonical: productUrl },
+    openGraph: {
+      title: `${product.title} | Nobretech Store`,
+      description,
+      url: productUrl,
+      siteName: "Nobretech Store",
+      locale: "pt_BR",
+      type: "website",
+      images: [{ url: ogImageUrl, alt: ogImageAlt }],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: `${product.title} | Nobretech Store`,
+      description,
+      images: [{ url: ogImageUrl, alt: ogImageAlt }],
+    },
   }
 }
 
@@ -174,6 +201,9 @@ export default async function CatalogoProductPage({
                 </p>
                 <div className="mt-4">
                   <ProductWhatsAppCta product={product} />
+                </div>
+                <div className="mt-3">
+                  <ProductShareActions productTitle={product.title} productSlug={product.slug} />
                 </div>
               </div>
 
