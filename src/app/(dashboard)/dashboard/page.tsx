@@ -10,6 +10,7 @@ import { daysBetween, formatBRL, getProductName } from "@/lib/helpers"
 import { cn } from "@/lib/utils"
 import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
 import { getInventoryCapitalValue, getInventoryQuantity, getInventoryUnitCost } from "@/lib/inventory/costing"
+import { isValidCommercialSale } from "@/lib/finance/finance-source-of-truth"
 import {
   DollarSign,
   Package,
@@ -305,7 +306,7 @@ function saleDateDayLabel(saleDate?: string, createdAt?: string) {
 }
 
 function isCompletedSale(sale: { sale_status?: string | null }) {
-  return (sale.sale_status || "completed") === "completed"
+  return isValidCommercialSale({ sale_status: sale.sale_status || "completed" })
 }
 
 type DashboardTone = "navy" | "green" | "blue" | "yellow" | "red" | "gray"
