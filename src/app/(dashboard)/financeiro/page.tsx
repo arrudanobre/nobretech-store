@@ -14,8 +14,22 @@ import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/toaster"
 import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 import { upsertSaleReceivable } from "@/lib/finance/sale-receivable-client"
-import { getActiveLedgerMovements } from "@/lib/financial/ledger-balance-engine"
-import { buildOwnerCapitalSnapshot } from "@/lib/financial/owner-capital-engine"
+import {
+  buildOwnerCapitalSnapshot,
+  getActiveLedgerMovements,
+  getLatestOfficialBalance,
+  isCanceledTransaction,
+  isInventoryAssetTransaction,
+  isOwnerCapitalReimbursement,
+  isOwnerEquityMovement,
+  isPendingTransaction,
+  isProfitWithdrawal,
+  isReconciledTransaction,
+  isSalePaymentTransaction,
+  isValidCommercialSale,
+  shouldAffectOperationalDre,
+  type TransactionLike,
+} from "@/lib/finance/finance-source-of-truth"
 
 type FinanceAccount = {
   id: string
@@ -116,6 +130,13 @@ const STOCK_PURCHASE_CATEGORY = "Estoque (Peças/Acessórios)"
 
 function isInventoryPurchaseTransaction(transaction: Transaction) {
   return transaction.source_type === "inventory_purchase" || transaction.category === STOCK_PURCHASE_CATEGORY
+}
+
+function dashboardMovementStatusFromTransaction(transaction?: Transaction | null): DashboardMovementStatus {
+  if (!transaction) return "pending"
+  if (isReconciledTransaction(transaction)) return "reconciled"
+  if (isCanceledTransaction(transaction)) return "cancelled"
+  return "pending"
 }
 
 function saleCost(sale: Sale) {
@@ -339,7 +360,7 @@ export default function FinanceiroPage() {
   const projectionTransactionBySalePaymentId = useMemo(() => {
     return new Map(
       projectionTransactions
-        .filter((transaction) => transaction.source_type === "sale_payment" && transaction.source_id)
+        .filter((transaction) => isSalePaymentTransaction(transaction) && transaction.source_id)
         .map((transaction) => [String(transaction.source_id), transaction])
     )
   }, [projectionTransactions])
@@ -349,7 +370,7 @@ export default function FinanceiroPage() {
 
     for (const transaction of [...projectionTransactions, ...transactions]) {
       if (transaction.source_type !== "sale" || !transaction.source_id) continue
-      statuses.set(String(transaction.source_id), transaction.status === "reconciled" ? "reconciled" : transaction.status === "cancelled" ? "cancelled" : "pending")
+      statuses.set(String(transaction.source_id), dashboardMovementStatusFromTransaction(transaction))
     }
 
     const paymentsBySaleId = new Map<string, SalePayment[]>()
@@ -363,8 +384,9 @@ export default function FinanceiroPage() {
         .map((payment) => {
           const transaction = (payment.transaction_id ? projectionTransactionById.get(String(payment.transaction_id)) : undefined)
             || projectionTransactionBySalePaymentId.get(String(payment.id))
-          if (transaction?.status === "reconciled") return "reconciled" as DashboardMovementStatus
-          if (transaction?.status === "cancelled" || payment.status === "cancelled") return "cancelled" as DashboardMovementStatus
+          if (transaction) return dashboardMovementStatusFromTransaction(transaction)
+          if (isCanceledTransaction({ status: payment.status })) return "cancelled" as DashboardMovementStatus
+          if (isReconciledTransaction({ status: payment.status })) return "reconciled" as DashboardMovementStatus
           return "pending" as DashboardMovementStatus
         })
 
@@ -405,8 +427,8 @@ export default function FinanceiroPage() {
   }, [activeAccountMovements, accounts])
 
   const statementBalance = useMemo(() => {
-    return activeAccountMovements.reduce((sum, movement) => sum + Number(movement.amount || 0), 0)
-  }, [activeAccountMovements])
+    return getLatestOfficialBalance(accountMovements)
+  }, [accountMovements])
 
   useEffect(() => {
     if (accountBalances.length === 0) {
@@ -441,14 +463,39 @@ export default function FinanceiroPage() {
     )
   }
 
+  const toFinanceSourceEntry = (transaction: Transaction, account = getTransactionAccount(transaction)): TransactionLike => ({
+    ...transaction,
+    sourceType: transaction.source_type,
+    sourceId: transaction.source_id,
+    financialType: account?.financial_type,
+    financial_type: account?.financial_type,
+    statementSection: account?.statement_section,
+    statement_section: account?.statement_section,
+    affectsCash: account?.affects_cash,
+    affects_cash: account?.affects_cash,
+    affectsDre: account?.affects_dre,
+    affects_dre: account?.affects_dre,
+    affectsInventory: account?.affects_inventory,
+    affects_inventory: account?.affects_inventory,
+    affectsOwnerEquity: account?.affects_owner_equity,
+    affects_owner_equity: account?.affects_owner_equity,
+  })
+
   const hasFinancialType = (transaction: Transaction, type: ChartAccount["financial_type"]) => {
     const account = getTransactionAccount(transaction)
     if (account) return account.financial_type === type
-    if (type === "inventory_asset") return transaction.type === "expense" && isInventoryPurchaseTransaction(transaction)
-    if (type === "owner_equity") return ["Retirada de Lucro", "Aporte do proprietário"].includes(transaction.category)
+    const financeEntry = toFinanceSourceEntry(transaction, account)
+    if (type === "inventory_asset") return transaction.type === "expense" && (isInventoryPurchaseTransaction(transaction) || isInventoryAssetTransaction(financeEntry))
+    if (type === "owner_equity") return isOwnerEquityMovement(financeEntry)
     if (type === "tax") return transaction.category === "Impostos / Taxas"
     if (type === "revenue") return transaction.type === "income" && !["Aporte do proprietário"].includes(transaction.category)
-    if (type === "operating_expense") return transaction.type === "expense" && !isInventoryPurchaseTransaction(transaction) && !["Retirada de Lucro", "Impostos / Taxas"].includes(transaction.category)
+    if (type === "operating_expense") {
+      return transaction.type === "expense"
+        && shouldAffectOperationalDre(financeEntry)
+        && !isInventoryAssetTransaction(financeEntry)
+        && !isOwnerEquityMovement(financeEntry)
+        && !["Impostos / Taxas"].includes(transaction.category)
+    }
     return false
   }
 
@@ -461,7 +508,11 @@ export default function FinanceiroPage() {
   const isFixedExpense = (transaction: Transaction) =>
     isResultExpense(transaction) && !hasFinancialType(transaction, "tax") && !isMarketingInvestment(transaction)
   const isInventoryCashOut = (transaction: Transaction) => hasFinancialType(transaction, "inventory_asset")
-  const isOwnerWithdrawal = (transaction: Transaction) => transaction.type === "expense" && hasFinancialType(transaction, "owner_equity")
+  const isOwnerWithdrawal = (transaction: Transaction) => {
+    const financeEntry = toFinanceSourceEntry(transaction)
+    return transaction.type === "expense"
+      && (isOwnerEquityMovement(financeEntry) || isProfitWithdrawal(financeEntry) || isOwnerCapitalReimbursement(financeEntry))
+  }
   const isOwnerContribution = (transaction: Transaction) => transaction.type === "income" && hasFinancialType(transaction, "owner_equity")
   const isRevenueIncome = (transaction: Transaction) => transaction.type === "income" && hasFinancialType(transaction, "revenue")
   const salesRevenueAccount = chartAccounts.find((account) => account.code === "1.01") || chartAccounts.find((account) => account.financial_type === "revenue" && account.cash_flow_type === "income")
@@ -508,10 +559,10 @@ export default function FinanceiroPage() {
   }, [accountNameById, chartAccountById, chartAccountByName, chartAccounts, month, monthOptions, projectionTransactions])
 
   const metrics = useMemo(() => {
-    const completedSales = sales.filter((sale) => (sale.sale_status || "completed") === "completed")
-    const activeTransactions = transactions.filter((t) => t.status !== "cancelled")
-    const reconciledTransactions = transactions.filter((t) => t.status === "reconciled")
-    const manualIncome = reconciledTransactions.filter((t) => t.source_type !== "sale" && t.source_type !== "sale_payment" && isRevenueIncome(t)).reduce((sum, t) => sum + Number(t.amount), 0)
+    const completedSales = sales.filter((sale) => isValidCommercialSale({ sale_status: sale.sale_status || "completed" }))
+    const activeTransactions = transactions.filter((t) => !isCanceledTransaction(t))
+    const reconciledTransactions = transactions.filter((t) => isReconciledTransaction(t))
+    const manualIncome = reconciledTransactions.filter((t) => t.source_type !== "sale" && !isSalePaymentTransaction(t) && isRevenueIncome(t)).reduce((sum, t) => sum + Number(t.amount), 0)
     const cashInflows = activePeriodAccountMovements.filter((movement) => Number(movement.amount || 0) > 0).reduce((sum, movement) => sum + Number(movement.amount || 0), 0)
     const cashOutflows = activePeriodAccountMovements.filter((movement) => Number(movement.amount || 0) < 0).reduce((sum, movement) => sum + Math.abs(Number(movement.amount || 0)), 0)
     const reconciledInventoryPurchases = reconciledTransactions.filter(isInventoryCashOut).reduce((sum, t) => sum + Number(t.amount), 0)
@@ -522,7 +573,7 @@ export default function FinanceiroPage() {
     const ownerContributions = reconciledTransactions.filter(isOwnerContribution).reduce((sum, t) => sum + Number(t.amount), 0)
     const paidOperatingExpenses = reconciledTransactions.filter(isResultExpense).reduce((sum, t) => sum + Number(t.amount), 0)
     const plannedOperatingExpenses = activeTransactions.filter(isResultExpense).reduce((sum, t) => sum + Number(t.amount), 0)
-    const pendingOperatingExpenses = activeTransactions.filter((t) => t.status !== "reconciled" && isResultExpense(t)).reduce((sum, t) => sum + Number(t.amount), 0)
+    const pendingOperatingExpenses = activeTransactions.filter((t) => isPendingTransaction(t) && isResultExpense(t)).reduce((sum, t) => sum + Number(t.amount), 0)
     const salesRevenue = completedSales.reduce((sum, sale) => sum + saleBusinessRevenue(sale), 0)
     const cmv = completedSales.reduce((sum, sale) => sum + saleCost(sale), 0)
     const netRevenue = salesRevenue + manualIncome
@@ -544,9 +595,9 @@ export default function FinanceiroPage() {
     const profitAvailable = roundCurrency(netProfit - ownerProfitWithdrawals)
     const profitWithdrawalRate = netProfit > 0 ? Math.min(999, Math.round((ownerProfitWithdrawals / netProfit) * 100)) : ownerProfitWithdrawals > 0 ? 100 : 0
     const profitAvailabilityStatus: "exceeded" | "attention" | "available" = profitAvailable < 0 ? "exceeded" : profitWithdrawalRate >= 80 ? "attention" : "available"
-    const pendingSales = sales.filter((sale) => (sale.sale_status || "completed") !== "cancelled" && !reconciledSaleIds.has(sale.id) && !saleIdsWithSplitPayments.has(sale.id))
-    const pendingSalePayments = projectionSalePayments.filter((payment) => payment.status === "pending")
-    const pendingTransactions = transactions.filter((t) => t.source_type !== "sale" && t.source_type !== "sale_payment" && t.status !== "reconciled" && t.status !== "cancelled")
+    const pendingSales = sales.filter((sale) => !isCanceledTransaction({ status: sale.sale_status }) && !reconciledSaleIds.has(sale.id) && !saleIdsWithSplitPayments.has(sale.id))
+    const pendingSalePayments = projectionSalePayments.filter((payment) => isPendingTransaction({ status: payment.status }))
+    const pendingTransactions = transactions.filter((t) => t.source_type !== "sale" && !isSalePaymentTransaction(t) && isPendingTransaction(t))
     const pendingAmount =
       pendingSales.reduce((sum, sale) => sum + saleNetRevenue(sale), 0) +
       pendingSalePayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) +
@@ -600,21 +651,21 @@ export default function FinanceiroPage() {
     const saleById = new Map(projectionSales.map((sale) => [String(sale.id), sale]))
     const transactionById = new Map(
       projectionTransactions
-        .filter((transaction) => transaction.status !== "cancelled")
+        .filter((transaction) => !isCanceledTransaction(transaction))
         .map((transaction) => [String(transaction.id), transaction])
     )
     const transactionBySaleId = new Map(
       projectionTransactions
-        .filter((transaction) => transaction.source_type === "sale" && transaction.source_id && transaction.status !== "cancelled")
+        .filter((transaction) => transaction.source_type === "sale" && transaction.source_id && !isCanceledTransaction(transaction))
         .map((transaction) => [String(transaction.source_id), transaction])
     )
     const transactionBySalePaymentId = new Map(
       projectionTransactions
-        .filter((transaction) => transaction.source_type === "sale_payment" && transaction.source_id && transaction.status !== "cancelled")
+        .filter((transaction) => isSalePaymentTransaction(transaction) && transaction.source_id && !isCanceledTransaction(transaction))
         .map((transaction) => [String(transaction.source_id), transaction])
     )
     const transactionItems = projectionTransactions
-      .filter((transaction) => transaction.status !== "reconciled" && transaction.status !== "cancelled")
+      .filter((transaction) => isPendingTransaction(transaction))
       .map((transaction) => {
         const rawDate = toDateOnly(transaction.due_date || transaction.date)
         const dueDate = rawDate && rawDate < today ? today : rawDate
@@ -633,7 +684,7 @@ export default function FinanceiroPage() {
       })
     const salePaymentItems = projectionSalePayments
       .filter((payment) =>
-        payment.status === "pending" &&
+        isPendingTransaction({ status: payment.status }) &&
         !transactionBySalePaymentId.has(String(payment.id)) &&
         !(payment.transaction_id && transactionById.has(String(payment.transaction_id)))
       )
@@ -659,7 +710,7 @@ export default function FinanceiroPage() {
     const saleItems = projectionSales
       .filter((sale: Sale) => {
         const transaction = transactionBySaleId.get(String(sale.id))
-        return !transaction && !saleIdsWithSplitPayments.has(String(sale.id)) && (sale.sale_status || "completed") !== "cancelled"
+        return !transaction && !saleIdsWithSplitPayments.has(String(sale.id)) && !isCanceledTransaction({ status: sale.sale_status })
       })
       .map((sale: Sale) => {
         const rawDate = toDateOnly(sale.payment_due_date || sale.sale_date)
@@ -836,7 +887,7 @@ export default function FinanceiroPage() {
 
   const expensesByCategory = useMemo(() => {
     const grouped = new Map<string, number>()
-    for (const t of transactions.filter((item) => item.status === "reconciled" && item.type === "expense")) {
+    for (const t of transactions.filter((item) => isReconciledTransaction(item) && item.type === "expense")) {
       grouped.set(t.category, (grouped.get(t.category) || 0) + Number(t.amount))
     }
     return Array.from(grouped.entries())
@@ -868,7 +919,7 @@ export default function FinanceiroPage() {
         description: t.description || t.category,
         category: t.category,
         amount: t.type === "income" ? Number(t.amount) : -Number(t.amount),
-        status: (t.status === "reconciled" ? "reconciled" : t.status === "cancelled" ? "cancelled" : "pending") as DashboardMovementStatus,
+        status: dashboardMovementStatusFromTransaction(t),
       }))
     return [...saleMovements, ...manual]
       .sort((a, b) => b.date.localeCompare(a.date))
