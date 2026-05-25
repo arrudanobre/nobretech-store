@@ -500,7 +500,7 @@ function mapRowToProduct(
       ? images.map((image) => ({
           url: image.image_url,
           alt: image.alt || `${title}. ${conditionLabel}`,
-          kind: image.source === "uploaded" ? "real_photo" : "official_asset",
+          kind: !isSealed && image.source === "uploaded" ? "real_photo" : "official_asset",
         }))
       : [(() => {
           const asset = getProductAssetImageInfo({

@@ -78,8 +78,8 @@ export async function processProductImage(file: File): Promise<ProcessedProductI
 
   const full = await sharp(originalBuffer, { failOn: "error" })
     .rotate()
-    .resize({ width: 1400, withoutEnlargement: true })
-    .webp({ quality: 82 })
+    .resize({ width: 1800, withoutEnlargement: true })
+    .webp({ quality: 84 })
     .toBuffer({ resolveWithObject: true })
 
   const thumbnail = await sharp(originalBuffer, { failOn: "error" })

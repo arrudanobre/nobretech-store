@@ -12,6 +12,10 @@ type Props = {
   priority?: boolean
 }
 
+function shouldBypassImageOptimization(image: PublicCatalogProduct["images"][number]) {
+  return image.kind === "real_photo" || /^https?:\/\//i.test(image.url)
+}
+
 export function CatalogProductCard({ product, priority = false }: Props) {
   const heroImage = product.images[0]
   const isSealed = product.condition === "sealed"
@@ -39,7 +43,7 @@ export function CatalogProductCard({ product, priority = false }: Props) {
               fill
               sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
               priority={priority}
-              unoptimized
+              unoptimized={shouldBypassImageOptimization(heroImage)}
               className="object-contain p-6 transition duration-500 group-hover:scale-[1.03]"
             />
           ) : (
@@ -51,6 +55,7 @@ export function CatalogProductCard({ product, priority = false }: Props) {
                   fill
                   sizes="(max-width: 640px) 80vw, 30vw"
                   priority={priority}
+                  unoptimized={shouldBypassImageOptimization(heroImage)}
                   className="object-contain p-3 transition duration-500 group-hover:scale-[1.03]"
                 />
               </div>
@@ -100,7 +105,7 @@ export function CatalogProductCard({ product, priority = false }: Props) {
                 </span>
                 <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/50 bg-emerald-950 px-2.5 py-1 text-[10.5px] font-bold text-emerald-100">
                   <Camera className="h-3 w-3" weight="bold" />
-                  {isRealPhoto ? "Foto real" : "Imagem ilustrativa"}
+                  {isRealPhoto ? "Foto real" : "Imagem do modelo"}
                 </span>
               </div>
               <p className="text-[11.5px] font-medium text-zinc-300">

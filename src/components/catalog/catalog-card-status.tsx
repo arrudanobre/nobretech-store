@@ -48,7 +48,7 @@ export function CatalogCardStatus({ product }: Props) {
         ) : (
           <ImageSquare className="h-3.5 w-3.5" weight="duotone" />
         )}
-        {isRealPhoto ? "Foto real" : "Imagem ilustrativa"}
+        {isRealPhoto ? "Foto real" : "Imagem do modelo"}
       </span>
     </div>
   )
