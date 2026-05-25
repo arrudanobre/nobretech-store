@@ -281,15 +281,12 @@ function buildHighlights(input: { grade: string | null; warrantyLabel: string; a
   return ["Fotos reais", input.warrantyLabel, input.availabilityLabel]
 }
 
-// Legacy reviews saved per-item scores below the option's intended max (e.g.
-// 9.5 instead of 10 for "Funcionando normalmente"). Snap saved scores at or
-// above the legacy cap up to a clean 10 so the UI matches the chosen option.
-const ITEM_MAX_SNAP_THRESHOLD = 9.5
-
+// Clamp to the public 0–10 scale, preserving 1-decimal granularity.
+// Never snaps: 9.5 stays 9.5, 10 stays 10, 8.8 stays 8.8.
 function normalizeItemScore(value: number | null | undefined): number | null {
-  if (value == null) return null
-  if (value >= ITEM_MAX_SNAP_THRESHOLD) return 10
-  return Math.round(value * 10) / 10
+  if (value == null || !Number.isFinite(value)) return null
+  const bounded = Math.max(0, Math.min(10, value))
+  return Math.round(bounded * 10) / 10
 }
 
 function reviewToConditionItems(
@@ -351,62 +348,70 @@ function recomputeOverallFromRow(row: InventoryRow): number | null {
 
 const CONDITION_STATE_OPTIONS: Record<string, Array<{ maxDistance?: number; score: number; label: string }>> = {
   screen: [
-    { score: 10, label: "Perfeita, sem riscos visíveis" },
-    { score: 8.8, label: "Pequenos riscos quase imperceptíveis" },
-    { score: 8.0, label: "Riscos leves visíveis com a tela apagada" },
+    { score: 10, label: "Sem marcas visíveis" },
+    { score: 9.5, label: "Marcas muito leves" },
+    { score: 8.8, label: "Marcas leves" },
     { score: 7.0, label: "Riscos visíveis no uso" },
+    { score: 5.5, label: "Marcas fortes" },
     { score: 5.0, label: "Trinca, mancha ou defeito" },
   ],
   sides: [
     { score: 10, label: "Sem marcas visíveis" },
+    { score: 9.5, label: "Marcas muito leves" },
     { score: 8.8, label: "Marcas leves" },
-    { score: 7.8, label: "Marcas moderadas" },
-    { score: 6.5, label: "Amassados ou marcas fortes" },
+    { score: 7.0, label: "Marcas moderadas" },
+    { score: 5.5, label: "Marcas fortes" },
     { score: 5.0, label: "Dano estrutural relevante" },
   ],
   back: [
     { score: 10, label: "Sem marcas visíveis" },
+    { score: 9.5, label: "Marcas muito leves" },
     { score: 8.8, label: "Marcas leves" },
-    { score: 7.8, label: "Marcas moderadas" },
+    { score: 7.0, label: "Marcas moderadas" },
+    { score: 5.5, label: "Marcas fortes" },
     { score: 5.0, label: "Trincada ou muito marcada" },
   ],
   battery: [
     { score: 10, label: "Bateria excelente" },
-    { score: 9.2, label: "Bateria excelente" },
-    { score: 9.0, label: "Bateria muito boa" },
+    { score: 9.5, label: "Bateria muito boa" },
+    { score: 9.0, label: "Bateria boa" },
     { score: 8.5, label: "Bateria boa" },
-    { score: 8.4, label: "Bateria boa" },
-    { score: 7.8, label: "Bateria aceitável" },
-    { score: 7.5, label: "Bateria aceitável" },
+    { score: 8.0, label: "Bateria aceitável" },
     { score: 6.5, label: "Bateria precisa de atenção" },
+    { score: 6.0, label: "Bateria precisa de atenção" },
   ],
   cameras: [
-    { score: 10, label: "Funcionando normalmente" },
-    { score: 8.5, label: "Funcionam, com observação estética" },
-    { score: 7.0, label: "Alguma limitação percebida" },
+    { score: 10, label: "Funcionando perfeitamente" },
+    { score: 9.5, label: "Funcionando, com observação estética leve" },
+    { score: 9.0, label: "Funcionando normalmente" },
+    { score: 8.0, label: "Observação funcional leve" },
+    { score: 6.0, label: "Problema parcial" },
     { score: 5.0, label: "Defeito em câmera" },
   ],
   faceId: [
-    { score: 10, label: "Funcionando normalmente" },
+    { score: 10, label: "Funcionando perfeitamente" },
+    { score: 9.5, label: "Funcionando normalmente" },
+    { score: 8.0, label: "Observação leve" },
     { score: 5.0, label: "Com defeito" },
   ],
   audio: [
-    { score: 10, label: "Áudio e microfone normais" },
-    { score: 8.5, label: "Funcionam, com pequena observação" },
-    { score: 7.0, label: "Alguma limitação" },
+    { score: 10, label: "Áudio e microfone perfeitos" },
+    { score: 9.5, label: "Áudio e microfone normais" },
+    { score: 8.0, label: "Pequena observação" },
+    { score: 6.0, label: "Problema parcial" },
     { score: 5.0, label: "Defeito" },
   ],
   connectivity: [
-    { score: 10, label: "Wi-Fi, Bluetooth e sinal normais" },
-    { score: 8.5, label: "Funcionam, com observação" },
+    { score: 10, label: "Wi-Fi, Bluetooth e sinal perfeitos" },
+    { score: 9.5, label: "Funcionando normalmente" },
     { score: 7.0, label: "Alguma limitação" },
     { score: 5.0, label: "Defeito" },
   ],
   functions: [
     { score: 10, label: "Excelente, sem observações" },
-    { score: 8.8, label: "Bom, com observações leves" },
-    { score: 7.8, label: "Funciona bem, mas exige atenção" },
-    { score: 6.5, label: "Tem limitação importante" },
+    { score: 9.5, label: "Muito bom, pequenas observações" },
+    { score: 9.0, label: "Bom" },
+    { score: 7.0, label: "Atenção necessária" },
     { score: 5.0, label: "Defeito relevante" },
   ],
 }

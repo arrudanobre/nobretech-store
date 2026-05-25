@@ -40,10 +40,11 @@ const SECTIONS: ReviewSection[] = [
     notePlaceholder: "Observação sobre a tela",
     weight: 2,
     options: [
-      { id: "perfect", label: "Perfeita", score: 10 },
-      { id: "tiny", label: "Riscos quase imperceptíveis", score: 8.8 },
-      { id: "light", label: "Riscos leves", score: 8.0 },
+      { id: "perfect", label: "Sem marcas visíveis", score: 10 },
+      { id: "tiny", label: "Marcas muito leves", score: 9.5 },
+      { id: "light", label: "Marcas leves", score: 8.8 },
       { id: "visible", label: "Riscos visíveis", score: 7.0, tone: "warning" },
+      { id: "strong", label: "Marcas fortes", score: 5.5, tone: "warning" },
       { id: "defect", label: "Defeito", score: 5.0, tone: "danger", note: "Trinca, mancha ou defeito informado." },
     ],
   },
@@ -54,10 +55,11 @@ const SECTIONS: ReviewSection[] = [
     notePlaceholder: "Observação sobre laterais",
     weight: 1,
     options: [
-      { id: "clean", label: "Sem marcas", score: 10 },
+      { id: "clean", label: "Sem marcas visíveis", score: 10 },
+      { id: "tiny", label: "Marcas muito leves", score: 9.5 },
       { id: "light", label: "Marcas leves", score: 8.8 },
-      { id: "moderate", label: "Marcas moderadas", score: 7.8 },
-      { id: "strong", label: "Marcas fortes", score: 6.5, tone: "warning" },
+      { id: "moderate", label: "Marcas moderadas", score: 7.0, tone: "warning" },
+      { id: "strong", label: "Marcas fortes", score: 5.5, tone: "warning" },
       { id: "defect", label: "Dano estrutural", score: 5.0, tone: "danger" },
     ],
   },
@@ -68,9 +70,11 @@ const SECTIONS: ReviewSection[] = [
     notePlaceholder: "Observação sobre traseira",
     weight: 1,
     options: [
-      { id: "clean", label: "Sem marcas", score: 10 },
+      { id: "clean", label: "Sem marcas visíveis", score: 10 },
+      { id: "tiny", label: "Marcas muito leves", score: 9.5 },
       { id: "light", label: "Marcas leves", score: 8.8 },
-      { id: "moderate", label: "Marcas moderadas", score: 7.8 },
+      { id: "moderate", label: "Marcas moderadas", score: 7.0, tone: "warning" },
+      { id: "strong", label: "Marcas fortes", score: 5.5, tone: "warning" },
       { id: "defect", label: "Trincada ou muito marcada", score: 5.0, tone: "danger" },
     ],
   },
@@ -82,6 +86,7 @@ const SECTIONS: ReviewSection[] = [
     weight: 1.5,
     options: [
       { id: "excellent", label: "Excelente", score: 10 },
+      { id: "very_good", label: "Muito boa", score: 9.5 },
       { id: "good", label: "Boa", score: 9 },
       { id: "ok", label: "Aceitável", score: 8 },
       { id: "attention", label: "Precisa atenção", score: 6.5, tone: "warning" },
@@ -95,9 +100,11 @@ const SECTIONS: ReviewSection[] = [
     notePlaceholder: "Observação sobre câmeras",
     weight: 1.5,
     options: [
-      { id: "normal", label: "Tudo normal", score: 10 },
-      { id: "cosmetic", label: "Com observação estética", score: 8.5 },
-      { id: "limited", label: "Alguma limitação", score: 7.0, tone: "warning" },
+      { id: "perfect", label: "Funcionando perfeitamente", score: 10 },
+      { id: "cosmetic", label: "Funcionando, com observação estética leve", score: 9.5 },
+      { id: "normal", label: "Funcionando normalmente", score: 9 },
+      { id: "minor", label: "Observação funcional leve", score: 8 },
+      { id: "limited", label: "Problema parcial", score: 6, tone: "warning" },
       { id: "defect", label: "Defeito em câmera", score: 5.0, tone: "danger" },
     ],
   },
@@ -108,7 +115,9 @@ const SECTIONS: ReviewSection[] = [
     notePlaceholder: "Observação sobre biometria",
     weight: 1,
     options: [
-      { id: "normal", label: "Funcionando", score: 10 },
+      { id: "perfect", label: "Funcionando perfeitamente", score: 10 },
+      { id: "normal", label: "Funcionando normalmente", score: 9.5 },
+      { id: "minor", label: "Observação leve", score: 8 },
       { id: "na", label: "Não se aplica", score: null },
       { id: "untested", label: "Não testado", score: null, tone: "warning" },
       { id: "defect", label: "Com defeito", score: 5.0, tone: "danger" },
@@ -121,9 +130,10 @@ const SECTIONS: ReviewSection[] = [
     notePlaceholder: "Observação sobre áudio ou microfone",
     weight: 0.75,
     options: [
-      { id: "normal", label: "Tudo normal", score: 10 },
-      { id: "minor", label: "Pequena observação", score: 8.5 },
-      { id: "limited", label: "Alguma limitação", score: 7.0, tone: "warning" },
+      { id: "perfect", label: "Perfeitos", score: 10 },
+      { id: "normal", label: "Normais", score: 9.5 },
+      { id: "minor", label: "Observação leve", score: 8 },
+      { id: "limited", label: "Problema parcial", score: 6, tone: "warning" },
       { id: "defect", label: "Defeito", score: 5.0, tone: "danger" },
     ],
   },
@@ -134,9 +144,9 @@ const SECTIONS: ReviewSection[] = [
     notePlaceholder: "Observação sobre conectividade",
     weight: 0.75,
     options: [
-      { id: "normal", label: "Tudo normal", score: 10 },
-      { id: "minor", label: "Com observação", score: 8.5 },
-      { id: "limited", label: "Alguma limitação", score: 7.0, tone: "warning" },
+      { id: "perfect", label: "Tudo funcionando perfeitamente", score: 10 },
+      { id: "normal", label: "Funcionando normalmente", score: 9.5 },
+      { id: "limited", label: "Alguma limitação", score: 7, tone: "warning" },
       { id: "defect", label: "Defeito", score: 5.0, tone: "danger" },
     ],
   },
@@ -147,10 +157,10 @@ const SECTIONS: ReviewSection[] = [
     notePlaceholder: "Observação geral do funcionamento",
     weight: 1.5,
     options: [
-      { id: "excellent", label: "Excelente", score: 10 },
-      { id: "good", label: "Bom", score: 8.8 },
-      { id: "attention", label: "Exige atenção", score: 7.8, tone: "warning" },
-      { id: "limited", label: "Limitação importante", score: 6.5, tone: "warning" },
+      { id: "excellent", label: "Excelente, sem observações", score: 10 },
+      { id: "very_good", label: "Muito bom, pequenas observações", score: 9.5 },
+      { id: "good", label: "Bom", score: 9 },
+      { id: "attention", label: "Atenção necessária", score: 7, tone: "warning" },
       { id: "defect", label: "Defeito relevante", score: 5.0, tone: "danger" },
     ],
   },
@@ -188,10 +198,12 @@ type Props = {
 
 function scoreFromBatteryHealth(value: number | null): number | null {
   if (value == null) return null
-  if (value >= 95) return 10
+  if (value >= 100) return 10
+  if (value >= 95) return 9.5
   if (value >= 90) return 9
+  if (value >= 85) return 8.5
   if (value >= 80) return 8
-  return 6.5
+  return 6
 }
 
 function nearestOption(section: ReviewSection, score: number | null | undefined): string {
