@@ -111,7 +111,7 @@ export default async function PortalOpenGraphImage() {
             <div
               style={{
                 fontFamily: "Syne",
-                fontSize: "72px",
+                fontSize: "67px",
                 fontWeight: 800,
                 letterSpacing: "-0.03em",
                 lineHeight: 1,
@@ -148,7 +148,7 @@ export default async function PortalOpenGraphImage() {
                   letterSpacing: "-0.005em",
                 }}
               >
-                Compra verificada. Garantia. Procedência.
+                Pedido, garantia e procedência em um só lugar.
               </div>
             </div>
             <div
