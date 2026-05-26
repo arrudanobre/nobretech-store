@@ -105,6 +105,9 @@ const auditActionLabels: Record<CompanySettingsAuditLog["action"], string> = {
   create_warranty_term: "Clausula de garantia criada",
   update_warranty_term: "Clausula de garantia atualizada",
   deactivate_warranty_term: "Clausula de garantia inativada",
+  create_sale_item_warranty: "Garantia do item criada",
+  update_sale_item_warranty: "Garantia do item atualizada",
+  deactivate_sale_item_warranty: "Garantia do item inativada",
 }
 
 function auditActionLabel(action: CompanySettingsAuditLog["action"]): string {

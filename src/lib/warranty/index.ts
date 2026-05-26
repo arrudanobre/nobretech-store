@@ -31,3 +31,26 @@ export {
   updateWarrantyPolicyTerm,
   deactivateWarrantyPolicyTerm,
 } from "./mutations"
+
+export type {
+  CreateSaleItemWarrantyInput,
+  SaleItemWarranty,
+  UpdateSaleItemWarrantyInput,
+  WarrantyPeriod,
+  WarrantyPeriodInput,
+  WarrantyPeriodResult,
+  WarrantyPolicySnapshot,
+  WarrantyTermSnapshot,
+} from "./sale-item-warranties"
+
+export {
+  buildWarrantySnapshot,
+  calculateWarrantyPeriod,
+  createSaleItemWarranty,
+  deactivateSaleItemWarranty,
+  getSaleItemWarranty,
+  getSaleItemWarrantyById,
+  getSaleWarranties,
+  getWarrantyByInventoryItem,
+  updateSaleItemWarranty,
+} from "./sale-item-warranties"

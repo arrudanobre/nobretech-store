@@ -127,6 +127,9 @@ export type CompanySettingsAuditLogAction =
   | "create_warranty_term"
   | "update_warranty_term"
   | "deactivate_warranty_term"
+  | "create_sale_item_warranty"
+  | "update_sale_item_warranty"
+  | "deactivate_sale_item_warranty"
 
 export type CompanySettingsAuditLog = {
   id: string

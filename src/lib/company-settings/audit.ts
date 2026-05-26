@@ -18,6 +18,9 @@ export const AUDIT_ACTIONS = [
   "create_warranty_term",
   "update_warranty_term",
   "deactivate_warranty_term",
+  "create_sale_item_warranty",
+  "update_sale_item_warranty",
+  "deactivate_sale_item_warranty",
 ] as const
 export type CompanySettingsAuditAction = (typeof AUDIT_ACTIONS)[number]
 
@@ -105,6 +108,16 @@ const FIELD_LABELS: Record<CompanySettingsAuditDomain, Record<string, string>> =
     title: "Título",
     body: "Texto",
     sort_order: "Ordem",
+    // sale_item_warranties fields
+    warranty_name: "Nome da garantia",
+    warranty_label: "Label da garantia",
+    duration_months: "Duração (meses)",
+    duration_days: "Duração (dias)",
+    starts_at: "Início da garantia",
+    ends_at: "Fim da garantia",
+    manufacturer_coverage_reference: "Cobertura do fabricante",
+    manufacturer_coverage_url: "URL cobertura fabricante",
+    manual_notes: "Observações",
   },
 }
 
@@ -116,6 +129,8 @@ function buildSummary(action: CompanySettingsAuditAction, labels: string[]): str
   if (action === "deactivate_warranty_policy") return "Politica de garantia inativada"
   if (action === "create_warranty_term") return "Clausula de garantia criada"
   if (action === "deactivate_warranty_term") return "Clausula de garantia inativada"
+  if (action === "create_sale_item_warranty") return "Garantia do item criada"
+  if (action === "deactivate_sale_item_warranty") return "Garantia do item inativada"
 
   if (labels.length === 0) {
     if (action === "update_brand") return "Marca atualizada"
@@ -123,6 +138,7 @@ function buildSummary(action: CompanySettingsAuditAction, labels: string[]): str
     if (action === "update_document_profile") return "Perfil documental atualizado"
     if (action === "update_warranty_policy") return "Politica de garantia atualizada"
     if (action === "update_warranty_term") return "Clausula de garantia atualizada"
+    if (action === "update_sale_item_warranty") return "Garantia do item atualizada"
     return "Configuracao atualizada"
   }
 
@@ -160,6 +176,12 @@ export function buildAuditMetadata(params: {
   }
   if (action === "deactivate_warranty_term") {
     return { changedFields: ["active"], changedFieldLabels: ["Status"], summary: "Clausula de garantia inativada" }
+  }
+  if (action === "create_sale_item_warranty") {
+    return { changedFields: [], changedFieldLabels: [], summary: "Garantia do item criada" }
+  }
+  if (action === "deactivate_sale_item_warranty") {
+    return { changedFields: ["active"], changedFieldLabels: ["Status"], summary: "Garantia do item inativada" }
   }
 
   const labelMap = FIELD_LABELS[domain]
