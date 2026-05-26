@@ -9,6 +9,7 @@ import {
   ArrowLeft,
   Building2,
   CheckCircle2,
+  Clock,
   FileText,
   Globe2,
   Loader2,
@@ -32,6 +33,7 @@ import type {
   CompanyContactChannelType,
   CompanyDocumentProfile,
   CompanyIdentity,
+  CompanySettingsAuditLog,
   DocumentProfileInput,
   ContactChannelInput,
   CompanySettingsMutationResult,
@@ -59,6 +61,7 @@ type CompanySettingsClientProps = {
   contactChannels: CompanyContactChannel[]
   documentProfile: CompanyDocumentProfile | null
   primaryWhatsapp: CompanyContactChannel | null
+  auditLogs: CompanySettingsAuditLog[]
 }
 
 type FieldErrors = Record<string, string>
@@ -87,6 +90,19 @@ const themeLabels: Record<CompanyThemeMode, string> = {
   dark: "Dark",
   light: "Light",
   system: "Sistema",
+}
+
+const auditActionLabels: Record<CompanySettingsAuditLog["action"], string> = {
+  update_brand: "Marca atualizada",
+  create_contact: "Contato criado",
+  update_contact: "Contato atualizado",
+  deactivate_contact: "Contato desativado",
+  reactivate_contact: "Contato reativado",
+  update_document_profile: "Perfil documental atualizado",
+}
+
+function auditActionLabel(action: CompanySettingsAuditLog["action"]): string {
+  return auditActionLabels[action] ?? action
 }
 
 function emptyBrandForm(companyName: string): BrandProfileInput {
@@ -263,6 +279,7 @@ export function CompanySettingsClient({
   contactChannels,
   documentProfile,
   primaryWhatsapp,
+  auditLogs,
 }: CompanySettingsClientProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -602,6 +619,26 @@ export function CompanySettingsClient({
               Salvar perfil documental
             </Button>
           </div>
+        </SectionCard>
+
+        <SectionCard icon={Clock} title="Alterações recentes" description="Histórico das últimas modificações nas configurações da empresa.">
+          {auditLogs.length === 0 ? (
+            <p className="text-sm text-slate-500">Nenhuma alteração registrada ainda.</p>
+          ) : (
+            <ul className="divide-y divide-white/5">
+              {auditLogs.map((log) => (
+                <li key={log.id} className="flex items-start justify-between gap-4 py-3 text-sm">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="font-semibold text-slate-200">{auditActionLabel(log.action)}</span>
+                    <span className="text-xs text-slate-500">{log.actorEmail ?? "Sistema"}</span>
+                  </div>
+                  <span className="shrink-0 text-xs text-slate-500">
+                    {new Date(log.createdAt).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
         </SectionCard>
 
         <div className="grid gap-3 rounded-2xl border border-white/10 bg-slate-900/50 p-4 text-sm text-slate-400 md:grid-cols-3">

@@ -9,6 +9,7 @@ export {
   getCompanyBrandProfile,
   getCompanyContactChannels,
   getCompanyDocumentProfile,
+  getCompanySettingsAuditLogs,
   getPrimaryCompanyContactChannel,
   resolveCompanyIdentity,
   resolveCompanySettings,
@@ -16,6 +17,7 @@ export {
 
 export type {
   BrandProfileInput,
+  CompanySettingsActor,
   CompanySettingsMutationResult,
   ContactChannelInput,
   DocumentProfileInput,
@@ -27,6 +29,9 @@ export type {
   CompanyContactChannelType,
   CompanyDocumentProfile,
   CompanyIdentity,
+  CompanySettingsAuditLog,
+  CompanySettingsAuditLogAction,
+  CompanySettingsAuditLogDomain,
   CompanySettingsDataByDomain,
   CompanySettingsDomain,
   CompanySettingsDomainResolution,

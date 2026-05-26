@@ -111,3 +111,28 @@ export type CompanySettingsDomainResolution =
   | ({ domain: "contacts" } & CompanySettingsResolution<CompanySettingsDataByDomain["contacts"]>)
   | ({ domain: "document" } & CompanySettingsResolution<CompanySettingsDataByDomain["document"]>)
   | ({ domain: "identity" } & CompanySettingsResolution<CompanySettingsDataByDomain["identity"]>)
+
+export type CompanySettingsAuditLogDomain = "brand" | "contact" | "document"
+
+export type CompanySettingsAuditLogAction =
+  | "update_brand"
+  | "create_contact"
+  | "update_contact"
+  | "deactivate_contact"
+  | "reactivate_contact"
+  | "update_document_profile"
+
+export type CompanySettingsAuditLog = {
+  id: string
+  companyId: string
+  actorUserId: string | null
+  actorEmail: string | null
+  domain: CompanySettingsAuditLogDomain
+  entityTable: string
+  entityId: string | null
+  action: CompanySettingsAuditLogAction
+  beforeSnapshot: Record<string, unknown> | null
+  afterSnapshot: Record<string, unknown> | null
+  metadata: Record<string, unknown> | null
+  createdAt: string
+}

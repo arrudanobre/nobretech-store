@@ -7,6 +7,7 @@ import type {
   CompanyContactChannelType,
   CompanyDocumentProfile,
   CompanyIdentity,
+  CompanySettingsAuditLog,
   CompanySettingsDomain,
   CompanySettingsDomainResolution,
   CompanySettingsResolution,
@@ -372,6 +373,64 @@ export async function resolveCompanyIdentity(
       missing,
     },
   }
+}
+
+export async function getCompanySettingsAuditLogs(
+  companyId: string,
+  limit = 20
+): Promise<CompanySettingsAuditLog[]> {
+  if (!isValidCompanyId(companyId)) return []
+
+  const result = await pool.query<{
+    id: string
+    company_id: string
+    actor_user_id: string | null
+    actor_email: string | null
+    domain: string
+    entity_table: string
+    entity_id: string | null
+    action: string
+    before_snapshot: Record<string, unknown> | null
+    after_snapshot: Record<string, unknown> | null
+    metadata: Record<string, unknown> | null
+    created_at: Date | string
+  }>(
+    `
+      SELECT
+        id,
+        company_id,
+        actor_user_id,
+        actor_email,
+        domain,
+        entity_table,
+        entity_id,
+        action,
+        before_snapshot,
+        after_snapshot,
+        metadata,
+        created_at
+      FROM company_settings_audit_logs
+      WHERE company_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2
+    `,
+    [companyId, limit]
+  )
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    companyId: row.company_id,
+    actorUserId: row.actor_user_id,
+    actorEmail: row.actor_email,
+    domain: row.domain as CompanySettingsAuditLog["domain"],
+    entityTable: row.entity_table,
+    entityId: row.entity_id,
+    action: row.action as CompanySettingsAuditLog["action"],
+    beforeSnapshot: row.before_snapshot,
+    afterSnapshot: row.after_snapshot,
+    metadata: row.metadata,
+    createdAt: toISOString(row.created_at) ?? "",
+  }))
 }
 
 export async function resolveCompanySettings(
