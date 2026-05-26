@@ -105,6 +105,20 @@ function auditActionLabel(action: CompanySettingsAuditLog["action"]): string {
   return auditActionLabels[action] ?? action
 }
 
+function auditSummary(log: CompanySettingsAuditLog): string {
+  const summary = log.metadata?.summary
+  if (typeof summary === "string" && summary.length > 0) return summary
+  return auditActionLabel(log.action)
+}
+
+function auditChangedLabels(log: CompanySettingsAuditLog): string[] {
+  const labels = log.metadata?.changedFieldLabels
+  if (Array.isArray(labels)) {
+    return labels.filter((l): l is string => typeof l === "string")
+  }
+  return []
+}
+
 function emptyBrandForm(companyName: string): BrandProfileInput {
   return {
     displayName: companyName,
@@ -626,17 +640,24 @@ export function CompanySettingsClient({
             <p className="text-sm text-slate-500">Nenhuma alteração registrada ainda.</p>
           ) : (
             <ul className="divide-y divide-white/5">
-              {auditLogs.map((log) => (
-                <li key={log.id} className="flex items-start justify-between gap-4 py-3 text-sm">
-                  <div className="flex flex-col gap-0.5">
-                    <span className="font-semibold text-slate-200">{auditActionLabel(log.action)}</span>
-                    <span className="text-xs text-slate-500">{log.actorEmail ?? "Sistema"}</span>
-                  </div>
-                  <span className="shrink-0 text-xs text-slate-500">
-                    {new Date(log.createdAt).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}
-                  </span>
-                </li>
-              ))}
+              {auditLogs.map((log) => {
+                const summary = auditSummary(log)
+                const changedLabels = auditChangedLabels(log)
+                return (
+                  <li key={log.id} className="flex items-start justify-between gap-4 py-3 text-sm">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="font-semibold text-slate-200">{summary}</span>
+                      {changedLabels.length > 0 && (
+                        <span className="text-xs text-slate-400">{changedLabels.join(" · ")}</span>
+                      )}
+                      <span className="text-xs text-slate-500">{log.actorEmail ?? "Sistema"}</span>
+                    </div>
+                    <span className="shrink-0 text-xs text-slate-500">
+                      {new Date(log.createdAt).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}
+                    </span>
+                  </li>
+                )
+              })}
             </ul>
           )}
         </SectionCard>

@@ -2,7 +2,7 @@ import 'server-only'
 
 import { pool } from '@/lib/db'
 import type { CompanyContactChannelType, CompanyThemeMode } from './types'
-import { recordCompanySettingsAuditLog, rowToSnapshot } from './audit'
+import { buildAuditMetadata, recordCompanySettingsAuditLog, rowToSnapshot } from './audit'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const HEX_RE = /^#[0-9a-f]{6}$/i
@@ -356,6 +356,7 @@ export async function upsertCompanyBrandProfile(
       action: 'update_brand',
       beforeSnapshot: before,
       afterSnapshot: after,
+      metadata: buildAuditMetadata({ action: 'update_brand', domain: 'brand', beforeSnapshot: before, afterSnapshot: after }),
     })
 
     await client.query('COMMIT')
@@ -465,6 +466,7 @@ export async function saveCompanyContactChannel(
       action,
       beforeSnapshot: before,
       afterSnapshot: after,
+      metadata: buildAuditMetadata({ action, domain: 'contact', beforeSnapshot: before, afterSnapshot: after }),
     })
 
     await client.query('COMMIT')
@@ -522,6 +524,7 @@ export async function deactivateCompanyContactChannel(
       action: 'deactivate_contact',
       beforeSnapshot: before,
       afterSnapshot: after,
+      metadata: buildAuditMetadata({ action: 'deactivate_contact', domain: 'contact', beforeSnapshot: before, afterSnapshot: after }),
     })
 
     await client.query('COMMIT')
@@ -604,6 +607,7 @@ export async function upsertCompanyDocumentProfile(
       action: 'update_document_profile',
       beforeSnapshot: before,
       afterSnapshot: after,
+      metadata: buildAuditMetadata({ action: 'update_document_profile', domain: 'document', beforeSnapshot: before, afterSnapshot: after }),
     })
 
     await client.query('COMMIT')
