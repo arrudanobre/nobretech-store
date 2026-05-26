@@ -56,15 +56,12 @@ CREATE INDEX IF NOT EXISTS idx_warranty_policies_company_active
 CREATE INDEX IF NOT EXISTS idx_warranty_policies_company_scope
   ON warranty_policies(company_id, product_type, product_condition, product_origin);
 
--- Previne multiplas politicas ativas com escopo exatamente igual (todos os campos preenchidos).
--- Politicas com product_origin IS NULL nao sao cobertas por este indice (comportamento intencional
--- para representar politicas de alcance amplo; conflitos nesse caso sao resolvidos pelo resolver).
+-- Previne multiplas politicas ativas com escopo exatamente igual, inclusive quando
+-- product_origin for NULL para representar uma politica de alcance amplo.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_warranty_policies_unique_active_scope
   ON warranty_policies(company_id, product_type, product_condition, product_origin)
-  WHERE active = TRUE
-    AND product_type IS NOT NULL
-    AND product_condition IS NOT NULL
-    AND product_origin IS NOT NULL;
+  NULLS NOT DISTINCT
+  WHERE active = TRUE;
 
 DROP TRIGGER IF EXISTS trg_warranty_policies_updated_at ON warranty_policies;
 CREATE TRIGGER trg_warranty_policies_updated_at
