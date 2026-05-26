@@ -177,6 +177,20 @@ function shortMovementId(id: string) {
   return id.slice(0, 8)
 }
 
+function formatAuditReference(value?: string | null) {
+  const raw = String(value ?? "").trim()
+  if (!raw) return "Sem referência"
+
+  const normalized = raw.toLowerCase()
+  if (["undefined", "null", "nan"].includes(normalized)) return "Sem referência"
+
+  const clean = raw.replace(/[^a-zA-Z0-9]/g, "")
+  const prefix = clean.slice(0, 8)
+  if (prefix.length < 8 || /^0+$/.test(prefix) || /^0+$/.test(clean)) return "Sem referência"
+
+  return `Ref. ${prefix}`
+}
+
 function formatDateTime(value?: string | null) {
   if (!value) return "—"
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(value))
@@ -816,7 +830,7 @@ export default function AccountStatementPage() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold text-navy-900">{movement.description}</p>
-                      <p className="mt-1 text-xs text-gray-500">{formatDateTime(movement.created_at)} · {movement.created_by ? movement.created_by.slice(0, 8) : "usuário não identificado"}</p>
+                      <p className="mt-1 text-xs text-gray-500">{formatDateTime(movement.created_at)} · {formatAuditReference(movement.id)}</p>
                     </div>
                     <Badge variant={status.variant}>{status.label}</Badge>
                   </div>
