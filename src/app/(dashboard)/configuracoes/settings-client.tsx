@@ -1231,7 +1231,16 @@ export function ConfiguracoesClient({ currentUser }: { currentUser: CurrentUser 
                 <p className="text-xs text-gray-500">Informações usadas em documentos, garantia e atendimento.</p>
               </div>
             </div>
-            {!canEditSettings && <Badge variant="gray">Somente leitura</Badge>}
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href="/configuracoes/empresa"
+                className="inline-flex h-9 items-center gap-2 rounded-xl bg-navy-900 px-3 text-xs font-bold text-white transition hover:bg-navy-800"
+              >
+                Central da empresa
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Link>
+              {!canEditSettings && <Badge variant="gray">Somente leitura</Badge>}
+            </div>
           </div>
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">

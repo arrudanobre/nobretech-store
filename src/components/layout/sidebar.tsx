@@ -38,6 +38,7 @@ type DashboardUser = {
   role: UserRole
   avatarUrl: string | null
   companyName: string
+  companyDisplayName?: string | null
 }
 
 export interface BadgeCountContextType {
@@ -128,6 +129,10 @@ function companyBrandParts(companyName: string) {
   return { primary: parts[0], secondary: parts.slice(1).join(" ") }
 }
 
+function visibleCompanyName(currentUser: DashboardUser) {
+  return currentUser.companyDisplayName?.trim() || currentUser.companyName
+}
+
 function filterNavItems(role: UserRole): NavItem[] {
   return staticNavItems
     .filter((item) => !item.permission || canAccess(role, item.permission))
@@ -183,7 +188,7 @@ export function Sidebar({ currentUser, collapsed, onToggleCollapsed }: { current
     "/financeiro": pathname?.startsWith("/financeiro")
   })
   const { counts } = useBadgeCount()
-  const brand = companyBrandParts(currentUser.companyName)
+  const brand = companyBrandParts(visibleCompanyName(currentUser))
 
   const toggleMenu = (href: string) => {
     setOpenMenus(prev => ({ ...prev, [href]: !prev[href] }))
@@ -345,7 +350,7 @@ export function MobileNav({ isOpen, onOpenChange, currentUser }: { isOpen: boole
   const currentSearch = searchParams.toString()
   const isOrionPage = pathname?.startsWith("/orion")
   const { counts } = useBadgeCount()
-  const brand = companyBrandParts(currentUser.companyName)
+  const brand = companyBrandParts(visibleCompanyName(currentUser))
 
   useEffect(() => {
     onOpenChange(false)
@@ -635,7 +640,7 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
   const isOrionPage = pathname?.startsWith("/orion")
   const isVitrinePage = pathname?.startsWith("/vitrine")
   const isDarkPage = isOrionPage || isVitrinePage
-  const brand = companyBrandParts(currentUser.companyName)
+  const brand = companyBrandParts(visibleCompanyName(currentUser))
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), [])
 
