@@ -58,3 +58,6 @@ skills-lock.json
 
 # supabase temp files
 supabase/.temp/
+
+# temp previews
+/.tmp/

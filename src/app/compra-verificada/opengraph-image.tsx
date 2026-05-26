@@ -1,4 +1,5 @@
 import { ImageResponse } from "next/og"
+import { loadOgFonts } from "@/lib/og/fonts"
 
 export const runtime = "nodejs"
 export const alt = "Portal de Transparência Nobretech Store"
@@ -6,6 +7,8 @@ export const size = { width: 1200, height: 630 }
 export const contentType = "image/png"
 
 export default async function PortalOpenGraphImage() {
+  const { syne700, syne800, inter400, inter500 } = await loadOgFonts()
+
   return new ImageResponse(
     (
       <div
@@ -16,9 +19,10 @@ export default async function PortalOpenGraphImage() {
           flexDirection: "column",
           justifyContent: "space-between",
           padding: "72px 80px",
-          background: "linear-gradient(135deg, #040608 0%, #0A0F14 55%, #050709 100%)",
+          background: "linear-gradient(135deg, #040608 0%, #08101A 55%, #050709 100%)",
           color: "#F4F4F5",
           position: "relative",
+          fontFamily: "Inter",
         }}
       >
         <div
@@ -26,45 +30,36 @@ export default async function PortalOpenGraphImage() {
             position: "absolute",
             inset: 0,
             background:
-              "radial-gradient(circle at 78% 26%, rgba(120,180,255,0.10) 0%, rgba(120,180,255,0) 55%), radial-gradient(circle at 22% 78%, rgba(214,168,79,0.10) 0%, rgba(214,168,79,0) 60%)",
+              "radial-gradient(circle at 78% 24%, rgba(120,170,255,0.12) 0%, rgba(120,170,255,0) 55%), radial-gradient(circle at 22% 80%, rgba(214,168,79,0.12) 0%, rgba(214,168,79,0) 55%)",
             display: "flex",
           }}
         />
         <div
           style={{
             position: "absolute",
-            inset: "24px",
+            inset: "28px",
             border: "1px solid rgba(214,168,79,0.15)",
-            borderRadius: "28px",
+            borderRadius: "32px",
             display: "flex",
           }}
         />
 
-        <div style={{ display: "flex", alignItems: "center", gap: "16px", zIndex: 1 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "14px",
+            zIndex: 1,
+          }}
+        >
           <div
             style={{
-              width: "44px",
-              height: "44px",
-              borderRadius: "12px",
-              background: "linear-gradient(135deg, #D6A84F, #E7C16A)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "#160F05",
-              fontSize: "26px",
-              fontWeight: 800,
-              letterSpacing: "-0.04em",
-            }}
-          >
-            N
-          </div>
-          <div
-            style={{
-              fontSize: "16px",
-              letterSpacing: "0.32em",
+              fontFamily: "Syne",
+              fontSize: "18px",
+              letterSpacing: "0.42em",
               color: "#F2D88A",
               textTransform: "uppercase",
-              fontWeight: 600,
+              fontWeight: 700,
             }}
           >
             Nobretech Store
@@ -75,7 +70,7 @@ export default async function PortalOpenGraphImage() {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: "44px",
+            gap: "48px",
             zIndex: 1,
           }}
         >
@@ -83,23 +78,22 @@ export default async function PortalOpenGraphImage() {
             style={{
               width: "168px",
               height: "168px",
-              borderRadius: "32px",
+              borderRadius: "36px",
               border: "1.5px solid rgba(214,168,79,0.55)",
-              background:
-                "linear-gradient(135deg, rgba(214,168,79,0.18), rgba(214,168,79,0.04))",
+              background: "linear-gradient(135deg, rgba(214,168,79,0.16), rgba(214,168,79,0.02))",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              boxShadow: "0 0 60px rgba(214,168,79,0.18)",
+              boxShadow: "0 0 70px rgba(214,168,79,0.18)",
             }}
           >
             <svg
-              width="92"
-              height="92"
+              width="96"
+              height="96"
               viewBox="0 0 24 24"
               fill="none"
               stroke="#F2D88A"
-              strokeWidth="1.8"
+              strokeWidth="1.6"
               strokeLinecap="round"
               strokeLinejoin="round"
             >
@@ -107,34 +101,64 @@ export default async function PortalOpenGraphImage() {
               <path d="m9 12 2 2 4-4" />
             </svg>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "18px",
+            }}
+          >
             <div
               style={{
-                fontSize: "78px",
+                fontFamily: "Syne",
+                fontSize: "72px",
                 fontWeight: 800,
-                letterSpacing: "-0.035em",
+                letterSpacing: "-0.03em",
                 lineHeight: 1,
                 color: "#FFFFFF",
+                display: "flex",
+                flexDirection: "column",
               }}
             >
-              Portal de Transparência
+              <span>Portal de</span>
+              <span style={{ color: "#F4D57A" }}>Transparência</span>
             </div>
             <div
               style={{
-                fontSize: "32px",
-                fontWeight: 500,
-                color: "#F4D57A",
-                letterSpacing: "-0.005em",
+                display: "flex",
+                alignItems: "center",
+                gap: "14px",
+                marginTop: "4px",
               }}
             >
-              Compra verificada. Garantia. Procedência.
+              <div
+                style={{
+                  width: "36px",
+                  height: "1.5px",
+                  background: "linear-gradient(90deg, #F2D88A, rgba(242,216,138,0))",
+                  display: "flex",
+                }}
+              />
+              <div
+                style={{
+                  fontFamily: "Inter",
+                  fontSize: "26px",
+                  color: "#F4D57A",
+                  fontWeight: 500,
+                  letterSpacing: "-0.005em",
+                }}
+              >
+                Compra verificada. Garantia. Procedência.
+              </div>
             </div>
             <div
               style={{
+                fontFamily: "Inter",
                 fontSize: "22px",
-                color: "rgba(244,244,245,0.70)",
-                maxWidth: "760px",
-                lineHeight: 1.35,
+                color: "rgba(244,244,245,0.65)",
+                maxWidth: "780px",
+                lineHeight: 1.4,
+                marginTop: "4px",
               }}
             >
               Acompanhe os dados do seu pedido com segurança.
@@ -148,18 +172,29 @@ export default async function PortalOpenGraphImage() {
             justifyContent: "space-between",
             alignItems: "center",
             zIndex: 1,
+            fontFamily: "Inter",
             fontSize: "18px",
-            color: "rgba(244,244,245,0.55)",
-            letterSpacing: "0.14em",
+            color: "rgba(244,244,245,0.50)",
+            letterSpacing: "0.18em",
             textTransform: "uppercase",
             fontWeight: 500,
           }}
         >
           <span>Acesso seguro · Documentos · Garantia</span>
-          <span style={{ color: "#F2D88A" }}>nobretechstore.com.br</span>
+          <span style={{ color: "#F2D88A", letterSpacing: "0.04em", textTransform: "none" }}>
+            nobretechstore.com.br
+          </span>
         </div>
       </div>
     ),
-    { ...size },
+    {
+      ...size,
+      fonts: [
+        { name: "Syne", data: syne700, weight: 700, style: "normal" },
+        { name: "Syne", data: syne800, weight: 800, style: "normal" },
+        { name: "Inter", data: inter400, weight: 400, style: "normal" },
+        { name: "Inter", data: inter500, weight: 500, style: "normal" },
+      ],
+    },
   )
 }
