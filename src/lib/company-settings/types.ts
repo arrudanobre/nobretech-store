@@ -112,7 +112,7 @@ export type CompanySettingsDomainResolution =
   | ({ domain: "document" } & CompanySettingsResolution<CompanySettingsDataByDomain["document"]>)
   | ({ domain: "identity" } & CompanySettingsResolution<CompanySettingsDataByDomain["identity"]>)
 
-export type CompanySettingsAuditLogDomain = "brand" | "contact" | "document"
+export type CompanySettingsAuditLogDomain = "brand" | "contact" | "document" | "warranty"
 
 export type CompanySettingsAuditLogAction =
   | "update_brand"
@@ -121,6 +121,12 @@ export type CompanySettingsAuditLogAction =
   | "deactivate_contact"
   | "reactivate_contact"
   | "update_document_profile"
+  | "create_warranty_policy"
+  | "update_warranty_policy"
+  | "deactivate_warranty_policy"
+  | "create_warranty_term"
+  | "update_warranty_term"
+  | "deactivate_warranty_term"
 
 export type CompanySettingsAuditLog = {
   id: string

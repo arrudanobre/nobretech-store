@@ -99,6 +99,12 @@ const auditActionLabels: Record<CompanySettingsAuditLog["action"], string> = {
   deactivate_contact: "Contato desativado",
   reactivate_contact: "Contato reativado",
   update_document_profile: "Perfil documental atualizado",
+  create_warranty_policy: "Politica de garantia criada",
+  update_warranty_policy: "Politica de garantia atualizada",
+  deactivate_warranty_policy: "Politica de garantia inativada",
+  create_warranty_term: "Clausula de garantia criada",
+  update_warranty_term: "Clausula de garantia atualizada",
+  deactivate_warranty_term: "Clausula de garantia inativada",
 }
 
 function auditActionLabel(action: CompanySettingsAuditLog["action"]): string {

@@ -2,7 +2,7 @@ import "server-only"
 
 import type { PoolClient } from "pg"
 
-export const AUDIT_DOMAINS = ["brand", "contact", "document"] as const
+export const AUDIT_DOMAINS = ["brand", "contact", "document", "warranty"] as const
 export type CompanySettingsAuditDomain = (typeof AUDIT_DOMAINS)[number]
 
 export const AUDIT_ACTIONS = [
@@ -12,6 +12,12 @@ export const AUDIT_ACTIONS = [
   "deactivate_contact",
   "reactivate_contact",
   "update_document_profile",
+  "create_warranty_policy",
+  "update_warranty_policy",
+  "deactivate_warranty_policy",
+  "create_warranty_term",
+  "update_warranty_term",
+  "deactivate_warranty_term",
 ] as const
 export type CompanySettingsAuditAction = (typeof AUDIT_ACTIONS)[number]
 
@@ -68,18 +74,49 @@ const FIELD_LABELS: Record<CompanySettingsAuditDomain, Record<string, string>> =
     effective_until: "Vigência final",
     active: "Status",
   },
+  warranty: {
+    // warranty_policies fields
+    name: "Nome",
+    product_type: "Tipo de produto",
+    product_condition: "Condição",
+    product_origin: "Origem",
+    default_months: "Prazo padrão (meses)",
+    default_days: "Prazo padrão (dias)",
+    calculation_mode: "Modo de cálculo",
+    public_label_template: "Label público",
+    internal_description: "Descrição interna",
+    requires_customer_identification: "Exige identificação",
+    applies_to_sale: "Aplica em venda",
+    applies_to_catalog: "Aplica no catálogo",
+    applies_to_portal: "Aplica no portal",
+    applies_to_documents: "Aplica em documentos",
+    active: "Status",
+    effective_from: "Vigência inicial",
+    effective_until: "Vigência final",
+    // warranty_policy_terms fields (no name conflicts with policy fields)
+    term_type: "Tipo de cláusula",
+    title: "Título",
+    body: "Texto",
+    sort_order: "Ordem",
+  },
 }
 
 function buildSummary(action: CompanySettingsAuditAction, labels: string[]): string {
   if (action === "create_contact") return "Contato criado"
   if (action === "deactivate_contact") return "Contato inativado"
   if (action === "reactivate_contact") return "Contato reativado"
+  if (action === "create_warranty_policy") return "Politica de garantia criada"
+  if (action === "deactivate_warranty_policy") return "Politica de garantia inativada"
+  if (action === "create_warranty_term") return "Clausula de garantia criada"
+  if (action === "deactivate_warranty_term") return "Clausula de garantia inativada"
 
   if (labels.length === 0) {
     if (action === "update_brand") return "Marca atualizada"
     if (action === "update_contact") return "Contato atualizado"
     if (action === "update_document_profile") return "Perfil documental atualizado"
-    return "Configuração atualizada"
+    if (action === "update_warranty_policy") return "Politica de garantia atualizada"
+    if (action === "update_warranty_term") return "Clausula de garantia atualizada"
+    return "Configuracao atualizada"
   }
 
   if (labels.length === 1) return `${labels[0]} alterado`
@@ -104,6 +141,18 @@ export function buildAuditMetadata(params: {
   }
   if (action === "reactivate_contact") {
     return { changedFields: ["active"], changedFieldLabels: ["Status"], summary: "Contato reativado" }
+  }
+  if (action === "create_warranty_policy") {
+    return { changedFields: [], changedFieldLabels: [], summary: "Politica de garantia criada" }
+  }
+  if (action === "deactivate_warranty_policy") {
+    return { changedFields: ["active"], changedFieldLabels: ["Status"], summary: "Politica de garantia inativada" }
+  }
+  if (action === "create_warranty_term") {
+    return { changedFields: [], changedFieldLabels: [], summary: "Clausula de garantia criada" }
+  }
+  if (action === "deactivate_warranty_term") {
+    return { changedFields: ["active"], changedFieldLabels: ["Status"], summary: "Clausula de garantia inativada" }
   }
 
   const labelMap = FIELD_LABELS[domain]
