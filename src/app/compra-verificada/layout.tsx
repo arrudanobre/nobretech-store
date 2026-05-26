@@ -8,31 +8,16 @@ export const metadata: Metadata = {
   description: PORTAL_DESCRIPTION,
   robots: { index: false, follow: false },
   openGraph: {
-    title: "Compra verificada Nobretech Store",
+    title: "Portal de Transparência Nobretech Store",
     description: PORTAL_DESCRIPTION,
     siteName: "Nobretech Store",
     locale: "pt_BR",
     type: "website",
-    images: [
-      {
-        url: "/og-nobretech-v2.png",
-        width: 1200,
-        height: 630,
-        alt: "Nobretech Store - Compra verificada e garantia",
-        type: "image/png",
-      },
-    ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Compra verificada Nobretech Store",
+    title: "Portal de Transparência Nobretech Store",
     description: PORTAL_DESCRIPTION,
-    images: [
-      {
-        url: "/og-nobretech-v2.png",
-        alt: "Nobretech Store - Compra verificada e garantia",
-      },
-    ],
   },
 }
 

@@ -9,7 +9,6 @@ import { listPublicCatalog } from "@/lib/catalog/queries"
 export const dynamic = "force-dynamic"
 
 const CATALOG_URL = "https://www.nobretechstore.com.br/catalogo"
-const CATALOG_OG_IMAGE = "/og-nobretech-v2.png"
 const CATALOG_DESCRIPTION =
   "Veja os aparelhos disponíveis na Nobretech Store, com fotos reais nos seminovos, garantia e atendimento pelo WhatsApp."
 
@@ -26,21 +25,11 @@ export const metadata: Metadata = {
     siteName: "Nobretech Store",
     locale: "pt_BR",
     type: "website",
-    images: [
-      {
-        url: CATALOG_OG_IMAGE,
-        width: 1200,
-        height: 630,
-        alt: "Catálogo Nobretech Store",
-        type: "image/png",
-      },
-    ],
   },
   twitter: {
     card: "summary_large_image",
     title: "Catálogo Nobretech Store",
     description: CATALOG_DESCRIPTION,
-    images: [{ url: CATALOG_OG_IMAGE, alt: "Catálogo Nobretech Store" }],
   },
 }
 
