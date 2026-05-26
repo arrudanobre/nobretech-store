@@ -10,6 +10,8 @@ import { isFinancialPayment } from "@/lib/sale-payments"
 import { formatPaymentMethod } from "@/lib/helpers"
 import { syncTransactionMovement } from "@/lib/finance/sync-transaction-movement"
 import { decrementInventoryVariantQuantity } from "@/lib/inventory/inventory-variants"
+import { materializeSaleItemsWithClient } from "@/lib/sales/sale-items"
+import { applySaleWarranties, type SaleWarrantySelections, type WarrantySelectionInput } from "@/lib/warranty"
 import {
   SaleOperationalError,
   buildAdditionalItemStockPlan,
@@ -209,6 +211,7 @@ type ValidatedInput = {
   selectedVariantId: string | null
   selectedVariantName: string | null
   selectedVariantColorHex: string | null
+  warrantySelections: SaleWarrantySelections | null
 }
 
 function parseAndValidateInput(
@@ -329,6 +332,10 @@ function parseAndValidateInput(
     }
   }
 
+  const warrantySelectionsResult = parseWarrantySelections(b.warrantySelections)
+  if (!warrantySelectionsResult.ok) return { ok: false, error: warrantySelectionsResult.error }
+  const warrantySelections = warrantySelectionsResult.value
+
   return {
     ok: true,
     input: {
@@ -368,8 +375,60 @@ function parseAndValidateInput(
       selectedVariantId: isUuid(b.selectedVariantId) ? b.selectedVariantId : null,
       selectedVariantName: safeString(b.selectedVariantName, 120),
       selectedVariantColorHex: safeString(b.selectedVariantColorHex, 30),
+      warrantySelections,
     },
   }
+}
+
+function parseWarrantySelection(raw: unknown): WarrantySelectionInput | null | undefined {
+  if (raw === undefined) return undefined
+  if (raw === null) return null
+  if (typeof raw !== "object" || Array.isArray(raw)) return undefined
+  const obj = raw as Record<string, unknown>
+  const policyIdRaw = obj.warrantyPolicyId
+  let warrantyPolicyId: string | null = null
+  if (policyIdRaw === null) {
+    warrantyPolicyId = null
+  } else if (typeof policyIdRaw === "string" && isUuid(policyIdRaw)) {
+    warrantyPolicyId = policyIdRaw
+  } else if (policyIdRaw !== undefined) {
+    return undefined
+  }
+  return {
+    warrantyPolicyId,
+    manualEndsAt: typeof obj.manualEndsAt === "string" ? safeDate(obj.manualEndsAt) : null,
+    warrantyName: safeString(obj.warrantyName, 300),
+    warrantyLabel: safeString(obj.warrantyLabel, 300),
+    manufacturerCoverageReference: safeString(obj.manufacturerCoverageReference, 300),
+    manufacturerCoverageUrl: safeString(obj.manufacturerCoverageUrl, 1000),
+    manualNotes: safeString(obj.manualNotes, 2000),
+    manualSelection: Boolean(obj.manualSelection),
+  }
+}
+
+function parseWarrantySelections(
+  raw: unknown
+): { ok: true; value: SaleWarrantySelections | null } | { ok: false; error: string } {
+  if (raw == null) return { ok: true, value: null }
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, error: "warrantySelections inválido." }
+  }
+  const obj = raw as Record<string, unknown>
+  const result: SaleWarrantySelections = {}
+  if ("main" in obj) {
+    const parsed = parseWarrantySelection(obj.main)
+    if (parsed !== undefined) result.main = parsed
+  }
+  if (obj.additionalBySourceId && typeof obj.additionalBySourceId === "object" && !Array.isArray(obj.additionalBySourceId)) {
+    const map: Record<string, WarrantySelectionInput | null> = {}
+    for (const [k, v] of Object.entries(obj.additionalBySourceId as Record<string, unknown>)) {
+      if (!isUuid(k)) continue
+      const parsed = parseWarrantySelection(v)
+      if (parsed !== undefined) map[k] = parsed
+    }
+    if (Object.keys(map).length > 0) result.additionalBySourceId = map
+  }
+  return { ok: true, value: Object.keys(result).length > 0 ? result : null }
 }
 
 async function requiresVariantSelection(input: {
@@ -897,6 +956,27 @@ export async function POST(request: NextRequest) {
       ]
     )
 
+    // 14. Materialize sale_items (canonical contract) + apply per-item warranties
+    //     This runs inside the same transaction so any failure rolls back the entire sale.
+    //     Legacy sales.warranty_* fields above remain unchanged.
+    await materializeSaleItemsWithClient(client, companyId, saleId!)
+    let warrantyApplied = { created: 0, skipped: 0 }
+    try {
+      const warrantyResult = await applySaleWarranties(
+        client,
+        {
+          companyId,
+          saleId: saleId!,
+          startsAt: input.warrantyStart,
+          selections: input.warrantySelections ?? undefined,
+        },
+        { userId: appUserId, email: authResult.context.email }
+      )
+      warrantyApplied = { created: warrantyResult.created.length, skipped: warrantyResult.skipped.length }
+    } catch (err) {
+      throw new SaleOperationalError(err instanceof Error ? err.message : "Erro ao aplicar garantia por item.")
+    }
+
     await client.query("COMMIT")
 
     const financialSyncStatus =
@@ -911,6 +991,7 @@ export async function POST(request: NextRequest) {
         paymentIds,
         transactionIds,
         financialSyncStatus,
+        warrantyApplied,
       },
       error: null,
     })

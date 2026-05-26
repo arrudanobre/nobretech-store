@@ -390,6 +390,270 @@ export async function getSaleItemWarrantyById(
 }
 
 // ============================================================
+// In-transaction helpers (for sale creation flow)
+// ============================================================
+
+export type WarrantySelectionInput = {
+  warrantyPolicyId: string | null
+  manualEndsAt?: string | Date | null
+  warrantyName?: string | null
+  warrantyLabel?: string | null
+  manufacturerCoverageReference?: string | null
+  manufacturerCoverageUrl?: string | null
+  manualNotes?: string | null
+  manualSelection?: boolean
+}
+
+export type SaleWarrantySelections = {
+  main?: WarrantySelectionInput | null
+  additionalBySourceId?: Record<string, WarrantySelectionInput | null>
+}
+
+export type ApplySaleWarrantiesResult = {
+  created: SaleItemWarranty[]
+  skipped: Array<{ saleItemId: string; reason: string }>
+}
+
+type EligibleSaleItemRow = {
+  id: string
+  sale_id: string
+  inventory_item_id: string | null
+  source_table: "sales" | "sales_additional_items"
+  source_id: string | null
+  item_role: "main" | "upsell" | "gift" | "accessory" | "service" | "other"
+  item_type: "device" | "accessory" | "service" | "other"
+  is_gift: boolean
+}
+
+async function fetchSaleItemsForWarranty(
+  client: PoolClient,
+  companyId: string,
+  saleId: string
+): Promise<EligibleSaleItemRow[]> {
+  const result = await client.query<EligibleSaleItemRow>(
+    `SELECT
+       si.id,
+       si.sale_id,
+       si.inventory_item_id,
+       si.source_table,
+       si.source_id,
+       si.item_role,
+       si.item_type,
+       si.is_gift
+     FROM sale_items si
+     WHERE si.company_id = $1 AND si.sale_id = $2 AND si.active = TRUE
+     ORDER BY si.sort_order ASC, si.created_at ASC`,
+    [companyId, saleId]
+  )
+  return result.rows
+}
+
+async function resolveDefaultPolicyIdForItem(
+  client: PoolClient,
+  companyId: string,
+  item: EligibleSaleItemRow
+): Promise<string | null> {
+  // Only main devices with linked inventory are eligible for auto-default.
+  // Inventory does not carry product_condition/origin today, so we match
+  // by product_type only and let specificity+priority pick the best is_default policy.
+  if (item.item_role !== "main") return null
+  if (item.item_type !== "device") return null
+  if (!item.inventory_item_id) return null
+
+  const result = await client.query<{ id: string }>(
+    `SELECT id FROM warranty_policies
+     WHERE company_id = $1
+       AND active = TRUE
+       AND is_default = TRUE
+       AND effective_from <= NOW()
+       AND (effective_until IS NULL OR effective_until > NOW())
+       AND (product_type IS NULL OR product_type = 'device')
+       AND calculation_mode <> 'manual_dates'
+     ORDER BY
+       (CASE WHEN product_type IS NOT NULL THEN 1 ELSE 0 END +
+        CASE WHEN product_condition IS NOT NULL THEN 1 ELSE 0 END +
+        CASE WHEN product_origin IS NOT NULL THEN 1 ELSE 0 END) DESC,
+       priority ASC, effective_from DESC, updated_at DESC
+     LIMIT 1`,
+    [companyId]
+  )
+  return result.rows[0]?.id ?? null
+}
+
+type InsertWarrantyParams = {
+  companyId: string
+  saleId: string
+  saleItemId: string
+  inventoryItemId: string | null
+  warrantyPolicyId: string
+  startsAt: Date
+  selection: WarrantySelectionInput
+}
+
+async function insertWarrantyForSaleItem(
+  client: PoolClient,
+  params: InsertWarrantyParams,
+  actor: WarrantyActor
+): Promise<{ ok: true; warranty: SaleItemWarranty } | { ok: false; error: string }> {
+  const snapshot = await buildWarrantySnapshot(params.companyId, params.warrantyPolicyId, client)
+  if (!snapshot) return { ok: false, error: "Politica de garantia nao encontrada para esta empresa." }
+  if (!snapshot.policy.active) return { ok: false, error: "Politica de garantia inativa nao pode ser vinculada." }
+  if (params.selection.manualSelection === true && !snapshot.policy.isSelectable) {
+    return { ok: false, error: "Politica nao e selecionavel manualmente." }
+  }
+  if (!CALCULATION_MODES.includes(snapshot.policy.calculationMode)) {
+    return { ok: false, error: "Modo de calculo da politica invalido." }
+  }
+  if (!WARRANTY_NATURES.includes(snapshot.policy.warrantyNature)) {
+    return { ok: false, error: "Natureza da garantia invalida." }
+  }
+
+  const manualEndsAt = params.selection.manualEndsAt != null ? toDate(params.selection.manualEndsAt) : null
+  const effectiveMonths = snapshot.policy.defaultMonths
+  const effectiveDays = snapshot.policy.defaultDays
+
+  const period = calculateWarrantyPeriod({
+    startsAt: params.startsAt,
+    calculationMode: snapshot.policy.calculationMode,
+    durationMonths: effectiveMonths,
+    durationDays: effectiveDays,
+    manualEndsAt,
+  })
+  if (!period.ok) return { ok: false, error: period.error }
+
+  const warrantyName = nullIfEmptyString(params.selection.warrantyName ?? null) ?? snapshot.policySnapshot.name
+  const warrantyLabel =
+    nullIfEmptyString(params.selection.warrantyLabel ?? null) ?? snapshot.policySnapshot.public_label_template
+
+  const insertResult = await client.query<Record<string, unknown>>(
+    `INSERT INTO sale_item_warranties (
+      company_id, sale_id, sale_item_id, inventory_item_id, warranty_policy_id,
+      warranty_nature, warranty_name, warranty_label,
+      duration_months, duration_days, calculation_mode,
+      starts_at, ends_at,
+      manufacturer_coverage_reference, manufacturer_coverage_url, manual_notes,
+      policy_snapshot, terms_snapshot, active
+    ) VALUES (
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, TRUE
+    ) RETURNING *`,
+    [
+      params.companyId,
+      params.saleId,
+      params.saleItemId,
+      params.inventoryItemId,
+      params.warrantyPolicyId,
+      snapshot.policy.warrantyNature,
+      warrantyName,
+      warrantyLabel,
+      effectiveMonths,
+      effectiveDays,
+      snapshot.policy.calculationMode,
+      period.value.startsAt,
+      period.value.endsAt,
+      nullIfEmptyString(params.selection.manufacturerCoverageReference ?? null),
+      nullIfEmptyString(params.selection.manufacturerCoverageUrl ?? null),
+      nullIfEmptyString(params.selection.manualNotes ?? null),
+      JSON.stringify(snapshot.policySnapshot),
+      JSON.stringify(snapshot.termsSnapshot),
+    ]
+  )
+
+  const row = insertResult.rows[0]
+  const entityId = (row?.id as string) ?? null
+  const after = rowToSnapshot(row)
+
+  await recordCompanySettingsAuditLog({
+    client,
+    companyId: params.companyId,
+    actorUserId: actor.userId,
+    actorEmail: actor.email,
+    domain: "warranty",
+    entityTable: "sale_item_warranties",
+    entityId,
+    action: "create_sale_item_warranty",
+    beforeSnapshot: null,
+    afterSnapshot: after,
+    metadata: buildAuditMetadata({
+      action: "create_sale_item_warranty",
+      domain: "warranty",
+      beforeSnapshot: null,
+      afterSnapshot: after,
+    }),
+  })
+
+  return { ok: true, warranty: mapRow(row) }
+}
+
+export async function applySaleWarranties(
+  client: PoolClient,
+  params: {
+    companyId: string
+    saleId: string
+    startsAt: Date | string
+    selections?: SaleWarrantySelections
+  },
+  actor: WarrantyActor
+): Promise<ApplySaleWarrantiesResult> {
+  const { companyId, saleId, selections } = params
+  const startsAt = toDate(params.startsAt)
+  if (!startsAt) throw new Error("Data de inicio da garantia invalida.")
+  if (!UUID_RE.test(companyId)) throw new Error("Empresa invalida.")
+  if (!UUID_RE.test(saleId)) throw new Error("Venda invalida.")
+
+  const items = await fetchSaleItemsForWarranty(client, companyId, saleId)
+  const created: SaleItemWarranty[] = []
+  const skipped: ApplySaleWarrantiesResult["skipped"] = []
+
+  for (const item of items) {
+    let selection: WarrantySelectionInput | null | undefined
+
+    if (item.item_role === "main") {
+      selection = selections?.main
+    } else if (item.source_id) {
+      selection = selections?.additionalBySourceId?.[item.source_id]
+    }
+
+    let warrantyPolicyId: string | null = null
+
+    if (selection !== undefined) {
+      if (!selection || selection.warrantyPolicyId === null) {
+        skipped.push({ saleItemId: item.id, reason: "Sem garantia (escolha explicita)." })
+        continue
+      }
+      if (typeof selection.warrantyPolicyId !== "string" || !UUID_RE.test(selection.warrantyPolicyId)) {
+        throw new Error(`Politica de garantia invalida para item ${item.id}.`)
+      }
+      warrantyPolicyId = selection.warrantyPolicyId
+    } else {
+      warrantyPolicyId = await resolveDefaultPolicyIdForItem(client, companyId, item)
+      if (!warrantyPolicyId) {
+        skipped.push({ saleItemId: item.id, reason: "Sem politica default aplicavel." })
+        continue
+      }
+      selection = { warrantyPolicyId, manualSelection: false }
+    }
+
+    const result = await insertWarrantyForSaleItem(
+      client,
+      {
+        companyId,
+        saleId,
+        saleItemId: item.id,
+        inventoryItemId: item.inventory_item_id,
+        warrantyPolicyId,
+        startsAt,
+        selection: selection ?? { warrantyPolicyId },
+      },
+      actor
+    )
+    if (!result.ok) throw new Error(result.error)
+    created.push(result.warranty)
+  }
+
+  return { created, skipped }
+}
+
+// ============================================================
 // Mutations
 // ============================================================
 

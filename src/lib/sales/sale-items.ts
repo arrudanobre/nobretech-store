@@ -351,3 +351,33 @@ export async function ensureSaleItemsForSale(companyId: string, saleId: string):
   await materializeSaleItemsForSale(companyId, saleId)
   return getSaleItems(companyId, saleId)
 }
+
+export async function materializeSaleItemsWithClient(
+  client: PoolClient,
+  companyId: string,
+  saleId: string
+): Promise<{ insertedMainItems: number; insertedAdditionalItems: number }> {
+  if (!UUID_RE.test(companyId) || !UUID_RE.test(saleId)) {
+    return { insertedMainItems: 0, insertedAdditionalItems: 0 }
+  }
+  const insertedMainItems = await materializeMainSaleItem(client, companyId, saleId)
+  const insertedAdditionalItems = await materializeAdditionalSaleItems(client, companyId, saleId)
+  return { insertedMainItems, insertedAdditionalItems }
+}
+
+export async function getSaleItemsWithClient(
+  client: PoolClient,
+  companyId: string,
+  saleId: string
+): Promise<SaleItem[]> {
+  if (!UUID_RE.test(companyId) || !UUID_RE.test(saleId)) return []
+  const result = await client.query<SaleItemRow>(
+    `SELECT *
+     FROM sale_items
+     WHERE company_id = $1
+       AND sale_id = $2
+     ORDER BY sort_order ASC, created_at ASC, id ASC`,
+    [companyId, saleId]
+  )
+  return result.rows.map(mapSaleItem)
+}

@@ -33,17 +33,21 @@ export {
 } from "./mutations"
 
 export type {
+  ApplySaleWarrantiesResult,
   CreateSaleItemWarrantyInput,
   SaleItemWarranty,
+  SaleWarrantySelections,
   UpdateSaleItemWarrantyInput,
   WarrantyPeriod,
   WarrantyPeriodInput,
   WarrantyPeriodResult,
   WarrantyPolicySnapshot,
+  WarrantySelectionInput,
   WarrantyTermSnapshot,
 } from "./sale-item-warranties"
 
 export {
+  applySaleWarranties,
   buildWarrantySnapshot,
   calculateWarrantyPeriod,
   createSaleItemWarranty,

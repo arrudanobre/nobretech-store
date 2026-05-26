@@ -747,6 +747,20 @@ function NewSaleContent() {
   const [salePayments, setSalePayments] = useState<SalePaymentDraft[]>(() => [newPaymentDraft("initial")])
   const [remainingTargetPickerOpen, setRemainingTargetPickerOpen] = useState(false)
   const [warrantyMonths, setWarrantyMonths] = useState("3")
+  const [selectableWarrantyPolicies, setSelectableWarrantyPolicies] = useState<
+    Array<{
+      id: string
+      name: string
+      warrantyNature: string
+      calculationMode: "calendar_months" | "fixed_days" | "manual_dates"
+      defaultMonths: number | null
+      defaultDays: number | null
+      selectionLabel: string | null
+      isDefault: boolean
+    }>
+  >([])
+  const [selectedWarrantyPolicyId, setSelectedWarrantyPolicyId] = useState<string>("")
+  const [warrantyManualEndsAt, setWarrantyManualEndsAt] = useState<string>("")
   const [hasTradeIn, setHasTradeIn] = useState(false)
   const [tradeIn, setTradeIn] = useState({ category: "", modelIdx: 0, storage: "", color: "", imei: "", grade: "", batteryHealth: "", value: "" })
   const [tradeInOverageDecision, setTradeInOverageDecision] = useState<"" | "credit" | "change" | "block">("")
@@ -788,6 +802,67 @@ function NewSaleContent() {
   const calculateTradeInValue = useCallback(() => {
     return parseFloat(tradeIn.value) || 0
   }, [tradeIn.value])
+
+  // Fetch selectable warranty policies once
+  useEffect(() => {
+    let cancelled = false
+    fetch("/api/warranty/selectable-policies")
+      .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+      .then((body) => {
+        if (cancelled) return
+        const policies = Array.isArray(body?.data) ? body.data : []
+        setSelectableWarrantyPolicies(policies)
+        const defaultPolicy = policies.find((p: { isDefault: boolean }) => p.isDefault)
+        if (defaultPolicy && !selectedWarrantyPolicyId) {
+          setSelectedWarrantyPolicyId(defaultPolicy.id)
+          if (defaultPolicy.calculationMode === "calendar_months" && defaultPolicy.defaultMonths) {
+            setWarrantyMonths(String(defaultPolicy.defaultMonths))
+          }
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setSelectableWarrantyPolicies([])
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const selectedWarrantyPolicy = useMemo(
+    () => selectableWarrantyPolicies.find((p) => p.id === selectedWarrantyPolicyId) || null,
+    [selectableWarrantyPolicies, selectedWarrantyPolicyId]
+  )
+
+  const handleWarrantyPolicyChange = useCallback(
+    (policyId: string) => {
+      setSelectedWarrantyPolicyId(policyId)
+      const policy = selectableWarrantyPolicies.find((p) => p.id === policyId)
+      if (!policy) return
+      if (policy.calculationMode === "calendar_months" && policy.defaultMonths) {
+        setWarrantyMonths(String(policy.defaultMonths))
+      } else if (policy.calculationMode === "fixed_days" && policy.defaultDays) {
+        setWarrantyMonths(String(Math.max(1, Math.round(policy.defaultDays / 30))))
+      }
+    },
+    [selectableWarrantyPolicies]
+  )
+
+  const handleWarrantyMonthsClick = useCallback(
+    (months: string) => {
+      setWarrantyMonths(months)
+      const monthsNum = parseInt(months, 10)
+      const match = selectableWarrantyPolicies.find(
+        (p) => p.calculationMode === "calendar_months" && p.defaultMonths === monthsNum
+      )
+      if (match) {
+        setSelectedWarrantyPolicyId(match.id)
+      } else {
+        setSelectedWarrantyPolicyId("none")
+      }
+    },
+    [selectableWarrantyPolicies]
+  )
 
   // Pre-fill trade-in from evaluation page
   useEffect(() => {
@@ -1676,6 +1751,20 @@ function NewSaleContent() {
               ...(storeAmountDue > 0 && tradeInOverageDecision
                 ? { overageHandling: tradeInOverageDecision as "credit" | "change", overageAmount: storeAmountDue }
                 : {}),
+            },
+          } : {}),
+          ...(selectedWarrantyPolicyId ? {
+            warrantySelections: {
+              main:
+                selectedWarrantyPolicyId === "none"
+                  ? { warrantyPolicyId: null }
+                  : {
+                      warrantyPolicyId: selectedWarrantyPolicyId,
+                      manualSelection: true,
+                      ...(selectedWarrantyPolicy?.calculationMode === "manual_dates" && warrantyManualEndsAt
+                        ? { manualEndsAt: warrantyManualEndsAt }
+                        : {}),
+                    },
             },
           } : {}),
         }),
@@ -3218,7 +3307,7 @@ function NewSaleContent() {
                     <button
                       key={months}
                       type="button"
-                      onClick={() => setWarrantyMonths(months)}
+                      onClick={() => handleWarrantyMonthsClick(months)}
                       className={`rounded-xl border px-3 py-3 text-sm font-bold transition-all ${
                         warrantyMonths === months
                           ? "border-royal-500 bg-royal-100/70 text-royal-600 shadow-sm"
@@ -3229,6 +3318,36 @@ function NewSaleContent() {
                     </button>
                   ))}
                 </div>
+                {selectableWarrantyPolicies.length > 0 && (
+                  <div className="mt-3">
+                    <label className="mb-1 block text-xs font-medium text-navy-900">Política de garantia</label>
+                    <select
+                      value={selectedWarrantyPolicyId}
+                      onChange={(event) => handleWarrantyPolicyChange(event.target.value)}
+                      className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                    >
+                      <option value="">Padrão da loja</option>
+                      <option value="none">Sem política vinculada</option>
+                      {selectableWarrantyPolicies.map((policy) => (
+                        <option key={policy.id} value={policy.id}>
+                          {policy.selectionLabel || policy.name}
+                          {policy.isDefault ? " · padrão" : ""}
+                        </option>
+                      ))}
+                    </select>
+                    {selectedWarrantyPolicy?.calculationMode === "manual_dates" && (
+                      <div className="mt-2">
+                        <label className="mb-1 block text-xs font-medium text-navy-900">Data final da garantia</label>
+                        <input
+                          type="date"
+                          value={warrantyManualEndsAt}
+                          onChange={(event) => setWarrantyManualEndsAt(event.target.value)}
+                          className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
