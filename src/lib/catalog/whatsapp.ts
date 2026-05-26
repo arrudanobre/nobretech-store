@@ -1,4 +1,5 @@
 import type { PublicCatalogProduct } from "@/lib/catalog/types"
+import { getCatalogProductDisplayName } from "@/lib/catalog/product-display-name"
 
 // Same number used by the public landing page (src/components/landing/nobretech-landing-page.tsx).
 // Centralized here so the catalog and any future caller share one source.
@@ -18,6 +19,6 @@ export function buildGenericWhatsAppLink(message: string): string {
 }
 
 export function defaultMessageForProduct(product: { title: string; storage?: string | null; color?: string | null }): string {
-  const descriptor = [product.title, product.storage, product.color].filter(Boolean).join(" ")
+  const descriptor = getCatalogProductDisplayName(product)
   return `Olá, vi no catálogo da Nobretech o ${descriptor} e queria mais informações.`
 }
