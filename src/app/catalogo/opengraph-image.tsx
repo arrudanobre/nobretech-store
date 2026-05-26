@@ -126,7 +126,7 @@ export default async function CatalogOpenGraphImage() {
           <div
             style={{
               fontFamily: "Syne",
-              fontSize: "100px",
+              fontSize: "90px",
               fontWeight: 800,
               letterSpacing: "-0.04em",
               lineHeight: 1,
