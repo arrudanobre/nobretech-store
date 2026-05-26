@@ -188,3 +188,13 @@ Ambas são idempotentes (usam `CREATE IF NOT EXISTS`, `DROP TRIGGER IF EXISTS`, 
 - Integração com emissão de documentos
 - Resolução da inconsistência 3 vs 6 meses
 - Qualquer alteração em comportamentos existentes
+
+---
+
+## Atualização Fase 2C
+
+A Fase 2C evoluiu este domínio para suportar políticas de garantia selecionáveis futuramente por venda/item, sem integrar consumidores.
+
+Documento complementar: `docs/company-settings-phase-2c-warranty-selectable.md`.
+
+Mudança principal: a garantia não deve ser fixa por empresa. A empresa terá políticas permitidas, com uma opção padrão sugerida por escopo e outras opções válidas para seleção manual futura.

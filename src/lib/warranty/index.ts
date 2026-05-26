@@ -2,6 +2,7 @@ export type {
   WarrantyActor,
   WarrantyCalculationMode,
   WarrantyMutationResult,
+  WarrantyNature,
   WarrantyPolicy,
   WarrantyPolicyInput,
   WarrantyPolicyTerm,
@@ -15,6 +16,8 @@ export type {
 export {
   getWarrantyPolicies,
   getActiveWarrantyPolicies,
+  getDefaultWarrantyPolicy,
+  getSelectableWarrantyPolicies,
   getWarrantyPolicyById,
   getWarrantyPolicyTerms,
   resolveWarrantyPolicy,

@@ -3,6 +3,7 @@ import "server-only"
 import { pool } from "@/lib/db"
 import type {
   WarrantyCalculationMode,
+  WarrantyNature,
   WarrantyPolicy,
   WarrantyPolicyTerm,
   WarrantyResolution,
@@ -22,6 +23,13 @@ type WarrantyPolicyRow = {
   default_months: number | null
   default_days: number | null
   calculation_mode: WarrantyCalculationMode
+  warranty_nature: WarrantyNature
+  is_selectable: boolean
+  is_default: boolean
+  selection_label: string | null
+  selection_description: string | null
+  legal_basis: string | null
+  priority: number
   public_label_template: string | null
   internal_description: string | null
   requires_customer_identification: boolean
@@ -64,6 +72,13 @@ function mapPolicy(row: WarrantyPolicyRow): WarrantyPolicy {
     defaultMonths: row.default_months,
     defaultDays: row.default_days,
     calculationMode: row.calculation_mode,
+    warrantyNature: row.warranty_nature,
+    isSelectable: row.is_selectable,
+    isDefault: row.is_default,
+    selectionLabel: row.selection_label,
+    selectionDescription: row.selection_description,
+    legalBasis: row.legal_basis,
+    priority: row.priority,
     publicLabelTemplate: row.public_label_template,
     internalDescription: row.internal_description,
     requiresCustomerIdentification: row.requires_customer_identification,
@@ -118,6 +133,22 @@ export async function getActiveWarrantyPolicies(companyId: string): Promise<Warr
   return result.rows.map(mapPolicy)
 }
 
+function buildCriteriaFilter(criteria: WarrantyResolutionCriteria): {
+  productType: string | null
+  productCondition: string | null
+  productOrigin: string | null
+  warrantyNature: WarrantyNature | null
+  usageContext: WarrantyResolutionCriteria["usageContext"]
+} {
+  return {
+    productType: criteria.productType ?? null,
+    productCondition: criteria.productCondition ?? null,
+    productOrigin: criteria.productOrigin ?? null,
+    warrantyNature: criteria.warrantyNature ?? null,
+    usageContext: criteria.usageContext ?? null,
+  }
+}
+
 export async function getWarrantyPolicyById(
   companyId: string,
   policyId: string
@@ -148,13 +179,90 @@ export async function getWarrantyPolicyTerms(
   return result.rows.map(mapTerm)
 }
 
+export async function getSelectableWarrantyPolicies(
+  companyId: string,
+  criteria: WarrantyResolutionCriteria = {}
+): Promise<WarrantyPolicy[]> {
+  if (!UUID_RE.test(companyId)) return []
+
+  const { productType, productCondition, productOrigin, warrantyNature, usageContext } = buildCriteriaFilter(criteria)
+
+  const result = await pool.query<WarrantyPolicyRow>(
+    `SELECT *,
+      (CASE WHEN product_type IS NOT NULL THEN 1 ELSE 0 END +
+       CASE WHEN product_condition IS NOT NULL THEN 1 ELSE 0 END +
+       CASE WHEN product_origin IS NOT NULL THEN 1 ELSE 0 END) AS specificity_score
+    FROM warranty_policies
+    WHERE company_id = $1
+      AND active = TRUE
+      AND is_selectable = TRUE
+      AND effective_from <= NOW()
+      AND (effective_until IS NULL OR effective_until > NOW())
+      AND (product_type IS NULL OR product_type = $2)
+      AND (product_condition IS NULL OR product_condition = $3)
+      AND (product_origin IS NULL OR product_origin = $4)
+      AND ($5::text IS NULL OR warranty_nature = $5)
+      AND ($6::text IS NULL OR (
+        ($6 = 'sale' AND applies_to_sale = TRUE) OR
+        ($6 = 'catalog' AND applies_to_catalog = TRUE) OR
+        ($6 = 'portal' AND applies_to_portal = TRUE) OR
+        ($6 = 'documents' AND applies_to_documents = TRUE)
+      ))
+    ORDER BY specificity_score DESC, is_default DESC, priority ASC, effective_from DESC, updated_at DESC`,
+    [companyId, productType, productCondition, productOrigin, warrantyNature, usageContext]
+  )
+  return result.rows.map(mapPolicy)
+}
+
+export async function getDefaultWarrantyPolicy(
+  companyId: string,
+  criteria: WarrantyResolutionCriteria = {}
+): Promise<WarrantyResolution> {
+  if (!UUID_RE.test(companyId)) return null
+
+  const { productType, productCondition, productOrigin, warrantyNature, usageContext } = buildCriteriaFilter(criteria)
+
+  const result = await pool.query<WarrantyPolicyRow>(
+    `SELECT *,
+      (CASE WHEN product_type IS NOT NULL THEN 1 ELSE 0 END +
+       CASE WHEN product_condition IS NOT NULL THEN 1 ELSE 0 END +
+       CASE WHEN product_origin IS NOT NULL THEN 1 ELSE 0 END) AS specificity_score
+    FROM warranty_policies
+    WHERE company_id = $1
+      AND active = TRUE
+      AND is_default = TRUE
+      AND effective_from <= NOW()
+      AND (effective_until IS NULL OR effective_until > NOW())
+      AND (product_type IS NULL OR product_type = $2)
+      AND (product_condition IS NULL OR product_condition = $3)
+      AND (product_origin IS NULL OR product_origin = $4)
+      AND ($5::text IS NULL OR warranty_nature = $5)
+      AND ($6::text IS NULL OR (
+        ($6 = 'sale' AND applies_to_sale = TRUE) OR
+        ($6 = 'catalog' AND applies_to_catalog = TRUE) OR
+        ($6 = 'portal' AND applies_to_portal = TRUE) OR
+        ($6 = 'documents' AND applies_to_documents = TRUE)
+      ))
+    ORDER BY specificity_score DESC, priority ASC, effective_from DESC, updated_at DESC
+    LIMIT 1`,
+    [companyId, productType, productCondition, productOrigin, warrantyNature, usageContext]
+  )
+
+  const policyRow = result.rows[0]
+  if (!policyRow) return null
+
+  const policy = mapPolicy(policyRow)
+  const terms = await getWarrantyPolicyTerms(policy.id, { onlyActive: true })
+  return { policy, terms }
+}
+
 export async function resolveWarrantyPolicy(
   companyId: string,
   criteria: WarrantyResolutionCriteria = {}
 ): Promise<WarrantyResolution> {
   if (!UUID_RE.test(companyId)) return null
 
-  const { productType = null, productCondition = null, productOrigin = null, usageContext = null } = criteria
+  const { productType, productCondition, productOrigin, warrantyNature, usageContext } = buildCriteriaFilter(criteria)
 
   const result = await pool.query<WarrantyPolicyRow>(
     `SELECT *,
@@ -169,15 +277,16 @@ export async function resolveWarrantyPolicy(
       AND (product_type IS NULL OR product_type = $2)
       AND (product_condition IS NULL OR product_condition = $3)
       AND (product_origin IS NULL OR product_origin = $4)
-      AND ($5::text IS NULL OR (
-        ($5 = 'sale' AND applies_to_sale = TRUE) OR
-        ($5 = 'catalog' AND applies_to_catalog = TRUE) OR
-        ($5 = 'portal' AND applies_to_portal = TRUE) OR
-        ($5 = 'documents' AND applies_to_documents = TRUE)
+      AND ($5::text IS NULL OR warranty_nature = $5)
+      AND ($6::text IS NULL OR (
+        ($6 = 'sale' AND applies_to_sale = TRUE) OR
+        ($6 = 'catalog' AND applies_to_catalog = TRUE) OR
+        ($6 = 'portal' AND applies_to_portal = TRUE) OR
+        ($6 = 'documents' AND applies_to_documents = TRUE)
       ))
-    ORDER BY specificity_score DESC, effective_from DESC, updated_at DESC
+    ORDER BY specificity_score DESC, is_default DESC, priority ASC, effective_from DESC, updated_at DESC
     LIMIT 1`,
-    [companyId, productType, productCondition, productOrigin, usageContext]
+    [companyId, productType, productCondition, productOrigin, warrantyNature, usageContext]
   )
 
   const policyRow = result.rows[0]

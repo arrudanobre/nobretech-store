@@ -6,6 +6,7 @@ import type {
   WarrantyActor,
   WarrantyCalculationMode,
   WarrantyMutationResult,
+  WarrantyNature,
   WarrantyPolicy,
   WarrantyPolicyInput,
   WarrantyPolicyTerm,
@@ -16,6 +17,7 @@ import type {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 const CALCULATION_MODES: WarrantyCalculationMode[] = ["calendar_months", "fixed_days", "manual_dates"]
+const WARRANTY_NATURES: WarrantyNature[] = ["legal", "contractual", "manufacturer", "operational_support", "legacy"]
 
 const TERM_TYPES: WarrantyTermType[] = [
   "coverage",
@@ -58,6 +60,9 @@ function databaseError<T>(err: unknown): WarrantyMutationResult<T> {
     if (pgError.constraint === "idx_warranty_policies_unique_active_scope") {
       return buildError("Ja existe uma politica ativa com este escopo (tipo, condicao e origem).")
     }
+    if (pgError.constraint === "idx_warranty_policies_unique_active_default_scope") {
+      return buildError("Ja existe uma politica padrao ativa com este escopo.")
+    }
   }
 
   return buildError(pgError.message || "Nao foi possivel salvar a politica de garantia.")
@@ -74,6 +79,13 @@ function mapPolicyRow(row: Record<string, unknown>): WarrantyPolicy {
     defaultMonths: (row.default_months as number | null) ?? null,
     defaultDays: (row.default_days as number | null) ?? null,
     calculationMode: row.calculation_mode as WarrantyCalculationMode,
+    warrantyNature: row.warranty_nature as WarrantyNature,
+    isSelectable: Boolean(row.is_selectable),
+    isDefault: Boolean(row.is_default),
+    selectionLabel: (row.selection_label as string | null) ?? null,
+    selectionDescription: (row.selection_description as string | null) ?? null,
+    legalBasis: (row.legal_basis as string | null) ?? null,
+    priority: Number(row.priority),
     publicLabelTemplate: (row.public_label_template as string | null) ?? null,
     internalDescription: (row.internal_description as string | null) ?? null,
     requiresCustomerIdentification: Boolean(row.requires_customer_identification),
@@ -111,6 +123,13 @@ type PolicyValidated = {
   defaultMonths: number | null
   defaultDays: number | null
   calculationMode: WarrantyCalculationMode
+  warrantyNature: WarrantyNature
+  isSelectable: boolean
+  isDefault: boolean
+  selectionLabel: string | null
+  selectionDescription: string | null
+  legalBasis: string | null
+  priority: number
   publicLabelTemplate: string | null
   internalDescription: string | null
   requiresCustomerIdentification: boolean
@@ -128,13 +147,21 @@ function validatePolicy(
   const errors: Record<string, string> = {}
   const name = clean(input.name)
   const calculationMode = clean(input.calculationMode) as WarrantyCalculationMode
+  const warrantyNature = clean(input.warrantyNature) as WarrantyNature
   const effectiveFrom = clean(input.effectiveFrom)
   const effectiveUntil = clean(input.effectiveUntil)
   const defaultMonths = parseIntOrNull(input.defaultMonths)
   const defaultDays = parseIntOrNull(input.defaultDays)
+  const priority = parseIntOrNull(input.priority) ?? 100
+  const isSelectable = Boolean(input.isSelectable)
+  const isDefault = Boolean(input.isDefault)
+  const selectionLabel = nullIfEmpty(input.selectionLabel)
+  const selectionDescription = nullIfEmpty(input.selectionDescription)
+  const legalBasis = nullIfEmpty(input.legalBasis)
 
   if (!name) errors.name = "Informe o nome da politica."
   if (!CALCULATION_MODES.includes(calculationMode)) errors.calculationMode = "Modo de calculo invalido."
+  if (!WARRANTY_NATURES.includes(warrantyNature)) errors.warrantyNature = "Natureza da garantia invalida."
   if (!effectiveFrom) errors.effectiveFrom = "Informe a vigencia inicial."
   if (effectiveFrom && Number.isNaN(Date.parse(effectiveFrom))) errors.effectiveFrom = "Data inicial invalida."
   if (effectiveUntil && Number.isNaN(Date.parse(effectiveUntil))) errors.effectiveUntil = "Data final invalida."
@@ -147,6 +174,22 @@ function validatePolicy(
   if (calculationMode === "fixed_days" && defaultDays !== null && defaultDays < 0) {
     errors.defaultDays = "Prazo em dias nao pode ser negativo."
   }
+  if (calculationMode === "calendar_months" && (defaultMonths === null || defaultMonths <= 0)) {
+    errors.defaultMonths = "Informe um prazo em meses maior que zero."
+  }
+  if (calculationMode === "fixed_days" && (defaultDays === null || defaultDays <= 0)) {
+    errors.defaultDays = "Informe um prazo em dias maior que zero."
+  }
+  if (isSelectable && !selectionLabel) {
+    errors.selectionLabel = "Informe o label de selecao para politicas selecionaveis."
+  }
+  if (isDefault && !isSelectable) {
+    errors.isDefault = "A politica padrao tambem deve ser selecionavel."
+  }
+  if (warrantyNature === "legal" && !legalBasis) {
+    errors.legalBasis = "Informe a base legal da garantia legal."
+  }
+  if (priority < 0) errors.priority = "Prioridade nao pode ser negativa."
 
   if (Object.keys(errors).length > 0) {
     return { ok: false, error: "Revise os campos da politica de garantia.", fieldErrors: errors }
@@ -162,6 +205,13 @@ function validatePolicy(
       defaultMonths,
       defaultDays,
       calculationMode,
+      warrantyNature,
+      isSelectable,
+      isDefault,
+      selectionLabel,
+      selectionDescription,
+      legalBasis,
+      priority,
       publicLabelTemplate: nullIfEmpty(input.publicLabelTemplate),
       internalDescription: nullIfEmpty(input.internalDescription),
       requiresCustomerIdentification: Boolean(input.requiresCustomerIdentification),
@@ -218,15 +268,19 @@ export async function createWarrantyPolicy(
     const insertResult = await client.query<Record<string, unknown>>(
       `INSERT INTO warranty_policies (
         company_id, name, product_type, product_condition, product_origin,
-        default_months, default_days, calculation_mode, public_label_template,
+        default_months, default_days, calculation_mode, warranty_nature,
+        is_selectable, is_default, selection_label, selection_description, legal_basis, priority,
+        public_label_template,
         internal_description, requires_customer_identification,
         applies_to_sale, applies_to_catalog, applies_to_portal, applies_to_documents,
         active, effective_from, effective_until
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, TRUE, $16, $17)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, TRUE, $22, $23)
       RETURNING *`,
       [
         companyId, values.name, values.productType, values.productCondition, values.productOrigin,
-        values.defaultMonths, values.defaultDays, values.calculationMode, values.publicLabelTemplate,
+        values.defaultMonths, values.defaultDays, values.calculationMode, values.warrantyNature,
+        values.isSelectable, values.isDefault, values.selectionLabel, values.selectionDescription, values.legalBasis,
+        values.priority, values.publicLabelTemplate,
         values.internalDescription, values.requiresCustomerIdentification,
         values.appliesToSale, values.appliesToCatalog, values.appliesToPortal, values.appliesToDocuments,
         values.effectiveFrom, values.effectiveUntil,
@@ -296,17 +350,22 @@ export async function updateWarrantyPolicy(
       `UPDATE warranty_policies SET
         name = $3, product_type = $4, product_condition = $5, product_origin = $6,
         default_months = $7, default_days = $8, calculation_mode = $9,
-        public_label_template = $10, internal_description = $11,
-        requires_customer_identification = $12,
-        applies_to_sale = $13, applies_to_catalog = $14,
-        applies_to_portal = $15, applies_to_documents = $16,
-        effective_from = $17, effective_until = $18
+        warranty_nature = $10,
+        is_selectable = $11, is_default = $12,
+        selection_label = $13, selection_description = $14, legal_basis = $15,
+        priority = $16,
+        public_label_template = $17, internal_description = $18,
+        requires_customer_identification = $19,
+        applies_to_sale = $20, applies_to_catalog = $21,
+        applies_to_portal = $22, applies_to_documents = $23,
+        effective_from = $24, effective_until = $25
       WHERE id = $1 AND company_id = $2
       RETURNING *`,
       [
         policyId, companyId, values.name, values.productType, values.productCondition, values.productOrigin,
-        values.defaultMonths, values.defaultDays, values.calculationMode, values.publicLabelTemplate,
-        values.internalDescription, values.requiresCustomerIdentification,
+        values.defaultMonths, values.defaultDays, values.calculationMode, values.warrantyNature,
+        values.isSelectable, values.isDefault, values.selectionLabel, values.selectionDescription, values.legalBasis,
+        values.priority, values.publicLabelTemplate, values.internalDescription, values.requiresCustomerIdentification,
         values.appliesToSale, values.appliesToCatalog, values.appliesToPortal, values.appliesToDocuments,
         values.effectiveFrom, values.effectiveUntil,
       ]
@@ -366,7 +425,7 @@ export async function deactivateWarrantyPolicy(
     const before = rowToSnapshot(beforeResult.rows[0])
 
     await client.query(
-      `UPDATE warranty_policies SET active = FALSE WHERE id = $1 AND company_id = $2`,
+      `UPDATE warranty_policies SET active = FALSE, is_default = FALSE WHERE id = $1 AND company_id = $2`,
       [policyId, companyId]
     )
 

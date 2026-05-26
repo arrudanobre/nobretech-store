@@ -1,5 +1,7 @@
 export type WarrantyCalculationMode = "calendar_months" | "fixed_days" | "manual_dates"
 
+export type WarrantyNature = "legal" | "contractual" | "manufacturer" | "operational_support" | "legacy"
+
 export type WarrantyTermType =
   | "coverage"
   | "exclusion"
@@ -19,6 +21,13 @@ export type WarrantyPolicy = {
   defaultMonths: number | null
   defaultDays: number | null
   calculationMode: WarrantyCalculationMode
+  warrantyNature: WarrantyNature
+  isSelectable: boolean
+  isDefault: boolean
+  selectionLabel: string | null
+  selectionDescription: string | null
+  legalBasis: string | null
+  priority: number
   publicLabelTemplate: string | null
   internalDescription: string | null
   requiresCustomerIdentification: boolean
@@ -54,6 +63,7 @@ export type WarrantyResolutionCriteria = {
   productType?: string | null
   productCondition?: string | null
   productOrigin?: string | null
+  warrantyNature?: WarrantyNature | null
   usageContext?: "sale" | "catalog" | "portal" | "documents" | null
 }
 
@@ -76,6 +86,13 @@ export type WarrantyPolicyInput = {
   defaultMonths: number | string
   defaultDays: number | string
   calculationMode: WarrantyCalculationMode | string
+  warrantyNature: WarrantyNature | string
+  isSelectable: boolean
+  isDefault: boolean
+  selectionLabel: string
+  selectionDescription: string
+  legalBasis: string
+  priority: number | string
   publicLabelTemplate: string
   internalDescription: string
   requiresCustomerIdentification: boolean
