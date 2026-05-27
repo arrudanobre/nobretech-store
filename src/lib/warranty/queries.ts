@@ -198,9 +198,9 @@ export async function getSelectableWarrantyPolicies(
       AND is_selectable = TRUE
       AND effective_from <= NOW()
       AND (effective_until IS NULL OR effective_until > NOW())
-      AND (product_type IS NULL OR product_type = $2)
-      AND (product_condition IS NULL OR product_condition = $3)
-      AND (product_origin IS NULL OR product_origin = $4)
+      AND ($2::text IS NULL OR product_type IS NULL OR product_type = $2)
+      AND ($3::text IS NULL OR product_condition IS NULL OR product_condition = $3)
+      AND ($4::text IS NULL OR product_origin IS NULL OR product_origin = $4)
       AND ($5::text IS NULL OR warranty_nature = $5)
       AND ($6::text IS NULL OR (
         ($6 = 'sale' AND applies_to_sale = TRUE) OR
@@ -233,9 +233,9 @@ export async function getDefaultWarrantyPolicy(
       AND is_default = TRUE
       AND effective_from <= NOW()
       AND (effective_until IS NULL OR effective_until > NOW())
-      AND (product_type IS NULL OR product_type = $2)
-      AND (product_condition IS NULL OR product_condition = $3)
-      AND (product_origin IS NULL OR product_origin = $4)
+      AND ($2::text IS NULL OR product_type IS NULL OR product_type = $2)
+      AND ($3::text IS NULL OR product_condition IS NULL OR product_condition = $3)
+      AND ($4::text IS NULL OR product_origin IS NULL OR product_origin = $4)
       AND ($5::text IS NULL OR warranty_nature = $5)
       AND ($6::text IS NULL OR (
         ($6 = 'sale' AND applies_to_sale = TRUE) OR
@@ -274,9 +274,9 @@ export async function resolveWarrantyPolicy(
       AND active = TRUE
       AND effective_from <= NOW()
       AND (effective_until IS NULL OR effective_until > NOW())
-      AND (product_type IS NULL OR product_type = $2)
-      AND (product_condition IS NULL OR product_condition = $3)
-      AND (product_origin IS NULL OR product_origin = $4)
+      AND ($2::text IS NULL OR product_type IS NULL OR product_type = $2)
+      AND ($3::text IS NULL OR product_condition IS NULL OR product_condition = $3)
+      AND ($4::text IS NULL OR product_origin IS NULL OR product_origin = $4)
       AND ($5::text IS NULL OR warranty_nature = $5)
       AND ($6::text IS NULL OR (
         ($6 = 'sale' AND applies_to_sale = TRUE) OR
