@@ -244,7 +244,11 @@ export default async function CatalogoProductPage({
                 availabilityLabel={product.availabilityLabel}
                 extraBadge={
                   config.productBadges.find(
-                    (b) => b.label !== product.warrantyLabel && b.label !== product.availabilityLabel
+                    (b) =>
+                      b.iconKey !== "shield_check" &&
+                      b.iconKey !== "truck" &&
+                      b.label !== product.warrantyLabel &&
+                      b.label !== product.availabilityLabel
                   ) ?? null
                 }
               />
