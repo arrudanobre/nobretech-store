@@ -39,6 +39,9 @@ type DashboardUser = {
   avatarUrl: string | null
   companyName: string
   companyDisplayName?: string | null
+  companyShortName?: string | null
+  companyLogoUrl?: string | null
+  companyInstagram?: string | null
 }
 
 export interface BadgeCountContextType {
@@ -55,8 +58,26 @@ export const BadgeCountContext = createContext<BadgeCountContextType>({
   refresh: () => {},
 })
 
+export type DashboardCompanyIdentity = {
+  displayName: string
+  shortName: string | null
+  logoUrl: string | null
+  instagram: string | null
+}
+
+const CompanyIdentityContext = createContext<DashboardCompanyIdentity>({
+  displayName: "Loja",
+  shortName: null,
+  logoUrl: null,
+  instagram: null,
+})
+
 export function useBadgeCount() {
   return useContext(BadgeCountContext)
+}
+
+export function useDashboardCompanyIdentity() {
+  return useContext(CompanyIdentityContext)
 }
 
 const staticNavItems: (Omit<NavItem, "badge"> & { badge?: { count?: number; defaultCount?: number; color: string; source?: "db"; countKey?: string } })[] = [
@@ -148,7 +169,7 @@ function hrefIsActive(href: string, pathname: string | null, search: string) {
   return query ? search === query : true
 }
 
-export function NobretechLogoMark() {
+export function CompanyLogoMark() {
   return (
     <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-600/15 ring-1 ring-blue-400/30">
       <svg
@@ -215,7 +236,7 @@ export function Sidebar({ currentUser, collapsed, onToggleCollapsed }: { current
       {/* Logo */}
       <div className="flex items-center h-16 px-4 border-b border-navy-800">
         <Link href="/dashboard" className="flex items-center gap-3">
-          <NobretechLogoMark />
+          <CompanyLogoMark />
           {!collapsed && (
             <div className="overflow-hidden">
               <span className="font-display font-bold text-base tracking-tight block leading-tight font-syne">
@@ -388,7 +409,7 @@ export function MobileNav({ isOpen, onOpenChange, currentUser }: { isOpen: boole
           <aside className="absolute right-0 top-0 flex h-full w-[86vw] max-w-sm flex-col bg-white shadow-2xl">
             <div className="flex h-16 items-center justify-between border-b border-gray-100 px-4">
               <div className="flex items-center gap-3">
-                <NobretechLogoMark />
+                <CompanyLogoMark />
                 <div>
                   <p className="font-display font-bold text-sm font-syne text-navy-900">{brand.primary}</p>
                   {brand.secondary ? <p className="text-xs text-gray-400">{brand.secondary}</p> : null}
@@ -641,6 +662,12 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
   const isVitrinePage = pathname?.startsWith("/vitrine")
   const isDarkPage = isOrionPage || isVitrinePage
   const brand = companyBrandParts(visibleCompanyName(currentUser))
+  const companyIdentity: DashboardCompanyIdentity = {
+    displayName: visibleCompanyName(currentUser),
+    shortName: currentUser.companyShortName?.trim() || null,
+    logoUrl: currentUser.companyLogoUrl?.trim() || null,
+    instagram: currentUser.companyInstagram?.trim() || null,
+  }
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), [])
 
@@ -721,8 +748,9 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
   }, [refreshKey])
 
   return (
-    <BadgeCountContext.Provider value={{ counts, refresh }}>
-      <div className="min-h-screen bg-surface font-inter">
+    <CompanyIdentityContext.Provider value={companyIdentity}>
+      <BadgeCountContext.Provider value={{ counts, refresh }}>
+        <div className="min-h-screen bg-surface font-inter">
         <Sidebar currentUser={currentUser} collapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebarCollapsed} />
         <MobileNav isOpen={mobileMenuOpen} onOpenChange={setMobileMenuOpen} currentUser={currentUser} />
         {/* Main content */}
@@ -749,7 +777,7 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
                 >
                   <Menu className="h-4 w-4" />
                 </button>
-                <NobretechLogoMark />
+                <CompanyLogoMark />
                 <div className="leading-tight">
                   <span className={cn("block font-display font-bold text-sm font-syne", isDarkPage ? "text-white" : "text-navy-900")}>{brand.primary}</span>
                   {brand.secondary ? <span className={cn("block text-[10px]", isDarkPage ? "text-white/40" : "text-gray-400")}>{brand.secondary}</span> : null}
@@ -768,7 +796,8 @@ export function DashboardLayout({ children, title, currentUser }: { children: Re
             {children}
           </div>
         </main>
-      </div>
-    </BadgeCountContext.Provider>
+        </div>
+      </BadgeCountContext.Provider>
+    </CompanyIdentityContext.Provider>
   )
 }

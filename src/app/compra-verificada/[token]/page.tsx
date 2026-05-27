@@ -1237,8 +1237,10 @@ function VerifiedPurchaseIssueCard({ purchase }: { purchase: Purchase }) {
   )
 }
 
-function VerifiedPurchaseSupportCard() {
-  const href = "http://wa.me/5598988265655"
+function VerifiedPurchaseSupportCard({ support }: { support: Purchase["support"] }) {
+  const href = support.whatsappUrl
+  if (!href) return null
+
   return (
     <a
       href={href}
@@ -1354,7 +1356,7 @@ export default function VerifiedPurchasePage() {
       <VerifiedPurchaseItemsCard purchase={purchase} />
       <VerifiedPurchaseSummaryCard purchase={purchase} />
       <VerifiedPurchaseWarrantyCard purchase={purchase} />
-      <VerifiedPurchaseSupportCard />
+      <VerifiedPurchaseSupportCard support={purchase.support} />
     </PortalShell>
   )
 }

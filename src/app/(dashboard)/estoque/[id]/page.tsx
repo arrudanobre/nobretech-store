@@ -1,5 +1,7 @@
 "use client"
 
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars, @next/next/no-img-element */
+
 import { useState, useEffect, useCallback } from "react"
 import { useRouter, useParams } from "next/navigation"
 import Link from "next/link"
@@ -7,6 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ProductImageManager } from "@/components/products/product-image-manager"
 import { InventoryStockLabel, LabelPreviewModal } from "@/components/labels/label-preview-modal"
+import { useDashboardCompanyIdentity } from "@/components/layout/sidebar"
 import { formatBRL, daysBetween, buildPriceTable, getInventoryStatusMeta, getComputedInventoryStatus, getProductName, getTradeInOriginLabel, isPendingInventoryStatus } from "@/lib/helpers"
 import { fetchProductImageMap, type ProductImageRecord } from "@/lib/product-images"
 import { buildInventoryStockCode, inventoryLabelText, type InventoryStockLabelData } from "@/lib/label-utils"
@@ -55,8 +58,8 @@ export default function ProductDetailPage() {
   const router = useRouter()
   const params = useParams()
   const productId = params.id as string
+  const companyIdentity = useDashboardCompanyIdentity()
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [product, setProduct] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([])
@@ -315,6 +318,9 @@ export default function ProductDetailPage() {
   const keyPayments = priceTable.filter((row: any) => ["cash", "pix", "debit", "credit_12x", "credit_18x"].includes(row.method))
   const visiblePayments = showAllPayments ? priceTable : keyPayments
   const stockLabelData: InventoryStockLabelData = {
+    companyDisplayName: companyIdentity.displayName,
+    companyShortName: companyIdentity.shortName,
+    instagramLabel: companyIdentity.instagram,
     stockCode: buildInventoryStockCode(product.id),
     model: product.catalog?.model || catalogName,
     storage: product.catalog?.storage || null,
@@ -681,7 +687,11 @@ export default function ProductDetailPage() {
       <div style={{ position: "fixed", left: "-10000px", top: 0, zIndex: -1 }}>
         <div id="pdf-content" style={{ width: "794px", padding: "36px 48px 48px", fontFamily: "'Inter', system-ui, sans-serif", background: "#fff", color: "#0D1B2E" }}>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginBottom: "16px", borderBottom: "3px solid #0D1B2E", paddingBottom: "16px" }}>
-            <img src="/logo-nobretech.png" alt="Nobretech Store" style={{ width: "220px", height: "auto", marginBottom: "4px" }} />
+            {companyIdentity.logoUrl ? (
+              <img src={companyIdentity.logoUrl} alt={companyIdentity.displayName} style={{ width: "220px", height: "auto", marginBottom: "4px" }} />
+            ) : (
+              <p style={{ fontSize: "18px", fontWeight: 800, color: "#0D1B2E", margin: "0 0 4px" }}>{companyIdentity.displayName}</p>
+            )}
             <h1 style={{ fontSize: "24px", fontWeight: 700, color: "#0D1B2E", margin: 0, fontFamily: "Inter, system-ui, sans-serif" }}>Laudo de Inspeção</h1>
             <p style={{ fontSize: "13px", color: "#3A6BC4", marginTop: "4px" }}>
               {catalogName} {product.catalog?.storage ? `— ${product.catalog.storage} ${product.catalog.color || ""}` : ""}
@@ -764,7 +774,7 @@ export default function ProductDetailPage() {
           )}
 
           <div style={{ textAlign: "center", marginTop: "40px", paddingTop: "20px", borderTop: "1px solid #E5E7EB" }}>
-            <p style={{ fontSize: "12px", fontWeight: 600, color: "#0D1B2E", margin: 0 }}>NOBRETECH STORE</p>
+            <p style={{ fontSize: "12px", fontWeight: 600, color: "#0D1B2E", margin: 0 }}>{companyIdentity.displayName}</p>
             <p style={{ fontSize: "10px", color: "#9CA3AF", margin: "4px 0 0" }}>
               Documento gerado automaticamente em {new Date().toLocaleDateString("pt-BR")}
             </p>

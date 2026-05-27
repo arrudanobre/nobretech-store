@@ -201,6 +201,8 @@ type SaleAccessRow = {
   company_name: string | null
   company_display_name: string | null
   company_short_name: string | null
+  company_whatsapp_value: string | null
+  company_whatsapp_url: string | null
   company_settings: Record<string, unknown> | string | null
   inventory_id: string | null
   inventory_purchase_date: string | Date | null
@@ -862,6 +864,8 @@ async function getSaleByToken(token: string) {
         co.name AS company_name,
         cbp.display_name AS company_display_name,
         cbp.short_name AS company_short_name,
+        ccc.value AS company_whatsapp_value,
+        ccc.url AS company_whatsapp_url,
         s.inventory_id,
         COALESCE(co.settings, '{}'::jsonb) || jsonb_strip_nulls(jsonb_build_object(
           'pix_fee_pct', fs.pix_fee_pct,
@@ -936,6 +940,16 @@ async function getSaleByToken(token: string) {
         ORDER BY updated_at DESC
         LIMIT 1
       ) cbp ON true
+      LEFT JOIN LATERAL (
+        SELECT value, url
+        FROM company_contact_channels
+        WHERE company_id = s.company_id
+          AND channel_type = 'whatsapp'
+          AND active = TRUE
+          AND is_public = TRUE
+        ORDER BY is_primary DESC, sort_order ASC, label ASC, id ASC
+        LIMIT 1
+      ) ccc ON true
       LEFT JOIN financial_settings fs ON fs.company_id = s.company_id
       LEFT JOIN trade_ins ti ON ti.id = s.trade_in_id
       LEFT JOIN inventory tii ON tii.id = ti.linked_inventory_id
@@ -1068,6 +1082,7 @@ function buildSaleDocuments(input: {
   tradeInCreditAmount: number
   tradeInDeviceName: string | null
   settings: Record<string, unknown>
+  supportPhoneLabel: string | null
 }) {
   const warrantyMonths = Number(input.row.warranty_months || 0)
   const quantity = parseQtyFromNotes(input.row.sale_notes)
@@ -1183,7 +1198,7 @@ function buildSaleDocuments(input: {
     company: {
       displayName: input.company.displayName,
       shortName: input.company.shortName,
-      phone: typeof input.settings.phone === "string" ? input.settings.phone : null,
+      phone: input.supportPhoneLabel,
     },
     paymentMethod,
     payments: input.paymentLines,
@@ -1280,7 +1295,9 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
   })
   const { saleDate, warrantyStart, warrantyEnd } = warrantyPeriodFromSale(row)
   const settings = companySettings(row.company_settings)
-  const support = whatsappUrl(settings.phone)
+  const support = row.company_whatsapp_url
+    ? { whatsappUrl: row.company_whatsapp_url, phoneLabel: row.company_whatsapp_value }
+    : whatsappUrl(row.company_whatsapp_value)
   const purchaseAmount = Number(row.sale_price || 0)
   const tradeInCreditAmount = row.has_trade_in || row.trade_in_id
     ? Math.max(0, Number(row.trade_in_value || 0))
@@ -1394,6 +1411,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
     tradeInCreditAmount,
     tradeInDeviceName: tradeInDeviceModel === "Aparelho não informado" ? null : tradeInDeviceModel,
     settings,
+    supportPhoneLabel: support.phoneLabel,
   })
   const technicalReportDocument = buildTechnicalReportDocument(row)
 

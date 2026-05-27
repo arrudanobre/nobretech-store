@@ -1,11 +1,14 @@
 "use client"
 
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars, react-hooks/exhaustive-deps, @next/next/no-img-element */
+
 import { useState, useEffect } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { useToast } from "@/components/ui/toaster"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { LabelPreviewModal, VerifiedPurchaseCustomerLabel } from "@/components/labels/label-preview-modal"
+import { useDashboardCompanyIdentity } from "@/components/layout/sidebar"
 import { ProductAssetImage } from "@/components/products/product-asset-image"
 import { supabase } from "@/lib/supabase"
 import { formatBRL, formatDate, getAdditionalItemDisplayName, getTradeInDisplayName, getTradeInSummaryStatus, getInventoryStatusMeta, isPendingInventoryStatus, getProductName, formatPaymentMethod } from "@/lib/helpers"
@@ -62,15 +65,17 @@ const saleOriginLabel = (origin?: string | null) => {
 const PACKAGING_OPTIONS = [
   { value: "", label: "Não informado" },
   { value: "original_box", label: "Caixa original" },
-  { value: "nobretech_box", label: "Caixa Nobretech" },
+  { value: "nobretech_box", label: "Caixa da loja" },
   { value: "no_box", label: "Sem caixa" },
   { value: "other", label: "Outro" },
 ]
 
-const packagingLabel = (type?: string | null, notes?: string | null) => {
+const ownBoxLabel = (shortName?: string | null) => shortName?.trim() ? `Caixa ${shortName.trim()}` : "Caixa da loja"
+
+const packagingLabel = (type?: string | null, notes?: string | null, shortName?: string | null) => {
   const note = notes?.trim()
   if (type === "original_box") return "Caixa original"
-  if (type === "nobretech_box") return "Caixa Nobretech"
+  if (type === "nobretech_box") return ownBoxLabel(shortName)
   if (type === "no_box") return "Sem caixa"
   if (type === "other") return note || "Outro"
   return "Não informado"
@@ -194,6 +199,7 @@ export default function SaleDetailPage() {
   const { id } = useParams() as { id: string }
   const { toast } = useToast()
   const router = useRouter()
+  const companyIdentity = useDashboardCompanyIdentity()
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState<string | null>(null)
   const [sale, setSale] = useState<any>(null)
@@ -531,6 +537,10 @@ export default function SaleDetailPage() {
       const documentData: SaleDocumentData = {
         saleId: sale?.id || id,
         saleDate: sale?.sale_date,
+        company: {
+          displayName: companyIdentity.displayName,
+          shortName: companyIdentity.shortName,
+        },
         customerName: displayCustomerName,
         customerCpf: isWalkInSale ? null : customer?.cpf || null,
         customerPhone: displayCustomerPhone,
@@ -604,6 +614,10 @@ export default function SaleDetailPage() {
       await generateReceiptPDF({
         saleId: sale?.id || id,
         saleDate: sale?.sale_date,
+        company: {
+          displayName: companyIdentity.displayName,
+          shortName: companyIdentity.shortName,
+        },
         customerName: displayCustomerName,
         customerCpf: isWalkInSale ? null : customer?.cpf || null,
         customerPhone: displayCustomerPhone,
@@ -658,6 +672,10 @@ export default function SaleDetailPage() {
       await generateWarrantyTermDocument({
         saleId: sale?.id || id,
         saleDate: sale?.sale_date,
+        company: {
+          displayName: companyIdentity.displayName,
+          shortName: companyIdentity.shortName,
+        },
         customerName: displayCustomerName,
         customerCpf: isWalkInSale ? null : customer?.cpf || null,
         customerPhone: displayCustomerPhone,
@@ -693,9 +711,9 @@ export default function SaleDetailPage() {
 
       const addPage = () => { doc.addPage(); y = 15 }
 
-      const logoUrl = `${window.location.origin}/logo-nobretech.png`
+      const logoUrl = companyIdentity.logoUrl
       let logoB64: string | null = null
-      try {
+      if (logoUrl) try {
         const resp = await fetch(logoUrl)
         const arr = await resp.arrayBuffer()
         logoB64 = btoa(String.fromCharCode(...new Uint8Array(arr)))
@@ -709,7 +727,7 @@ export default function SaleDetailPage() {
           doc.setFontSize(12)
           doc.setFont("helvetica", "bold")
           doc.setTextColor(0, 82, 167)
-          doc.text("NOBRETECH", W / 2, y + 7, { align: "center" })
+          doc.text(companyIdentity.shortName || companyIdentity.displayName || "Loja", W / 2, y + 7, { align: "center" })
           doc.setTextColor(30, 30, 30)
         }
         y += 16
@@ -1181,6 +1199,9 @@ export default function SaleDetailPage() {
   const okCount = checklist.filter((i: any) => i.status === "ok").length
   const failCount = checklist.filter((i: any) => i.status === "fail").length
   const customerLabelData: VerifiedPurchaseCustomerLabelData = {
+    companyDisplayName: companyIdentity.displayName,
+    companyShortName: companyIdentity.shortName,
+    instagramLabel: companyIdentity.instagram,
     publicUrl: publicPurchaseUrl,
     customerFirstName: getFirstName(displayCustomerName),
     purchaseCode: buildPurchaseCode(sale?.id || id),
@@ -1528,7 +1549,7 @@ export default function SaleDetailPage() {
                 >
                   {PACKAGING_OPTIONS.map((option) => (
                     <option key={option.value || "empty"} value={option.value}>
-                      {option.label}
+                      {option.value === "nobretech_box" ? ownBoxLabel(companyIdentity.shortName) : option.label}
                     </option>
                   ))}
                 </select>
@@ -1552,7 +1573,7 @@ export default function SaleDetailPage() {
             </div>
           </div>
           <p className="mt-3 text-sm text-gray-600">
-            Atual: <span className="font-semibold text-navy-900">{packagingLabel(sale?.packaging_type, sale?.packaging_notes)}</span>
+            Atual: <span className="font-semibold text-navy-900">{packagingLabel(sale?.packaging_type, sale?.packaging_notes, companyIdentity.shortName)}</span>
           </p>
         </div>
       </div>
@@ -2476,7 +2497,11 @@ export default function SaleDetailPage() {
       <div style={{ position: "fixed", left: "-10000px", top: 0, zIndex: -1 }}>
         <div id="inspection-pdf-content" style={{ width: "794px", padding: "36px 48px 48px", fontFamily: "'Inter', system-ui, sans-serif", background: "#fff", color: "#0D1B2E" }}>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginBottom: "16px", borderBottom: "3px solid #0D1B2E", paddingBottom: "16px" }}>
-            <img src="/logo-nobretech.png" alt="Nobretech Store" style={{ width: "220px", height: "auto", marginBottom: "4px" }} />
+            {companyIdentity.logoUrl ? (
+              <img src={companyIdentity.logoUrl} alt={companyIdentity.displayName} style={{ width: "220px", height: "auto", marginBottom: "4px" }} />
+            ) : (
+              <p style={{ fontSize: "18px", fontWeight: 800, color: "#0D1B2E", margin: "0 0 4px" }}>{companyIdentity.displayName}</p>
+            )}
             <h1 style={{ fontSize: "24px", fontWeight: 700, color: "#0D1B2E", margin: 0, fontFamily: "Inter, system-ui, sans-serif" }}>Laudo de Inspeção</h1>
             <p style={{ fontSize: "13px", color: "#3A6BC4", marginTop: "4px" }}>
               {fullModel}
@@ -2556,7 +2581,7 @@ export default function SaleDetailPage() {
           )}
 
           <div style={{ textAlign: "center", marginTop: "40px", paddingTop: "20px", borderTop: "1px solid #E5E7EB" }}>
-            <p style={{ fontSize: "12px", fontWeight: 600, color: "#0D1B2E", margin: 0 }}>NOBRETECH STORE</p>
+            <p style={{ fontSize: "12px", fontWeight: 600, color: "#0D1B2E", margin: 0 }}>{companyIdentity.displayName}</p>
             <p style={{ fontSize: "10px", color: "#9CA3AF", margin: "4px 0 0" }}>
               Documento gerado automaticamente em {new Date().toLocaleDateString("pt-BR")}
             </p>

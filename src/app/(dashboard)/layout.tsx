@@ -13,12 +13,20 @@ export default async function Layout({ children }: { children: React.ReactNode }
   }
 
   let companyDisplayName = context.companyName
+  let companyShortName: string | null = null
+  let companyLogoUrl: string | null = null
+  let companyInstagram: string | null = null
 
   try {
     const companyIdentity = await resolveCompanyIdentity(context.companyId)
-    companyDisplayName = companyIdentity.ok
-      ? companyIdentity.data.displayName ?? context.companyName
-      : context.companyName
+    if (companyIdentity.ok) {
+      companyDisplayName = companyIdentity.data.displayName ?? context.companyName
+      companyShortName = companyIdentity.data.shortName ?? null
+      companyLogoUrl = companyIdentity.data.logoUrl ?? null
+      companyInstagram = companyIdentity.data.contactChannels.find((channel) => (
+        channel.active && channel.isPublic && channel.channelType === "instagram"
+      ))?.value ?? null
+    }
   } catch (error) {
     console.error("[company-settings] Falha ao resolver identidade no layout interno", error)
   }
@@ -33,6 +41,9 @@ export default async function Layout({ children }: { children: React.ReactNode }
         avatarUrl: context.avatarUrl,
         companyName: context.companyName,
         companyDisplayName,
+        companyShortName,
+        companyLogoUrl,
+        companyInstagram,
       }}
     >
       {children}

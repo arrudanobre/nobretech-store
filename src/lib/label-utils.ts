@@ -2,10 +2,11 @@ export const LABEL_WIDTH_MM = 50
 export const LABEL_HEIGHT_MM = 30
 export const LABEL_WIDTH_PX = 600
 export const LABEL_HEIGHT_PX = 360
-export const LABEL_INSTAGRAM = "@nobretechstore"
-export const DEFAULT_PUBLIC_APP_URL = "https://nobretechstore.vercel.app"
 
 export type InventoryStockLabelData = {
+  companyDisplayName?: string | null
+  companyShortName?: string | null
+  instagramLabel?: string | null
   stockCode: string
   model: string
   storage?: string | null
@@ -18,6 +19,9 @@ export type InventoryStockLabelData = {
 }
 
 export type VerifiedPurchaseCustomerLabelData = {
+  companyDisplayName?: string | null
+  companyShortName?: string | null
+  instagramLabel?: string | null
   publicUrl: string
   customerFirstName: string
   purchaseCode: string
@@ -100,13 +104,10 @@ export function buildPublicPurchaseUrl(token?: string | null): string {
   }
 
   if (typeof window !== "undefined") {
-    const { origin, hostname } = window.location
-    const isLocalhost = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1"
-    const baseUrl = isLocalhost ? DEFAULT_PUBLIC_APP_URL : origin
-    return `${baseUrl.replace(/\/+$/, "")}/compra-verificada/${encodeURIComponent(cleanToken)}`
+    return `${window.location.origin.replace(/\/+$/, "")}/compra-verificada/${encodeURIComponent(cleanToken)}`
   }
 
-  return `${DEFAULT_PUBLIC_APP_URL}/compra-verificada/${encodeURIComponent(cleanToken)}`
+  return `/compra-verificada/${encodeURIComponent(cleanToken)}`
 }
 
 export function abbreviateLabelText(value?: string | null): string {
@@ -130,10 +131,26 @@ export function formatBatteryHealth(value?: string | number | null): string {
   return numeric ? `Bat. ${numeric}%` : `Bat. ${text.replace(/%$/, "")}`
 }
 
-export function formatPackagingForLabel(value?: string | null): string {
+function companyLabelName(data: { companyDisplayName?: string | null; companyShortName?: string | null }) {
+  return sanitizeLabelText(data.companyDisplayName) || sanitizeLabelText(data.companyShortName) || "Loja"
+}
+
+function companyShortLabel(data: { companyDisplayName?: string | null; companyShortName?: string | null }) {
+  return sanitizeLabelText(data.companyShortName) || sanitizeLabelText(data.companyDisplayName) || "loja"
+}
+
+function ownBoxLabel(data: { companyDisplayName?: string | null; companyShortName?: string | null }) {
+  const shortName = companyShortLabel(data)
+  return shortName && shortName !== "loja" ? `Caixa: ${shortName}` : "Caixa da loja"
+}
+
+export function formatPackagingForLabel(
+  value?: string | null,
+  company?: { companyDisplayName?: string | null; companyShortName?: string | null }
+): string {
   const text = sanitizeLabelText(value)
   if (!text || /^n[aã]o informado$/i.test(text)) return ""
-  if (/^caixa nobretech$/i.test(text)) return "Caixa: Nobretech"
+  if (/^caixa nobretech$/i.test(text) || /^caixa da loja$/i.test(text)) return ownBoxLabel(company || {})
   if (/^caixa original$/i.test(text)) return "Caixa: Original"
   if (/^sem caixa$/i.test(text)) return "Sem caixa"
   if (/^outro$/i.test(text)) return "Caixa: Outro"
@@ -149,10 +166,10 @@ export function inventoryLabelText(data: InventoryStockLabelData): string {
     data.grade ? `Grade ${sanitizeLabelText(data.grade).replace(/^Grade\s+/i, "")}` : "",
     formatBatteryHealth(data.batteryHealth),
   ].filter(Boolean)
-  const packaging = formatPackagingForLabel(data.packaging)
+  const packaging = formatPackagingForLabel(data.packaging, data)
 
   return [
-    "NOBRETECH STORE",
+    companyLabelName(data),
     data.stockCode ? `ESTOQUE: ${data.stockCode}` : "",
     "",
     data.model,
@@ -161,19 +178,19 @@ export function inventoryLabelText(data: InventoryStockLabelData): string {
     identity ? `${identityLabel}: ${identity}` : "",
     packaging,
     "",
-    LABEL_INSTAGRAM,
+    sanitizeLabelText(data.instagramLabel),
   ].filter((line, index, lines) => line || (index > 0 && lines[index - 1])).join("\n")
 }
 
 export function verifiedPurchaseLabelText(data: VerifiedPurchaseCustomerLabelData): string {
   return [
-    "NOBRETECH STORE",
+    companyLabelName(data),
     "✓ Verificada",
     `Cliente: ${data.customerFirstName || "Cliente"}`,
     data.purchaseCode ? `Compra: ${data.purchaseCode}` : "",
     `PIN: ${normalizePin(data.pin)}`,
     formatShortDate(data.warrantyEnd) ? `Garantia: ${formatShortDate(data.warrantyEnd)}` : "",
     data.publicUrl,
-    LABEL_INSTAGRAM,
+    sanitizeLabelText(data.instagramLabel),
   ].filter(Boolean).join("\n")
 }

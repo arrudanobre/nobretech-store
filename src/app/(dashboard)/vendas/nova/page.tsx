@@ -1,5 +1,7 @@
 "use client"
 
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars, react-hooks/exhaustive-deps */
+
 import { useState, useMemo, useCallback, useEffect, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -7,6 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
 import { ProductAssetImage } from "@/components/products/product-asset-image"
+import { useDashboardCompanyIdentity } from "@/components/layout/sidebar"
 import { calculatePaymentPrice, formatBRL, maskCPF, formatPhone, validateCPF, getProductName, getAdditionalItemDisplayName, calculateDeviceValue, formatTradeInSuggestedRange, getTradeInSummaryStatus, getComputedInventoryStatus, normalizePaymentFeePct, todayISO, addDaysISO, formatPaymentMethod, formatDate } from "@/lib/helpers"
 import { fetchProductImageMap, type ProductImageRecord } from "@/lib/product-images"
 import { PAYMENT_METHODS, CATEGORIES, PRODUCT_CATALOG, GRADES, SIDEPAY_FEE_PCTS } from "@/lib/constants"
@@ -151,10 +154,12 @@ const SALE_ORIGINS = [
 const PACKAGING_OPTIONS = [
   { value: "", label: "Não informado" },
   { value: "original_box", label: "Caixa original" },
-  { value: "nobretech_box", label: "Caixa Nobretech" },
+  { value: "nobretech_box", label: "Caixa da loja" },
   { value: "no_box", label: "Sem caixa" },
   { value: "other", label: "Outro" },
 ]
+
+const ownBoxLabel = (shortName?: string | null) => shortName?.trim() ? `Caixa ${shortName.trim()}` : "Caixa da loja"
 
 const EMPTY_TRADE_IN: TradeInState = {
   category: "",
@@ -727,6 +732,7 @@ const mapVariantPayload = (variant: {
 })
 
 function NewSaleContent() {
+  const companyIdentity = useDashboardCompanyIdentity()
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedProduct, setSelectedProduct] = useState<InventoryProduct | null>(null)
   const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null)
@@ -826,7 +832,6 @@ function NewSaleContent() {
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const selectedWarrantyPolicy = useMemo(
@@ -1788,6 +1793,10 @@ function NewSaleContent() {
         const documentData: SaleDocumentData = {
           saleId: sale.id,
           saleDate: today,
+          company: {
+            displayName: companyIdentity.displayName,
+            shortName: companyIdentity.shortName,
+          },
           customerName: saleCustomerType === "walk_in" ? walkInCustomer.label.trim() || WALK_IN_CUSTOMER_LABEL : customer.name,
           customerCpf: saleCustomerType === "walk_in" ? null : customer.cpf || null,
           customerPhone: saleCustomerType === "walk_in" ? walkInCustomer.phone || null : customer.phone || null,
@@ -3412,7 +3421,7 @@ function NewSaleContent() {
                   >
                     {PACKAGING_OPTIONS.map((option) => (
                       <option key={option.value || "empty"} value={option.value}>
-                        {option.label}
+                        {option.value === "nobretech_box" ? ownBoxLabel(companyIdentity.shortName) : option.label}
                       </option>
                     ))}
                   </select>

@@ -1,6 +1,8 @@
 import { LEGACY_SIDEPAY_FEE_PCTS, PAYMENT_METHODS, SIDEPAY_FEE_PCTS } from '@/lib/constants'
 import type { FinancialSettings } from '@/types/database'
 
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
+
 /** Get fee key from payment method value */
 export function getFeeKey(method: string): string {
   const map: Record<string, string> = {
@@ -307,6 +309,7 @@ export function validateIMEI(imei: string): boolean {
 
 /** Generate PDF-ready HTML for checklist */
 export function renderChecklistHTML(data: {
+  companyName?: string
   productName: string
   imei: string
   serial: string
@@ -316,6 +319,7 @@ export function renderChecklistHTML(data: {
   battery?: number
   iosVersion?: string
 }) {
+  const companyName = data.companyName?.trim() || "Loja"
   const statusIcon = (s: string) => {
     if (s === 'ok') return '<span style="color:#22c55e;font-weight:bold;">&#10004; OK</span>'
     if (s === 'fail') return '<span style="color:#ef4444;font-weight:bold;">&#10008; FALHA</span>'
@@ -337,7 +341,7 @@ export function renderChecklistHTML(data: {
   return `
     <div style="font-family:Inter,system-ui,sans-serif; max-width:700px; margin:auto; padding:24px;">
       <div style="text-align:center; margin-bottom:24px;">
-        <h1 style="color:#0D1B2E; font-size:22px; margin-bottom:4px;">NOBRETECH STORE</h1>
+        <h1 style="color:#0D1B2E; font-size:22px; margin-bottom:4px;">${companyName}</h1>
         <h2 style="color:#3A6BC4; font-size:16px; margin:0;">Laudo de Inspeção de Aparelho</h2>
       </div>
 
@@ -363,7 +367,7 @@ export function renderChecklistHTML(data: {
       </table>
 
       <div style="margin-top:32px; text-align:center; font-size:12px; color:#9ca3af;">
-        <p>NOBRETECH STORE — Laudo gerado em ${data.date}</p>
+        <p>${companyName} — Laudo gerado em ${data.date}</p>
         <p>Documento válido como comprovação de estado do aparelho.</p>
       </div>
     </div>
@@ -381,10 +385,11 @@ export function renderWarrantyHTML(data: {
   warrantyEnd: string
   warrantyMonths: number
 }) {
+  const companyName = data.companyName?.trim() || "Loja"
   return `
     <div style="font-family:Inter,system-ui,sans-serif; max-width:700px; margin:auto; padding:24px;">
       <div style="text-align:center; margin-bottom:24px;">
-        <h1 style="color:#0D1B2E; font-size:22px; margin-bottom:4px;">NOBRETECH STORE</h1>
+        <h1 style="color:#0D1B2E; font-size:22px; margin-bottom:4px;">${companyName}</h1>
         <h2 style="color:#3A6BC4; font-size:16px; margin:0;">Termo de Garantia</h2>
       </div>
 
@@ -405,7 +410,7 @@ export function renderWarrantyHTML(data: {
 
       <div style="font-size:13px; line-height:1.6; margin-bottom:16px;">
         <h3 style="color:#0D1B2E;">Termos e Condições</h3>
-        <p>A ${data.companyName} concede garantia de ${data.warrantyMonths} meses a partir da data de compra, cobrindo defeitos de funcionamento que não tenham sido causados por:</p>
+        <p>A ${companyName} concede garantia de ${data.warrantyMonths} meses a partir da data de compra, cobrindo defeitos de funcionamento que não tenham sido causados por:</p>
         <ul style="margin:8px 0;">
           <li>Quedas, impactos ou danos físicos causados pelo usuário</li>
           <li>Exposição a líquidos ou umidade</li>
@@ -414,11 +419,11 @@ export function renderWarrantyHTML(data: {
           <li>Desmontagem por terceiros não autorizados</li>
         </ul>
         <p>A garantia cobre defeitos internos de funcionamento e software. Caso o aparelho apresente algum problema coberto, o cliente deverá entrar em contato para avaliação.</p>
-        <p><strong>Contato:</strong> ${data.companyName} — São Luís/MA</p>
+        <p><strong>Contato:</strong> ${companyName}</p>
       </div>
 
       <div style="margin-top:32px; text-align:center; font-size:12px; color:#9ca3af;">
-        <p>NOBRETECH STORE — Termo de Garantia gerado em ${data.saleDate}</p>
+        <p>${companyName} — Termo de Garantia gerado em ${data.saleDate}</p>
       </div>
     </div>
   `

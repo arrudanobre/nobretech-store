@@ -3,7 +3,6 @@
 import QRCode from "qrcode"
 import {
   LABEL_HEIGHT_PX,
-  LABEL_INSTAGRAM,
   LABEL_WIDTH_PX,
   abbreviateLabelText,
   formatBatteryHealth,
@@ -132,10 +131,12 @@ export async function renderInventoryStockLabelPng(data: InventoryStockLabelData
   const maskedImei = maskImeiOrSerial(data.imei)
   const maskedSerial = maskImeiOrSerial(data.serial)
   const identity = maskedImei ? `IMEI: ${maskedImei}` : maskedSerial ? `Serial: ${maskedSerial}` : ""
-  const packaging = formatPackagingForLabel(data.packaging)
+  const packaging = formatPackagingForLabel(data.packaging, data)
   const lowerRows = [condition, identity, packaging].filter(Boolean)
+  const companyName = sanitizeLabelText(data.companyDisplayName) || sanitizeLabelText(data.companyShortName) || "Loja"
+  const instagram = sanitizeLabelText(data.instagramLabel)
 
-  drawCenteredText(ctx, "NOBRETECH STORE", 20, 28, 800)
+  drawCenteredText(ctx, companyName, 20, 28, 800)
   if (stockCode) drawCenteredText(ctx, `ESTOQUE: ${stockCode}`, 53, 22, 700)
   drawDivider(ctx, 88)
   drawText(ctx, model, 34, 116, 532, modelSize, 800)
@@ -148,7 +149,7 @@ export async function renderInventoryStockLabelPng(data: InventoryStockLabelData
   })
 
   drawDivider(ctx, 300)
-  drawCenteredText(ctx, LABEL_INSTAGRAM, 318, 20, 700)
+  if (instagram) drawCenteredText(ctx, instagram, 318, 20, 700)
 
   return toDataUrl(canvas)
 }
@@ -175,7 +176,9 @@ export async function renderVerifiedPurchaseCustomerLabelPng(data: VerifiedPurch
   })
   const qrImage = await loadImage(qrDataUrl)
 
-  drawText(ctx, "NOBRETECH STORE", 30, 22, 310, 28, 800)
+  const companyName = sanitizeLabelText(data.companyDisplayName) || sanitizeLabelText(data.companyShortName) || "Loja"
+  const instagram = sanitizeLabelText(data.instagramLabel)
+  drawText(ctx, companyName, 30, 22, 310, 28, 800)
   ctx.strokeStyle = BLACK
   ctx.lineWidth = 1
   drawRoundedRect(ctx, 424, 17, 146, 31, 12)
@@ -203,7 +206,7 @@ export async function renderVerifiedPurchaseCustomerLabelPng(data: VerifiedPurch
   }
 
   drawDivider(ctx, 300)
-  drawCenteredText(ctx, LABEL_INSTAGRAM, 318, 20, 700)
+  if (instagram) drawCenteredText(ctx, instagram, 318, 20, 700)
 
   return toDataUrl(canvas)
 }
