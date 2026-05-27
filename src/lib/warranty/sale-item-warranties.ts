@@ -440,8 +440,8 @@ async function fetchSaleItemsForWarranty(
   companyId: string,
   saleId: string
 ): Promise<EligibleSaleItemRow[]> {
-  // Structured-only join: product_catalog.category matches product_categories.slug,
-  // and inventory.subcategory_name_snapshot matches product_subcategories.normalized_name.
+  // Structured-only join: catalog rows use product_catalog.category; manual
+  // accessory rows use the category/subcategory snapshots captured at intake.
   // No free-text parsing is performed by the resolver.
   const result = await client.query<EligibleSaleItemRow>(
     `SELECT
@@ -467,7 +467,14 @@ async function fetchSaleItemsForWarranty(
        ON cat.company_id = si.company_id
       AND cat.is_active = TRUE
       AND cat.deleted_at IS NULL
-      AND cat.slug = pc.category
+      AND (
+        cat.slug = pc.category
+        OR (
+          pc.category IS NULL
+          AND inv.category_name_snapshot IS NOT NULL
+          AND cat.normalized_name = LOWER(inv.category_name_snapshot)
+        )
+      )
      LEFT JOIN product_subcategories sub
        ON sub.company_id = si.company_id
       AND sub.is_active = TRUE
