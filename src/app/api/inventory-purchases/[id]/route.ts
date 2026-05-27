@@ -6,11 +6,11 @@ export const runtime = "nodejs"
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-export async function GET(_request: Request, context: { params: Promise<{ id: string }> | { id: string } }) {
+export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
   const authResult = await requireApiAuthContext()
   if (!authResult.ok) return authResult.response
 
-  const params = await Promise.resolve(context.params)
+  const params = await context.params
   if (!UUID_RE.test(params.id)) {
     return NextResponse.json(
       {
@@ -46,11 +46,11 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   }
 }
 
-export async function PATCH(request: Request, context: { params: Promise<{ id: string }> | { id: string } }) {
+export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   const authResult = await requireApiAuthContext()
   if (!authResult.ok) return authResult.response
 
-  const params = await Promise.resolve(context.params)
+  const params = await context.params
   if (!UUID_RE.test(params.id)) {
     return NextResponse.json({ data: null, error: { message: "ID inválido" } }, { status: 400 })
   }
