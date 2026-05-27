@@ -156,6 +156,11 @@ type SaleItemWarrantyDraft = {
   manual: boolean
 }
 
+type AccessoryClassificationDto = {
+  normalizedName: string | null
+  accessoryClass: "durable" | "non_durable" | null
+}
+
 function normalizeAccessoryClassValue(value: unknown): "durable" | "non_durable" | null {
   return value === "durable" || value === "non_durable" ? value : null
 }
@@ -675,6 +680,29 @@ const normalizeSaleKindValue = (value?: string | null) => String(value || "")
   .toLowerCase()
   .replace(/[\s-]+/g, "_")
 
+async function fetchAccessoryClassificationMap() {
+  try {
+    const response = await fetch("/api/warranty/accessory-classifications", {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    })
+    const payload = await response.json()
+    if (!response.ok || payload?.error) {
+      throw new Error(payload?.error?.message || "Erro ao carregar classificações de acessórios")
+    }
+
+    return new Map<string, "durable" | "non_durable" | null>(
+      ((payload?.data || []) as AccessoryClassificationDto[]).map((row) => [
+        normalizeSaleKindValue(row.normalizedName),
+        normalizeAccessoryClassValue(row.accessoryClass),
+      ])
+    )
+  } catch (error) {
+    console.error("Erro ao carregar classificações de acessórios:", error)
+    return new Map<string, "durable" | "non_durable" | null>()
+  }
+}
+
 function getSaleItemKind(product: {
   name?: string | null
   condition_notes?: string | null
@@ -997,14 +1025,7 @@ function NewSaleContent() {
         if (error) throw error
 
         const imageMap: Record<string, ProductImageRecord | null> = await fetchProductImageMap((data || []).map((item: any) => item.id)).catch(() => ({}))
-        const { data: subcategoryRows } = await (supabase.from("product_subcategories") as any)
-          .select("normalized_name, accessory_class")
-          .eq("is_active", true)
-          .or("deleted_at.is.null")
-          .catch(() => ({ data: [] }))
-        const accessoryClassBySubcategory = new Map<string, "durable" | "non_durable" | null>(
-          (subcategoryRows || []).map((row: any) => [normalizeSaleKindValue(row.normalized_name), normalizeAccessoryClassValue(row.accessory_class)])
-        )
+        const accessoryClassBySubcategory = await fetchAccessoryClassificationMap()
         const products: InventoryProduct[] = (data || []).map((item: any) => {
           return {
             id: item.id,
@@ -1104,14 +1125,7 @@ function NewSaleContent() {
           return
         }
 
-        const { data: subcategoryRows } = await (supabase.from("product_subcategories") as any)
-          .select("normalized_name, accessory_class")
-          .eq("is_active", true)
-          .or("deleted_at.is.null")
-          .catch(() => ({ data: [] }))
-        const accessoryClassBySubcategory = new Map<string, "durable" | "non_durable" | null>(
-          (subcategoryRows || []).map((row: any) => [normalizeSaleKindValue(row.normalized_name), normalizeAccessoryClassValue(row.accessory_class)])
-        )
+        const accessoryClassBySubcategory = await fetchAccessoryClassificationMap()
         const product: InventoryProduct = {
           id: items.id,
           name: getProductName(items),
