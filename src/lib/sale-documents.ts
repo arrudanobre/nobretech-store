@@ -163,9 +163,21 @@ function noContractualWarrantyLabel(company?: SaleDocumentCompany | null) {
     : "Sem garantia contratual da loja vinculada a este item."
 }
 
-function itemWarrantyLabel(warranty: DocumentItemWarranty | undefined, fallbackMonths: number, company?: SaleDocumentCompany | null) {
+const NO_CONTRACTUAL_WARRANTY_TABLE_LABEL = "Sem garantia contratual"
+const NO_CONTRACTUAL_WARRANTY_NOTE = "Brindes, capas, películas e acessórios simples não herdam a garantia contratual do aparelho principal. Danos por uso, queda, impacto, riscos, mau uso ou desgaste natural não são cobertos como garantia contratual."
+
+function hasItemWithoutContractualWarranty(items: Array<{ warranty?: DocumentItemWarranty }>) {
+  return items.some((item) => item.warranty?.source === "none")
+}
+
+function itemWarrantyLabel(
+  warranty: DocumentItemWarranty | undefined,
+  fallbackMonths: number,
+  company?: SaleDocumentCompany | null,
+  options: { compactNone?: boolean } = {}
+) {
   if (!warranty) return warrantyLabel(fallbackMonths)
-  if (warranty.source === "none") return warranty.label || noContractualWarrantyLabel(company)
+  if (warranty.source === "none") return options.compactNone ? NO_CONTRACTUAL_WARRANTY_TABLE_LABEL : warranty.label || noContractualWarrantyLabel(company)
   if (warranty.source === "legacy") return warranty.label || warrantyLabel(fallbackMonths)
   if (warranty.nature === "manufacturer" && !warranty.endsAt) return "Conforme cobertura do fabricante."
 
@@ -253,12 +265,15 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
   const companyName = companyDisplayName(data.company)
   const seller = data.sellerName || data.company?.sellerName || ""
   const saleDate = formatDate(data.saleDate)
-  const observations = saleObservations(data)
 
   // Resolve items — use receiptItems if available, fallback to single item
   const lines: ReceiptLineItem[] = data.receiptItems && data.receiptItems.length > 0
     ? data.receiptItems
     : [{ ...data.item, type: "principal" as const }]
+  const hasNoContractualWarrantyItem = hasItemWithoutContractualWarranty(lines)
+  const observations = [saleObservations(data), hasNoContractualWarrantyItem ? NO_CONTRACTUAL_WARRANTY_NOTE : ""]
+    .filter(Boolean)
+    .join(". ")
 
   const productSubtotal = lines
     .filter((l) => l.type !== "free")
@@ -357,7 +372,8 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
     setFont(doc, 8.2)
     text(doc, typeLabel, 28.5, rowY + 7, { align: "center" })
     text(doc, descLines, 41, rowY + 4.6)
-    text(doc, doc.splitTextToSize(itemWarrantyLabel(line.warranty, line.warrantyMonths, data.company), 20).slice(0, 2), 135, rowY + 5, { align: "center" })
+    const warrantyText = itemWarrantyLabel(line.warranty, line.warrantyMonths, data.company, { compactNone: true })
+    text(doc, doc.splitTextToSize(warrantyText, 24).slice(0, 2), 135, rowY + 5, { align: "center" })
     text(doc, String(line.quantity), 146.5, rowY + 7, { align: "center" })
     text(doc, isFree ? "—" : money(line.unitPrice), 162, rowY + 7, { align: "center" })
     text(doc, isFree ? "Brinde" : money(line.totalPrice), 183, rowY + 7, { align: "center" })
@@ -498,6 +514,7 @@ export async function generateWarrantyPDF(data: SaleDocumentData) {
   const seller = data.sellerName || data.company?.sellerName || ""
   const saleDate = formatDate(data.saleDate)
   const warrantyItems = documentWarrantyItems(data)
+  const hasNoContractualWarrantyItem = hasItemWithoutContractualWarranty(warrantyItems)
 
   setFont(doc, 13, "bold")
   text(doc, companyName, 105, 27, { align: "center" })
@@ -550,7 +567,8 @@ export async function generateWarrantyPDF(data: SaleDocumentData) {
     doc.rect(17, rowY, 176, rowH, "S")
     setFont(doc, 8.2)
     text(doc, doc.splitTextToSize(item.name, 142).slice(0, 2), 17, rowY + 4)
-    text(doc, doc.splitTextToSize(itemWarrantyLabel(item.warranty, item.warranty.durationMonths || data.item.warrantyMonths, data.company), 36).slice(0, 2), 176, rowY + 4, { align: "center" })
+    const warrantyText = itemWarrantyLabel(item.warranty, item.warranty.durationMonths || data.item.warrantyMonths, data.company, { compactNone: true })
+    text(doc, doc.splitTextToSize(warrantyText, 36).slice(0, 2), 176, rowY + 4, { align: "center" })
     rowY += rowH
   }
 
@@ -561,7 +579,13 @@ export async function generateWarrantyPDF(data: SaleDocumentData) {
 
   setFont(doc, 72, "bold", "#f4f4f4")
   text(doc, "NT", 130, 170)
-  const startTermsY = detailsY + 6
+  let startTermsY = detailsY + 6
+  if (hasNoContractualWarrantyItem) {
+    setFont(doc, 8.2, "normal", TEXT_GRAY)
+    const noteLines = doc.splitTextToSize(NO_CONTRACTUAL_WARRANTY_NOTE, 176)
+    text(doc, noteLines, 17, startTermsY)
+    startTermsY += noteLines.length * 4 + 4
+  }
   const termsEndY = drawWarrantyText(doc, 17, startTermsY, 176, 4.45)
   const signatureY = ensurePageSpace(doc, Math.max(termsEndY + 12, 249), 14)
   drawSignature(doc, signatureY, data.customerName, companyName)
