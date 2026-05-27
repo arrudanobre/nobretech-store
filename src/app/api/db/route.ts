@@ -137,7 +137,7 @@ const OPTIONAL_COLUMNS: Record<string, Set<string>> = {
     "attribute_summary_snapshot",
   ]),
   product_categories: new Set(["normalized_name", "deleted_at", "product_type"]),
-  product_subcategories: new Set(["normalized_name", "deleted_at"]),
+  product_subcategories: new Set(["normalized_name", "deleted_at", "default_warranty_policy_id"]),
   product_attributes: new Set(["normalized_name", "deleted_at"]),
   product_attribute_options: new Set(["normalized_name", "deleted_at"]),
   product_colors: new Set(["normalized_name", "deleted_at"]),

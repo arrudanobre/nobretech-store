@@ -110,10 +110,18 @@ type CatalogSubcategoryRow = {
   normalized_name?: string | null
   deleted_at?: string | null
   is_active?: boolean | null
-  accessory_class?: "durable" | "non_durable" | null
+  default_warranty_policy_id?: string | null
 }
 
-type AccessoryClass = "durable" | "non_durable" | ""
+type WarrantyPolicyOption = {
+  id: string
+  name: string
+  warrantyNature: string
+  calculationMode: "calendar_months" | "fixed_days" | "manual_dates"
+  defaultMonths: number | null
+  defaultDays: number | null
+  selectionLabel: string | null
+}
 
 type CatalogAttributeRow = {
   id: string
@@ -243,11 +251,12 @@ export function ConfiguracoesClient({ currentUser }: { currentUser: CurrentUser 
   const [catalogColors, setCatalogColors] = useState<CatalogColorRow[]>([])
   const [catalogSubcategoryColors, setCatalogSubcategoryColors] = useState<CatalogSubcategoryColorRow[]>([])
   const [newCategory, setNewCategory] = useState({ name: "", product_type: "device" as ProductType })
-  const [newSubcategory, setNewSubcategory] = useState<{ category_id: string; name: string; accessory_class: AccessoryClass }>({
+  const [newSubcategory, setNewSubcategory] = useState<{ category_id: string; name: string; default_warranty_policy_id: string }>({
     category_id: "",
     name: "",
-    accessory_class: "",
+    default_warranty_policy_id: "",
   })
+  const [warrantyPolicyOptions, setWarrantyPolicyOptions] = useState<WarrantyPolicyOption[]>([])
   const [newAttribute, setNewAttribute] = useState({ category_id: "", name: "", input_type: "select" })
   const [newOption, setNewOption] = useState({ attribute_id: "", label: "" })
   const [newColor, setNewColor] = useState({ category_id: "", name: "", hex: "#111827" })
@@ -439,7 +448,7 @@ export function ConfiguracoesClient({ currentUser }: { currentUser: CurrentUser 
       setNewSubcategory({
         category_id: subcategory?.category_id || selectedCategory?.id || "",
         name: subcategory?.name || "",
-        accessory_class: (subcategory?.accessory_class ?? "") as AccessoryClass,
+        default_warranty_policy_id: subcategory?.default_warranty_policy_id || "",
       })
     }
 
@@ -502,7 +511,7 @@ export function ConfiguracoesClient({ currentUser }: { currentUser: CurrentUser 
         category_id: newSubcategory.category_id,
         name: newSubcategory.name.trim(),
         slug: slugify(newSubcategory.name),
-        accessory_class: newSubcategory.accessory_class === "" ? null : newSubcategory.accessory_class,
+        default_warranty_policy_id: newSubcategory.default_warranty_policy_id || null,
       })
       if (ok) setCatalogDrawer(null)
     }
@@ -608,13 +617,14 @@ export function ConfiguracoesClient({ currentUser }: { currentUser: CurrentUser 
   async function loadCatalogData() {
     setCatalogLoading(true)
     try {
-      const [categories, subcategories, attributes, options, colors, subcategoryColors] = await Promise.all([
+      const [categories, subcategories, attributes, options, colors, subcategoryColors, warrantyPoliciesResponse] = await Promise.all([
         (supabase.from("product_categories") as any).select("*").order("sort_order", { ascending: true }).order("name", { ascending: true }),
         (supabase.from("product_subcategories") as any).select("*").order("sort_order", { ascending: true }).order("name", { ascending: true }),
         (supabase.from("product_attributes") as any).select("*").order("sort_order", { ascending: true }).order("name", { ascending: true }),
         (supabase.from("product_attribute_options") as any).select("*").order("sort_order", { ascending: true }).order("label", { ascending: true }),
         (supabase.from("product_colors") as any).select("*").order("sort_order", { ascending: true }).order("name", { ascending: true }),
         (supabase.from("product_subcategory_colors") as any).select("*").order("sort_order", { ascending: true }),
+        fetch("/api/warranty/selectable-policies").then((res) => (res.ok ? res.json() : { data: [] })).catch(() => ({ data: [] })),
       ])
 
       if (categories.error) throw categories.error
@@ -630,6 +640,7 @@ export function ConfiguracoesClient({ currentUser }: { currentUser: CurrentUser 
       setCatalogAttributeOptions((options.data || []) as CatalogAttributeOptionRow[])
       setCatalogColors((colors.data || []) as CatalogColorRow[])
       setCatalogSubcategoryColors((subcategoryColors.data || []) as CatalogSubcategoryColorRow[])
+      setWarrantyPolicyOptions(Array.isArray(warrantyPoliciesResponse?.data) ? warrantyPoliciesResponse.data : [])
     } catch (error: any) {
       if (String(error?.message || "").includes("does not exist")) return
       toast.error(error?.message || "Erro ao carregar catálogo")
@@ -716,10 +727,10 @@ export function ConfiguracoesClient({ currentUser }: { currentUser: CurrentUser 
         name: newSubcategory.name.trim(),
         slug: slugify(newSubcategory.name),
         normalized_name: normalizeCatalogName(newSubcategory.name),
-        accessory_class: newSubcategory.accessory_class === "" ? null : newSubcategory.accessory_class,
+        default_warranty_policy_id: newSubcategory.default_warranty_policy_id || null,
       })
       if (error) throw error
-      setNewSubcategory({ category_id: newSubcategory.category_id, name: "", accessory_class: "" })
+      setNewSubcategory({ category_id: newSubcategory.category_id, name: "", default_warranty_policy_id: "" })
       await loadCatalogData()
       toast.success("Subcategoria criada.")
       setCatalogDrawer(null)
@@ -1679,25 +1690,29 @@ export function ConfiguracoesClient({ currentUser }: { currentUser: CurrentUser 
                     return (
                       <div className="space-y-1.5">
                         <label className="block text-sm font-medium text-navy-900">
-                          Classificação do acessório
+                          Garantia padrão
                         </label>
                         <select
-                          value={newSubcategory.accessory_class}
+                          value={newSubcategory.default_warranty_policy_id}
                           disabled={!canEditSettings}
                           onChange={(event) =>
                             setNewSubcategory((current) => ({
                               ...current,
-                              accessory_class: event.target.value as AccessoryClass,
+                              default_warranty_policy_id: event.target.value,
                             }))
                           }
                           className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/20 disabled:opacity-50"
                         >
-                          <option value="">Não classificado</option>
-                          <option value="durable">Durável (garantia contratual)</option>
-                          <option value="non_durable">Não durável (sem garantia)</option>
+                          <option value="">Sem garantia contratual</option>
+                          {warrantyPolicyOptions.map((policy) => (
+                            <option key={policy.id} value={policy.id}>
+                              {policy.selectionLabel || policy.name}
+                              {policy.calculationMode === "calendar_months" && policy.defaultMonths ? ` — ${policy.defaultMonths} meses` : ""}
+                            </option>
+                          ))}
                         </select>
                         <p className="text-xs text-slate-500">
-                          Usado pelo resolver de garantia automática na venda.
+                          Defina uma vez por subcategoria. A venda já sugere essa garantia e ainda permite ajuste manual por item.
                         </p>
                       </div>
                     )

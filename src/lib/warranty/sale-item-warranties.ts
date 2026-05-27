@@ -3,10 +3,6 @@ import "server-only"
 import type { PoolClient } from "pg"
 import { pool } from "@/lib/db"
 import { buildAuditMetadata, recordCompanySettingsAuditLog, rowToSnapshot } from "@/lib/company-settings/audit"
-import {
-  ACCESSORY_CLASSIFICATION_SALE_ERROR,
-  isUnclassifiedAccessory,
-} from "@/lib/warranty/accessory-classification"
 import { resolveDefaultWarranty } from "./default-resolver"
 import type {
   WarrantyActor,
@@ -421,13 +417,6 @@ export type ApplySaleWarrantiesResult = {
   skipped: Array<{ saleItemId: string; reason: string }>
 }
 
-export class AccessoryClassificationRequiredError extends Error {
-  constructor(message = ACCESSORY_CLASSIFICATION_SALE_ERROR) {
-    super(message)
-    this.name = "AccessoryClassificationRequiredError"
-  }
-}
-
 type EligibleSaleItemRow = {
   id: string
   sale_id: string
@@ -441,6 +430,7 @@ type EligibleSaleItemRow = {
   pc_brand: string | null
   category_slug: string | null
   subcategory_slug: string | null
+  default_warranty_policy_id: string | null
   accessory_class: "durable" | "non_durable" | null
   inv_product_type: "device" | "accessory" | "service" | "warranty" | "bundle" | null
 }
@@ -468,6 +458,7 @@ async function fetchSaleItemsForWarranty(
        pc.brand         AS pc_brand,
        cat.slug         AS category_slug,
        sub.slug         AS subcategory_slug,
+       sub.default_warranty_policy_id,
        sub.accessory_class
      FROM sale_items si
      LEFT JOIN inventory inv      ON inv.id = si.inventory_item_id
@@ -488,23 +479,6 @@ async function fetchSaleItemsForWarranty(
     [companyId, saleId]
   )
   return result.rows
-}
-
-export async function assertSaleAccessoriesClassified(
-  client: PoolClient,
-  companyId: string,
-  saleId: string
-): Promise<void> {
-  const items = await fetchSaleItemsForWarranty(client, companyId, saleId)
-  const unclassified = items.find((item) =>
-    isUnclassifiedAccessory({
-      productType: item.inv_product_type ?? item.item_type,
-      accessoryClass: item.accessory_class,
-    })
-  )
-  if (unclassified) {
-    throw new AccessoryClassificationRequiredError()
-  }
 }
 
 async function hasActiveWarrantyForSaleItem(
@@ -714,6 +688,12 @@ export async function applySaleWarranties(
         throw new Error(`Politica de garantia invalida para item ${item.id}.`)
       }
       warrantyPolicyId = selection.warrantyPolicyId
+    } else if (item.default_warranty_policy_id) {
+      warrantyPolicyId = item.default_warranty_policy_id
+      selection = {
+        warrantyPolicyId,
+        manualSelection: false,
+      }
     } else {
       const decision = resolveDefaultWarranty({
         brand: item.pc_brand,

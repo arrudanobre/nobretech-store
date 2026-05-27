@@ -48,7 +48,11 @@ type InventoryProduct = {
   category_name_snapshot?: string | null
   subcategory_name_snapshot?: string | null
   category_normalized?: string | null
-  accessory_class?: "durable" | "non_durable" | null
+  default_warranty_policy_id?: string | null
+  default_warranty_nature?: string | null
+  default_warranty_calculation_mode?: string | null
+  default_warranty_months?: number | null
+  default_warranty_days?: number | null
   model?: string | null
   storage?: string | null
   color?: string | null
@@ -129,7 +133,11 @@ type AdditionalSaleItem = {
   category_name_snapshot?: string | null
   subcategory_name_snapshot?: string | null
   category_normalized?: string | null
-  accessory_class?: "durable" | "non_durable" | null
+  default_warranty_policy_id?: string | null
+  default_warranty_nature?: string | null
+  default_warranty_calculation_mode?: string | null
+  default_warranty_months?: number | null
+  default_warranty_days?: number | null
   model?: string | null
   color?: string | null
   productImage?: ProductImageRecord | null
@@ -156,13 +164,13 @@ type SaleItemWarrantyDraft = {
   manual: boolean
 }
 
-type AccessoryClassificationDto = {
+type SubcategoryWarrantyDefaultDto = {
   normalizedName: string | null
-  accessoryClass: "durable" | "non_durable" | null
-}
-
-function normalizeAccessoryClassValue(value: unknown): "durable" | "non_durable" | null {
-  return value === "durable" || value === "non_durable" ? value : null
+  defaultWarrantyPolicyId: string | null
+  warrantyNature: string | null
+  calculationMode: "calendar_months" | "fixed_days" | "manual_dates" | null
+  defaultMonths: number | null
+  defaultDays: number | null
 }
 
 const SALE_ORIGINS = [
@@ -680,26 +688,40 @@ const normalizeSaleKindValue = (value?: string | null) => String(value || "")
   .toLowerCase()
   .replace(/[\s-]+/g, "_")
 
-async function fetchAccessoryClassificationMap() {
+type SubcategoryWarrantyDefault = {
+  policyId: string | null
+  nature: string | null
+  calculationMode: "calendar_months" | "fixed_days" | "manual_dates" | null
+  months: number | null
+  days: number | null
+}
+
+async function fetchSubcategoryWarrantyDefaultMap() {
   try {
-    const response = await fetch("/api/warranty/accessory-classifications", {
+    const response = await fetch("/api/warranty/subcategory-defaults", {
       method: "GET",
       headers: { "Content-Type": "application/json" },
     })
     const payload = await response.json()
     if (!response.ok || payload?.error) {
-      throw new Error(payload?.error?.message || "Erro ao carregar classificações de acessórios")
+      throw new Error(payload?.error?.message || "Erro ao carregar garantias padrão das subcategorias")
     }
 
-    return new Map<string, "durable" | "non_durable" | null>(
-      ((payload?.data || []) as AccessoryClassificationDto[]).map((row) => [
+    return new Map<string, SubcategoryWarrantyDefault>(
+      ((payload?.data || []) as SubcategoryWarrantyDefaultDto[]).map((row) => [
         normalizeSaleKindValue(row.normalizedName),
-        normalizeAccessoryClassValue(row.accessoryClass),
+        {
+          policyId: row.defaultWarrantyPolicyId,
+          nature: row.warrantyNature,
+          calculationMode: row.calculationMode,
+          months: row.defaultMonths,
+          days: row.defaultDays,
+        },
       ])
     )
   } catch (error) {
-    console.error("Erro ao carregar classificações de acessórios:", error)
-    return new Map<string, "durable" | "non_durable" | null>()
+    console.error("Erro ao carregar garantias padrão das subcategorias:", error)
+    return new Map<string, SubcategoryWarrantyDefault>()
   }
 }
 
@@ -730,11 +752,6 @@ function getSaleItemKind(product: {
   if (productType === "device") return "device"
   if (product.imei || product.serial_number || product.serialNumber) return "device"
   if (categories.some((category) => ["iphone", "ipad", "macbook", "apple_watch", "airpods"].includes(category))) return "device"
-
-  const text = `${product.name || ""} ${product.condition_notes || ""}`.toLowerCase()
-  if (/(capa|pel[ií]cula|fone|airpods|cabo|fonte|carregador|pencil|caneta|case|adaptador|suporte)/i.test(text)) {
-    return "accessory"
-  }
   return "device"
 }
 
@@ -751,7 +768,11 @@ function getSuggestedWarrantyDraft(product: {
   category_name_snapshot?: string | null
   category_normalized?: string | null
   product_type?: string | null
-  accessory_class?: "durable" | "non_durable" | null
+  default_warranty_policy_id?: string | null
+  default_warranty_nature?: string | null
+  default_warranty_calculation_mode?: string | null
+  default_warranty_months?: number | null
+  default_warranty_days?: number | null
   grade?: string | null
   imei?: string | null
   serial_number?: string | null
@@ -759,11 +780,21 @@ function getSuggestedWarrantyDraft(product: {
   hasVariants?: boolean
   variants?: InventorySaleVariant[]
 }): SaleItemWarrantyDraft {
+  if (
+    product.default_warranty_policy_id &&
+    product.default_warranty_calculation_mode === "calendar_months" &&
+    product.default_warranty_months
+  ) {
+    return {
+      source: product.default_warranty_nature === "manufacturer" ? "manufacturer" : "store",
+      months: String(product.default_warranty_months),
+      manualEndsAt: "",
+      manual: false,
+    }
+  }
+
   const kind = getSaleItemKind(product)
   if (kind === "accessory") {
-    if (product.accessory_class === "durable") {
-      return { source: "store", months: "3", manualEndsAt: "", manual: false }
-    }
     return { source: "none", months: "3", manualEndsAt: "", manual: false }
   }
   const brand = normalizeSaleKindValue(product.brand)
@@ -1025,8 +1056,9 @@ function NewSaleContent() {
         if (error) throw error
 
         const imageMap: Record<string, ProductImageRecord | null> = await fetchProductImageMap((data || []).map((item: any) => item.id)).catch(() => ({}))
-        const accessoryClassBySubcategory = await fetchAccessoryClassificationMap()
+        const warrantyDefaultBySubcategory = await fetchSubcategoryWarrantyDefaultMap()
         const products: InventoryProduct[] = (data || []).map((item: any) => {
+          const subcategoryWarrantyDefault = warrantyDefaultBySubcategory.get(normalizeSaleKindValue(item.subcategory_name_snapshot)) || null
           return {
             id: item.id,
             name: getProductName(item),
@@ -1036,7 +1068,11 @@ function NewSaleContent() {
             category_name_snapshot: item.category_name_snapshot || null,
             subcategory_name_snapshot: item.subcategory_name_snapshot || null,
             category_normalized: item.catalog?.category || null,
-            accessory_class: accessoryClassBySubcategory.get(normalizeSaleKindValue(item.subcategory_name_snapshot)) || null,
+            default_warranty_policy_id: subcategoryWarrantyDefault?.policyId || null,
+            default_warranty_nature: subcategoryWarrantyDefault?.nature || null,
+            default_warranty_calculation_mode: subcategoryWarrantyDefault?.calculationMode || null,
+            default_warranty_months: subcategoryWarrantyDefault?.months || null,
+            default_warranty_days: subcategoryWarrantyDefault?.days || null,
             model: item.catalog?.model || null,
             storage: item.catalog?.storage || null,
             color: item.catalog?.color || null,
@@ -1125,7 +1161,8 @@ function NewSaleContent() {
           return
         }
 
-        const accessoryClassBySubcategory = await fetchAccessoryClassificationMap()
+        const warrantyDefaultBySubcategory = await fetchSubcategoryWarrantyDefaultMap()
+        const subcategoryWarrantyDefault = warrantyDefaultBySubcategory.get(normalizeSaleKindValue(items.subcategory_name_snapshot)) || null
         const product: InventoryProduct = {
           id: items.id,
           name: getProductName(items),
@@ -1135,7 +1172,11 @@ function NewSaleContent() {
           category_name_snapshot: items.category_name_snapshot || null,
           subcategory_name_snapshot: items.subcategory_name_snapshot || null,
           category_normalized: items.catalog?.category || null,
-          accessory_class: accessoryClassBySubcategory.get(normalizeSaleKindValue(items.subcategory_name_snapshot)) || null,
+          default_warranty_policy_id: subcategoryWarrantyDefault?.policyId || null,
+          default_warranty_nature: subcategoryWarrantyDefault?.nature || null,
+          default_warranty_calculation_mode: subcategoryWarrantyDefault?.calculationMode || null,
+          default_warranty_months: subcategoryWarrantyDefault?.months || null,
+          default_warranty_days: subcategoryWarrantyDefault?.days || null,
           model: items.catalog?.model || null,
           storage: items.catalog?.storage || null,
           color: items.catalog?.color || null,
@@ -1375,7 +1416,11 @@ function NewSaleContent() {
           category_name_snapshot: item.category_name_snapshot || null,
           subcategory_name_snapshot: item.subcategory_name_snapshot || null,
           category_normalized: item.category_normalized || item.category || null,
-          accessory_class: item.accessory_class || null,
+          default_warranty_policy_id: item.default_warranty_policy_id || null,
+          default_warranty_nature: item.default_warranty_nature || null,
+          default_warranty_calculation_mode: item.default_warranty_calculation_mode || null,
+          default_warranty_months: item.default_warranty_months || null,
+          default_warranty_days: item.default_warranty_days || null,
           model: item.model || null,
           color: item.color || null,
           productImage: item.productImage || null,
@@ -1686,9 +1731,6 @@ function NewSaleContent() {
       if (overstockedAdditionalVariant) {
         const variant = saleAvailableVariants(overstockedAdditionalVariant).find((v) => v.id === overstockedAdditionalVariant.selectedVariantId)
         throw new Error(`Só existe ${variant?.quantity || 0} unidade disponível na variação ${variant?.colorName || "selecionada"}.`)
-      }
-      if (unclassifiedAccessoryItem) {
-        throw new Error("Classifique este acessório como Durável ou Não durável antes de vender.")
       }
       const warrantySelectionsPayload = buildWarrantySelectionPayload()
 
@@ -2161,9 +2203,6 @@ function NewSaleContent() {
     }
   }, [additionalSaleItems, findWarrantyPolicyForDraft, getItemWarrantyDraft, selectedProduct])
 
-  const unclassifiedAccessoryItem = saleWarrantyItems.find((row) =>
-    row.kind === "accessory" && row.item.accessory_class == null
-  )
   const tradeInModelOptions = useMemo(() => {
     const term = tradeInModelSearch.trim().toLowerCase()
     return Object.entries(PRODUCT_CATALOG)
@@ -2957,7 +2996,6 @@ function NewSaleContent() {
               <div className="space-y-3">
                 {saleWarrantyItems.map((row) => {
                   const draft = getItemWarrantyDraft(row.key, row.item)
-                  const missingClass = row.kind === "accessory" && row.item.accessory_class == null
                   const policy = findWarrantyPolicyForDraft(draft)
                   return (
                     <div key={row.key} className="rounded-2xl border border-gray-100 bg-white p-4">
@@ -2969,15 +3007,10 @@ function NewSaleContent() {
                           </p>
                           <p className="mt-1 text-xs font-semibold text-royal-700">Sugerido: {getWarrantyDraftLabel(getSuggestedWarrantyDraft(row.item))}</p>
                         </div>
-                        <Badge variant={missingClass ? "yellow" : draft.source === "none" ? "gray" : "green"} dot>
-                          {missingClass ? "Classificação pendente" : getWarrantyDraftLabel(draft)}
+                        <Badge variant={draft.source === "none" ? "gray" : "green"} dot>
+                          {getWarrantyDraftLabel(draft)}
                         </Badge>
                       </div>
-                      {missingClass && (
-                        <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
-                          Classifique este acessório como Durável ou Não durável antes de vender.
-                        </div>
-                      )}
                       <div className="mt-3 grid gap-3 md:grid-cols-[180px_160px_1fr]">
                         <label className="block">
                           <span className="mb-1 block text-xs font-medium text-navy-900">Fonte</span>

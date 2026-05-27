@@ -11,15 +11,10 @@ import type {
   CatalogReadinessRule,
 } from "@/lib/catalog/policies"
 import { compareThreshold } from "@/lib/catalog/policies"
-import {
-  ACCESSORY_CLASSIFICATION_PUBLICATION_ERROR,
-  isUnclassifiedAccessory,
-} from "@/lib/warranty/accessory-classification"
 
 type Input = {
   productKind: CatalogProductKind
   productType?: string | null
-  accessoryClass?: string | null
   inventoryStatus: string
   publication: CatalogPublicationRecord | null
   review: CatalogReviewRecord | null
@@ -110,10 +105,6 @@ export function getCatalogPublicationReadiness(input: Input): CatalogReadiness {
   const warnings: string[] = []
   const policy = input.policy ?? null
   const rules = input.rules
-
-  if (isUnclassifiedAccessory({ productType: input.productType, accessoryClass: input.accessoryClass })) {
-    reasons.push(ACCESSORY_CLASSIFICATION_PUBLICATION_ERROR)
-  }
 
   if (!allowedStatuses(policy).has(input.inventoryStatus)) {
     reasons.push("Produto não está disponível no estoque.")

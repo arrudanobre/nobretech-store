@@ -12,9 +12,7 @@ import { syncTransactionMovement } from "@/lib/finance/sync-transaction-movement
 import { decrementInventoryVariantQuantity } from "@/lib/inventory/inventory-variants"
 import { materializeSaleItemsWithClient } from "@/lib/sales/sale-items"
 import {
-  AccessoryClassificationRequiredError,
   applySaleWarranties,
-  assertSaleAccessoriesClassified,
   type SaleWarrantySelections,
   type WarrantySelectionInput,
 } from "@/lib/warranty"
@@ -984,7 +982,6 @@ export async function POST(request: NextRequest) {
     let warrantyApplied = { created: 0, skipped: 0 }
     if (!input.isReservation) {
       try {
-        await assertSaleAccessoriesClassified(client, companyId, saleId!)
         const warrantyResult = await applySaleWarranties(
           client,
           {
@@ -1024,9 +1021,7 @@ export async function POST(request: NextRequest) {
     const message = err instanceof Error ? err.message : "Erro interno ao registrar venda."
     const status = err instanceof SaleOperationalError
       ? err.statusCode
-      : err instanceof AccessoryClassificationRequiredError
-        ? 400
-        : 500
+      : 500
     return NextResponse.json(
       { data: null, error: { message } },
       { status }

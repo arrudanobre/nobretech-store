@@ -1,6 +1,6 @@
 // Pure central resolver for default sale-item warranty.
-// Consumes ONLY structured classification data: product_type, brand,
-// categorySlug, subcategorySlug, accessoryClass, condition. Never
+// Consumes ONLY structured product data: product_type, brand,
+// categorySlug, subcategorySlug, condition and legacy accessoryClass. Never
 // inspects display name, title, or free text. When every structured
 // field is null, returns 'none' with a missing_product_classification
 // warning so the integration layer can log it.
@@ -147,7 +147,9 @@ export function resolveDefaultWarranty(ctx: WarrantyItemContext): WarrantyDecisi
     }
   }
 
-  // 5. Acessórios — exclusivamente via accessory_class estruturado.
+  // 5. Acessórios — policy padrão da subcategoria é aplicada antes deste
+  // resolver pela camada de venda. accessoryClass fica apenas como fallback
+  // legado silencioso para bases que ainda não receberam a policy padrão.
   if (ctx.productType === "accessory") {
     if (ctx.accessoryClass === "non_durable") {
       return {
@@ -166,12 +168,10 @@ export function resolveDefaultWarranty(ctx: WarrantyItemContext): WarrantyDecisi
         ruleId: "durable_accessory_3m",
       }
     }
-    // accessory_class IS NULL — subcategoria sem classificação.
     return {
       source: "none",
-      reason: "Acessorio sem classificacao (accessory_class nao configurado).",
+      reason: "Acessorio sem garantia contratual padrao.",
       ruleId: "unclassified_accessory",
-      warning: { event: "missing_product_classification", inventoryItemId: ctx.inventoryItemId },
     }
   }
 

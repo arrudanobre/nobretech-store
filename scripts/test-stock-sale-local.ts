@@ -24,6 +24,8 @@ type SeedContext = {
   accountId: string
   policy6mId: string
   policy3mId: string
+  policyApple12mId: string
+  appleCatalogId: string
   accessoriesCatalogId: string
   durableAccessoryName: string
   nonDurableAccessoryName: string
@@ -83,7 +85,32 @@ async function scalar<T>(client: Client, sql: string, values: unknown[] = []) {
   return result.rows[0] as T
 }
 
+async function ensureWarrantySubcategoryDefaultSchema(client: Client) {
+  await client.query(`
+    ALTER TABLE product_subcategories
+      ADD COLUMN IF NOT EXISTS default_warranty_policy_id UUID
+  `)
+  await client.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'product_subcategories_default_warranty_policy_fk'
+      ) THEN
+        ALTER TABLE product_subcategories
+          ADD CONSTRAINT product_subcategories_default_warranty_policy_fk
+          FOREIGN KEY (default_warranty_policy_id)
+          REFERENCES warranty_policies(id)
+          ON DELETE SET NULL;
+      END IF;
+    END $$
+  `)
+}
+
 async function seedBase(client: Client, tracker: TestRunTracker): Promise<SeedContext> {
+  await ensureWarrantySubcategoryDefaultSchema(client)
+
   const company = await scalar<{ id: string }>(
     client,
     `INSERT INTO companies (name, slug) VALUES ($1, $2) RETURNING id`,
@@ -117,25 +144,41 @@ async function seedBase(client: Client, tracker: TestRunTracker): Promise<SeedCo
 
   await client.query(`INSERT INTO financial_settings (company_id) VALUES ($1::uuid) ON CONFLICT (company_id) DO NOTHING`, [company.id])
   const policies = await seedWarrantyPolicies(client, company.id)
-  const accessoryCatalog = await seedAccessoryCatalog(client, company.id)
-  return { companyId: company.id, userId: user.id, customerId: customer.id, accountId: account.id, ...policies, ...accessoryCatalog }
+  const deviceCatalog = await seedDeviceCatalog(client, company.id)
+  const accessoryCatalog = await seedAccessoryCatalog(client, company.id, policies.policy3mId)
+  return { companyId: company.id, userId: user.id, customerId: customer.id, accountId: account.id, ...policies, ...deviceCatalog, ...accessoryCatalog }
 }
 
-async function seedAccessoryCatalog(client: Client, companyId: string) {
+async function seedDeviceCatalog(client: Client, companyId: string) {
+  await client.query(
+    `INSERT INTO product_categories (company_id, name, slug, normalized_name, product_type, sort_order, is_active)
+     VALUES ($1::uuid, 'iPhone', 'iphone', 'iphone', 'device', 1, TRUE)`,
+    [companyId]
+  )
+  const catalog = await scalar<{ id: string }>(
+    client,
+    `INSERT INTO product_catalog (category, brand, model, variant, storage, color)
+     VALUES ('iphone', 'Apple', 'iPhone local', NULL, '128GB', 'Preto')
+     RETURNING id`
+  )
+  return { appleCatalogId: catalog.id }
+}
+
+async function seedAccessoryCatalog(client: Client, companyId: string, policy3mId: string) {
   const category = await scalar<{ id: string }>(
     client,
-    `INSERT INTO product_categories (company_id, name, slug, sort_order, is_active)
-     VALUES ($1::uuid, 'Acessórios', 'accessories', 10, TRUE)
+    `INSERT INTO product_categories (company_id, name, slug, normalized_name, product_type, sort_order, is_active)
+     VALUES ($1::uuid, 'Acessórios', 'accessories', 'acessorios', 'accessory', 10, TRUE)
      RETURNING id`,
     [companyId]
   )
   await client.query(
-    `INSERT INTO product_subcategories (company_id, category_id, name, normalized_name, slug, accessory_class, sort_order, is_active)
+    `INSERT INTO product_subcategories (company_id, category_id, name, normalized_name, slug, accessory_class, default_warranty_policy_id, sort_order, is_active)
      VALUES
-       ($1::uuid, $2::uuid, 'Caneta eletrônica', 'caneta eletrônica', 'caneta-eletronica', 'durable', 10, TRUE),
-       ($1::uuid, $2::uuid, 'Película simples', 'película simples', 'pelicula-simples', 'non_durable', 20, TRUE),
-       ($1::uuid, $2::uuid, 'Acessório sem classificação', 'acessório sem classificação', 'acessorio-sem-classificacao', NULL, 30, TRUE)`,
-    [companyId, category.id]
+       ($1::uuid, $2::uuid, 'Acessório eletrônico teste', 'acessorio eletronico teste', 'acessorio-eletronico-teste', 'durable', $3::uuid, 10, TRUE),
+       ($1::uuid, $2::uuid, 'Acessório simples teste', 'acessorio simples teste', 'acessorio-simples-teste', 'non_durable', NULL, 20, TRUE),
+       ($1::uuid, $2::uuid, 'Acessório sem padrão teste', 'acessorio sem padrao teste', 'acessorio-sem-padrao-teste', NULL, NULL, 30, TRUE)`,
+    [companyId, category.id, policy3mId]
   )
   const catalog = await scalar<{ id: string }>(
     client,
@@ -145,9 +188,9 @@ async function seedAccessoryCatalog(client: Client, companyId: string) {
   )
   return {
     accessoriesCatalogId: catalog.id,
-    durableAccessoryName: "caneta eletrônica",
-    nonDurableAccessoryName: "película simples",
-    unclassifiedAccessoryName: "acessório sem classificação",
+    durableAccessoryName: "acessorio eletronico teste",
+    nonDurableAccessoryName: "acessorio simples teste",
+    unclassifiedAccessoryName: "acessorio sem padrao teste",
   }
 }
 
@@ -194,28 +237,49 @@ async function seedWarrantyPolicies(client: Client, companyId: string) {
     [companyId, `${TAG} policy 3m`]
   )
 
+  const policyApple12m = await scalar<{ id: string }>(
+    client,
+    `INSERT INTO warranty_policies (
+       company_id, name, product_type, product_condition, product_origin,
+       default_months, default_days, calculation_mode, warranty_nature,
+       public_label_template, internal_description, requires_customer_identification,
+       applies_to_sale, applies_to_catalog, applies_to_portal, applies_to_documents,
+       active, is_selectable, is_default, selection_label, selection_description,
+       priority, effective_from
+     ) VALUES (
+       $1::uuid, 'Garantia Apple - Lacrado', 'device', 'sealed', NULL,
+       12, NULL, 'calendar_months', 'manufacturer',
+       'Garantia Apple', $2, FALSE,
+       TRUE, FALSE, TRUE, TRUE,
+       TRUE, TRUE, FALSE, 'Garantia Apple (12 meses)', 'Cobertura padrão do fabricante para Apple lacrado.',
+       5, NOW()
+     )
+     RETURNING id`,
+    [companyId, `${TAG} policy Apple 12m`]
+  )
+
   await client.query(
     `INSERT INTO warranty_policy_terms (warranty_policy_id, term_type, title, body, sort_order)
      VALUES
        ($1::uuid, 'coverage', 'Cobertura local 6m', 'Termo local 6m para smoke de garantia por item.', 10),
-       ($2::uuid, 'coverage', 'Cobertura local 3m', 'Termo local 3m para smoke de garantia por item.', 10)`,
-    [policy6m.id, policy3m.id]
+       ($2::uuid, 'coverage', 'Cobertura local 3m', 'Termo local 3m para smoke de garantia por item.', 10),
+       ($3::uuid, 'coverage', 'Cobertura Apple local', 'Termo local de garantia fabricante Apple.', 10)`,
+    [policy6m.id, policy3m.id, policyApple12m.id]
   )
 
-  return { policy6mId: policy6m.id, policy3mId: policy3m.id }
+  return { policy6mId: policy6m.id, policy3mId: policy3m.id, policyApple12mId: policyApple12m.id }
 }
 
 async function seedInventory(
   client: Client,
   ctx: SeedContext,
-  input: { name: string; productType: "device" | "accessory"; quantity: number; hasSerial?: boolean; price?: number; accessoryClass?: "durable" | "non_durable" | null }
+  input: { name: string; productType: "device" | "accessory"; quantity: number; hasSerial?: boolean; price?: number; accessoryClass?: "durable" | "non_durable" | null; grade?: string }
 ): Promise<InventorySeed> {
   let accessoryClassName: string | null = null
   if (input.productType === "accessory") {
-    const looksSimpleAccessory = /pel[ií]cula|capa/i.test(input.name)
     if (input.accessoryClass === null) {
       accessoryClassName = ctx.unclassifiedAccessoryName
-    } else if (input.accessoryClass === "non_durable" || looksSimpleAccessory) {
+    } else if (input.accessoryClass === "non_durable") {
       accessoryClassName = ctx.nonDurableAccessoryName
     } else {
       accessoryClassName = ctx.durableAccessoryName
@@ -228,14 +292,14 @@ async function seedInventory(
        type, origin, suggested_price, status, quantity, product_type, category_name_snapshot, subcategory_name_snapshot,
        logistics_status, commercial_status, notes
      ) VALUES (
-       $1::uuid, $2::uuid, $3, $4, 'A', $5, $6, $7::date,
+       $1::uuid, $2::uuid, $3, $4, $14, $5, $6, $7::date,
        'own', 'purchase', $8, 'active', $9, $10, $11, $12,
        'in_stock', 'available', $13
      )
      RETURNING id`,
     [
       ctx.companyId,
-      input.productType === "accessory" ? ctx.accessoriesCatalogId : null,
+      input.productType === "accessory" ? ctx.accessoriesCatalogId : ctx.appleCatalogId,
       input.hasSerial ? randomUUID().replace(/-/g, "").slice(0, 15) : null,
       input.hasSerial ? randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase() : null,
       `${TAG} ${input.name}`,
@@ -247,6 +311,7 @@ async function seedInventory(
       input.productType === "accessory" ? "Acessórios" : null,
       accessoryClassName,
       `${TAG} ${input.name}`,
+      input.grade || "A",
     ]
   )
   return { id: row.id, name: input.name }
@@ -531,7 +596,26 @@ async function main() {
     const ctx = await seedBase(client, tracker)
     console.log(`Banco local: ${databaseUrl}`)
     console.log(`Empresa de teste: ${ctx.companyId}`)
-    console.log(`Policies de garantia: 6m=${ctx.policy6mId} 3m=${ctx.policy3mId}`)
+    console.log(`Policies de garantia: 6m=${ctx.policy6mId} 3m=${ctx.policy3mId} apple12m=${ctx.policyApple12mId}`)
+
+    const sealedAppleItem = await seedInventory(client, ctx, {
+      name: "iPhone lacrado fabricante 12m",
+      productType: "device",
+      quantity: 1,
+      hasSerial: true,
+      price: 4200,
+      grade: "Lacrado",
+    })
+    const sealedAppleSale = await callSalesPost(ctx, salePayload({ ctx, main: sealedAppleItem, total: 5200 }))
+    assert(
+      sealedAppleSale.status === 200 && sealedAppleSale.body.data?.saleId,
+      sealedAppleSale.body.error?.message || `Venda Apple lacrado HTTP ${sealedAppleSale.status}`
+    )
+    const sealedAppleWarranty = await saleWarrantySummary(client, sealedAppleSale.body.data.saleId)
+    console.log("GARANTIA Apple lacrado 12m", sealedAppleWarranty)
+    assert(sealedAppleWarranty.warranties_count === "1", "Apple lacrado deveria criar garantia de fabricante")
+    assert(sealedAppleWarranty.warranty_duration_months === "12", "Apple lacrado deveria criar garantia 12m")
+    assert(sealedAppleWarranty.warranty_policy_id === ctx.policyApple12mId, "Apple lacrado deveria usar policy fabricante 12m")
 
     const effectiveDefaultItem = await seedInventory(client, ctx, {
       name: "iPhone garantia default 6m",
@@ -742,27 +826,22 @@ async function main() {
     assert(nonDurableAccessoryWarranty.warranties_count === "0", "Acessorio non_durable nao deveria criar garantia contratual")
 
     const unclassifiedAccessory = await seedInventory(client, ctx, {
-      name: "Acessorio sem classificacao",
+      name: "Acessorio sem garantia padrao",
       productType: "accessory",
       quantity: 1,
       price: 100,
       accessoryClass: null,
     })
     const unclassifiedAccessorySale = await callSalesPost(ctx, salePayload({ ctx, main: unclassifiedAccessory, total: 170 }))
-    console.log("BLOQUEIO acessorio sem classificacao", unclassifiedAccessorySale)
-    assert([400, 422].includes(unclassifiedAccessorySale.status), "Acessorio sem accessory_class deveria bloquear venda")
-    assert(
-      unclassifiedAccessorySale.body.error?.message === "Classifique este acessório como Durável ou Não durável antes de vender.",
-      "Bloqueio de venda de acessorio sem classificacao retornou mensagem inesperada"
-    )
-    const unclassifiedAfter = await inventoryState(client, unclassifiedAccessory.id)
-    assert(Number(unclassifiedAfter.quantity) === 1, "Venda bloqueada de acessorio sem classificacao nao deveria baixar estoque")
+    assert(unclassifiedAccessorySale.status === 200 && unclassifiedAccessorySale.body.data?.saleId, unclassifiedAccessorySale.body.error?.message || `Venda acessorio sem garantia padrao HTTP ${unclassifiedAccessorySale.status}`)
+    const unclassifiedAccessoryWarranty = await saleWarrantySummary(client, unclassifiedAccessorySale.body.data.saleId)
+    console.log("GARANTIA acessorio sem garantia padrao", unclassifiedAccessoryWarranty)
+    assert(unclassifiedAccessoryWarranty.warranties_count === "0", "Acessorio sem policy padrao nao deveria criar garantia contratual")
 
     const { getCatalogPublicationReadiness } = await import("../src/lib/catalog/readiness")
-    const blockedReadiness = getCatalogPublicationReadiness({
+    const accessoryReadiness = getCatalogPublicationReadiness({
       productKind: "seminovo",
       productType: "accessory",
-      accessoryClass: null,
       inventoryStatus: "active",
       publication: { id: randomUUID(), inventory_item_id: unclassifiedAccessory.id, is_published: false, public_status: "draft", public_title: "Acessório", public_description: null, public_price: 170, promo_price: null, installment_count: 10, show_installments: true, highlight: false, cover_image_id: null, notes_internal: null, published_at: null, created_at: today(), updated_at: today() },
       review: null,
@@ -770,11 +849,7 @@ async function main() {
       images: [{ id: randomUUID(), product_id: unclassifiedAccessory.id, image_url: "https://example.com/a.jpg", thumbnail_url: "https://example.com/a.jpg", source: "uploaded", is_primary: true, sort_order: 0, alt: null, created_at: today() }],
       hasRealPhotos: true,
     })
-    assert(blockedReadiness.canPublish === false, "Readiness deveria bloquear acessorio sem accessory_class")
-    assert(
-      blockedReadiness.reasons.includes("Classifique este acessório como Durável ou Não durável antes de publicar."),
-      "Readiness nao retornou mensagem de classificacao obrigatoria"
-    )
+    assert(!accessoryReadiness.reasons.some((reason) => /classifica/i.test(reason)), "Readiness nao deve vazar classificacao tecnica")
 
     const customersBeforeWalkIn = await scalar<{ count: string }>(
       client,

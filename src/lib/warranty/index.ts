@@ -47,9 +47,7 @@ export type {
 } from "./sale-item-warranties"
 
 export {
-  AccessoryClassificationRequiredError,
   applySaleWarranties,
-  assertSaleAccessoriesClassified,
   buildWarrantySnapshot,
   calculateWarrantyPeriod,
   createSaleItemWarranty,
