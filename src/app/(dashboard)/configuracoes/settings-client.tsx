@@ -108,7 +108,10 @@ type CatalogSubcategoryRow = {
   normalized_name?: string | null
   deleted_at?: string | null
   is_active?: boolean | null
+  accessory_class?: "durable" | "non_durable" | null
 }
+
+type AccessoryClass = "durable" | "non_durable" | ""
 
 type CatalogAttributeRow = {
   id: string
@@ -238,7 +241,11 @@ export function ConfiguracoesClient({ currentUser }: { currentUser: CurrentUser 
   const [catalogColors, setCatalogColors] = useState<CatalogColorRow[]>([])
   const [catalogSubcategoryColors, setCatalogSubcategoryColors] = useState<CatalogSubcategoryColorRow[]>([])
   const [newCategory, setNewCategory] = useState({ name: "", product_type: "device" as ProductType })
-  const [newSubcategory, setNewSubcategory] = useState({ category_id: "", name: "" })
+  const [newSubcategory, setNewSubcategory] = useState<{ category_id: string; name: string; accessory_class: AccessoryClass }>({
+    category_id: "",
+    name: "",
+    accessory_class: "",
+  })
   const [newAttribute, setNewAttribute] = useState({ category_id: "", name: "", input_type: "select" })
   const [newOption, setNewOption] = useState({ attribute_id: "", label: "" })
   const [newColor, setNewColor] = useState({ category_id: "", name: "", hex: "#111827" })
@@ -430,6 +437,7 @@ export function ConfiguracoesClient({ currentUser }: { currentUser: CurrentUser 
       setNewSubcategory({
         category_id: subcategory?.category_id || selectedCategory?.id || "",
         name: subcategory?.name || "",
+        accessory_class: (subcategory?.accessory_class ?? "") as AccessoryClass,
       })
     }
 
@@ -492,6 +500,7 @@ export function ConfiguracoesClient({ currentUser }: { currentUser: CurrentUser 
         category_id: newSubcategory.category_id,
         name: newSubcategory.name.trim(),
         slug: slugify(newSubcategory.name),
+        accessory_class: newSubcategory.accessory_class === "" ? null : newSubcategory.accessory_class,
       })
       if (ok) setCatalogDrawer(null)
     }
@@ -705,9 +714,10 @@ export function ConfiguracoesClient({ currentUser }: { currentUser: CurrentUser 
         name: newSubcategory.name.trim(),
         slug: slugify(newSubcategory.name),
         normalized_name: normalizeCatalogName(newSubcategory.name),
+        accessory_class: newSubcategory.accessory_class === "" ? null : newSubcategory.accessory_class,
       })
       if (error) throw error
-      setNewSubcategory({ category_id: newSubcategory.category_id, name: "" })
+      setNewSubcategory({ category_id: newSubcategory.category_id, name: "", accessory_class: "" })
       await loadCatalogData()
       toast.success("Subcategoria criada.")
       setCatalogDrawer(null)
@@ -1661,6 +1671,35 @@ export function ConfiguracoesClient({ currentUser }: { currentUser: CurrentUser 
                 <div className="space-y-4">
                   <CatalogCategorySelect categories={catalogCategories} value={newSubcategory.category_id} disabled={!canEditSettings} onChange={(value) => setNewSubcategory((current) => ({ ...current, category_id: value }))} compact />
                   <Input label="Nome" value={newSubcategory.name} disabled={!canEditSettings} placeholder="Ex: iPhone 15 Pro Max" onChange={(event) => setNewSubcategory((current) => ({ ...current, name: event.target.value }))} />
+                  {(() => {
+                    const parentCategory = catalogCategories.find((cat) => cat.id === newSubcategory.category_id)
+                    if (parentCategory?.product_type !== "accessory") return null
+                    return (
+                      <div className="space-y-1.5">
+                        <label className="block text-sm font-medium text-navy-900">
+                          Classificação do acessório
+                        </label>
+                        <select
+                          value={newSubcategory.accessory_class}
+                          disabled={!canEditSettings}
+                          onChange={(event) =>
+                            setNewSubcategory((current) => ({
+                              ...current,
+                              accessory_class: event.target.value as AccessoryClass,
+                            }))
+                          }
+                          className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/20 disabled:opacity-50"
+                        >
+                          <option value="">Não classificado</option>
+                          <option value="durable">Durável (garantia contratual)</option>
+                          <option value="non_durable">Não durável (sem garantia)</option>
+                        </select>
+                        <p className="text-xs text-slate-500">
+                          Usado pelo resolver de garantia automática na venda.
+                        </p>
+                      </div>
+                    )
+                  })()}
                 </div>
               ) : null}
 

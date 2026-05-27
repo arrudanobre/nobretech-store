@@ -112,12 +112,22 @@ apply integration                                           OK
 grep displayName/regex/free-text parsing no resolver        zero
 ```
 
+## Fonte única — admin UI = resolver
+
+`product_subcategories.accessory_class` é a **única fonte** consumida por:
+
+- `/configuracoes` drawer de subcategoria (campo "Classificação do acessório", visível apenas para categorias com `product_type='accessory'`)
+- `resolveDefaultWarranty` via JOIN `product_subcategories.normalized_name = LOWER(inv.subcategory_name_snapshot)`
+
+Não existe classificação paralela. Alterar `accessory_class` na tela admin → próxima venda usa o novo valor sem alterar código.
+
+Smoke validado (script removido após run): UPDATE direto no DB de `accessory_class` (durable → non_durable → durable → NULL) reflete em `resolveDefaultWarranty` no próximo call, confirmando single source of truth.
+
 ## Próximos passos
 
-1. **UI admin** para definir `accessory_class` em `product_subcategories` (CRUD).
-2. **UI editável per-item** no wizard de venda (Fonte / Meses).
-3. **Backfill controlado** de subcategorias acessórias para outras empresas.
-4. **Audit log** para mudanças em `accessory_class`.
+1. **UI editável per-item** no wizard de venda (Fonte / Meses).
+2. **Backfill** de subcategorias acessórias para outras empresas.
+3. **Audit log** para mudanças em `accessory_class` (estender `company_settings_audit_logs`).
 
 ## Restrições preservadas
 
