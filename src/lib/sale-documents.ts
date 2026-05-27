@@ -9,6 +9,7 @@ type SaleDocumentItem = {
   unitPrice: number
   totalPrice: number
   warrantyMonths: number
+  warranty?: DocumentItemWarranty
 }
 
 export type ReceiptLineItem = {
@@ -20,6 +21,46 @@ export type ReceiptLineItem = {
   totalPrice: number
   warrantyMonths: number
   type: "principal" | "upsell" | "free"
+  warranty?: DocumentItemWarranty
+}
+
+export type DocumentItemWarranty = {
+  source: "item" | "legacy" | "none"
+  name?: string | null
+  label?: string | null
+  nature?: string | null
+  startsAt?: string | null
+  endsAt?: string | null
+  durationMonths?: number | null
+  durationDays?: number | null
+  note?: string | null
+}
+
+export type DocumentWarrantyItem = {
+  saleItemId?: string | null
+  name: string
+  role?: string | null
+  type?: string | null
+  warranty: DocumentItemWarranty
+}
+
+export type DocumentWarranty = {
+  mode: "item" | "legacy"
+  items: DocumentWarrantyItem[]
+  legacyWarranty: {
+    months: number
+    startsAt: string | null
+    endsAt: string | null
+  } | null
+}
+
+export type SaleDocumentCompany = {
+  displayName?: string | null
+  shortName?: string | null
+  phone?: string | null
+  email?: string | null
+  address?: string | null
+  sellerName?: string | null
 }
 
 export type ReceiptFinancialSummary = {
@@ -43,6 +84,7 @@ export type ReceiptPaymentLine = {
 export type SaleDocumentData = {
   saleId: string
   saleDate: string
+  company?: SaleDocumentCompany | null
   sellerName?: string
   customerName: string
   customerCpf?: string | null
@@ -55,13 +97,10 @@ export type SaleDocumentData = {
   /** Optional: multiple line items for multi-product receipt */
   receiptItems?: ReceiptLineItem[]
   receiptSummary?: ReceiptFinancialSummary
+  documentWarranty?: DocumentWarranty | null
 }
 
-const STORE_NAME = "NobreTech Store"
-const STORE_PHONE = "98981680080"
-const STORE_EMAIL = "nobretechstoreslz@gmail.com"
-const STORE_ADDRESS = "Rua Santa Inês, 16"
-const DEFAULT_SELLER = "Vinicius Arruda Nobre"
+const DEFAULT_STORE_NAME = "Loja"
 const NAVY = "#07162f"
 const MID_GRAY = "#d9d9d9"
 const TEXT_GRAY = "#4b5563"
@@ -100,17 +139,61 @@ function safeFileName(value: string) {
     .slice(0, 80)
 }
 
-function productDescription(item: SaleDocumentItem) {
-  const imeis = [
-    item.imei ? `IMEI 1: ${item.imei}` : null,
-    item.imei2 ? `IMEI 2: ${item.imei2}` : null,
-  ].filter(Boolean)
-
-  return [item.name, ...imeis].join(" - ")
-}
-
 function warrantyLabel(months: number) {
   return `${months} ${months === 1 ? "mês" : "meses"}`
+}
+
+function companyDisplayName(company?: SaleDocumentCompany | null) {
+  return company?.displayName?.trim() || company?.shortName?.trim() || DEFAULT_STORE_NAME
+}
+
+function companyShortName(company?: SaleDocumentCompany | null) {
+  return company?.shortName?.trim() || company?.displayName?.trim() || null
+}
+
+function storeWarrantyLabel(company?: SaleDocumentCompany | null) {
+  const shortName = companyShortName(company)
+  return shortName ? `Garantia ${shortName}` : "Garantia da loja"
+}
+
+function noContractualWarrantyLabel(company?: SaleDocumentCompany | null) {
+  const shortName = companyShortName(company)
+  return shortName
+    ? `Sem Garantia ${shortName} contratual vinculada a este item.`
+    : "Sem garantia contratual da loja vinculada a este item."
+}
+
+function itemWarrantyLabel(warranty: DocumentItemWarranty | undefined, fallbackMonths: number, company?: SaleDocumentCompany | null) {
+  if (!warranty) return warrantyLabel(fallbackMonths)
+  if (warranty.source === "none") return warranty.label || noContractualWarrantyLabel(company)
+  if (warranty.source === "legacy") return warranty.label || warrantyLabel(fallbackMonths)
+  if (warranty.nature === "manufacturer" && !warranty.endsAt) return "Conforme cobertura do fabricante."
+
+  const baseLabel = warranty.nature === "contractual"
+    ? warranty.label || storeWarrantyLabel(company)
+    : warranty.label || warranty.name || "Garantia vinculada"
+  const period = warranty.startsAt && warranty.endsAt
+    ? `${formatDate(warranty.startsAt)} a ${formatDate(warranty.endsAt)}`
+    : warranty.startsAt
+      ? `Início em ${formatDate(warranty.startsAt)}`
+      : null
+  return period ? `${baseLabel} (${period})` : baseLabel
+}
+
+function documentWarrantyItems(data: SaleDocumentData) {
+  if (data.documentWarranty?.mode === "item") return data.documentWarranty.items
+  return [{
+    name: data.item.name,
+    role: "principal",
+    type: "device",
+    warranty: {
+      source: "legacy" as const,
+      label: warrantyLabel(data.item.warrantyMonths),
+      startsAt: data.documentWarranty?.legacyWarranty?.startsAt || null,
+      endsAt: data.documentWarranty?.legacyWarranty?.endsAt || null,
+      durationMonths: data.item.warrantyMonths,
+    },
+  }]
 }
 
 function setFont(doc: jsPDF, size: number, style: "normal" | "bold" = "normal", color = NAVY) {
@@ -140,14 +223,14 @@ function saleObservations(data: SaleDocumentData) {
   return parts.length ? parts.join(". ") : ""
 }
 
-function drawSignature(doc: jsPDF, y: number, customerName: string) {
+function drawSignature(doc: jsPDF, y: number, customerName: string, companyName: string) {
   doc.setDrawColor(90, 90, 90)
   doc.setLineWidth(0.3)
   doc.line(17, y, 91, y)
   doc.line(117, y, 191, y)
   setFont(doc, 9)
   text(doc, customerName || "Cliente", 54, y + 5, { align: "center" })
-  text(doc, STORE_NAME, 154, y + 5, { align: "center" })
+  text(doc, companyName, 154, y + 5, { align: "center" })
 }
 
 function drawWarrantyText(doc: jsPDF, x: number, y: number, maxWidth: number, lineHeight: number) {
@@ -167,7 +250,8 @@ function drawWarrantyText(doc: jsPDF, x: number, y: number, maxWidth: number, li
 export async function generateReceiptPDF(data: SaleDocumentData) {
   const { default: JSPDF } = await import("jspdf")
   const doc = new JSPDF("p", "mm", "a4")
-  const seller = data.sellerName || DEFAULT_SELLER
+  const companyName = companyDisplayName(data.company)
+  const seller = data.sellerName || data.company?.sellerName || ""
   const saleDate = formatDate(data.saleDate)
   const observations = saleObservations(data)
 
@@ -191,12 +275,11 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
   doc.line(56, 28, 56, 44)
   doc.line(158, 28, 158, 44)
   setFont(doc, 15, "bold")
-  text(doc, "NobreTech", 36.5, 36, { align: "center" })
-  text(doc, "Store", 36.5, 41, { align: "center" })
+  text(doc, doc.splitTextToSize(companyShortName(data.company) || companyName, 35).slice(0, 2), 36.5, 35, { align: "center" })
   setFont(doc, 5.2, "bold")
-  text(doc, STORE_NAME, 107, 31, { align: "center" })
-  text(doc, STORE_PHONE, 107, 38, { align: "center" })
-  text(doc, STORE_EMAIL, 107, 43, { align: "center" })
+  text(doc, companyName, 107, 31, { align: "center" })
+  text(doc, data.company?.phone || "", 107, 38, { align: "center" })
+  text(doc, data.company?.email || "", 107, 43, { align: "center" })
   setFont(doc, 9, "bold")
   text(doc, "DATA DA VENDA", 176, 36, { align: "center" })
   setFont(doc, 5.8, "bold")
@@ -209,7 +292,7 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
   setFont(doc, 9, "bold")
   text(doc, "Vendedor:", 101, 53, { align: "right" })
   setFont(doc, 9)
-  text(doc, seller, 102, 53)
+  text(doc, seller || "—", 102, 53)
 
   // ── Consumer ──
   setFont(doc, 9, "bold")
@@ -274,7 +357,7 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
     setFont(doc, 8.2)
     text(doc, typeLabel, 28.5, rowY + 7, { align: "center" })
     text(doc, descLines, 41, rowY + 4.6)
-    text(doc, warrantyLabel(line.warrantyMonths), 135, rowY + 7, { align: "center" })
+    text(doc, doc.splitTextToSize(itemWarrantyLabel(line.warranty, line.warrantyMonths, data.company), 20).slice(0, 2), 135, rowY + 5, { align: "center" })
     text(doc, String(line.quantity), 146.5, rowY + 7, { align: "center" })
     text(doc, isFree ? "—" : money(line.unitPrice), 162, rowY + 7, { align: "center" })
     text(doc, isFree ? "Brinde" : money(line.totalPrice), 183, rowY + 7, { align: "center" })
@@ -403,7 +486,7 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
   text(doc, "DADOS ADICIONAIS", 19.5, termsY + 3)
   const termsEndY = drawWarrantyText(doc, 19.5, termsY + 8, 171, 4.05)
   const signatureY = ensurePageSpace(doc, termsEndY + 12, 14)
-  drawSignature(doc, signatureY, data.customerName)
+  drawSignature(doc, signatureY, data.customerName, companyName)
 
   doc.save(`Recibo-${safeFileName(data.customerName)}-${receiptNumber(data.saleId)}.pdf`)
 }
@@ -411,12 +494,13 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
 export async function generateWarrantyPDF(data: SaleDocumentData) {
   const { default: JSPDF } = await import("jspdf")
   const doc = new JSPDF("p", "mm", "a4")
-  const seller = data.sellerName || DEFAULT_SELLER
+  const companyName = companyDisplayName(data.company)
+  const seller = data.sellerName || data.company?.sellerName || ""
   const saleDate = formatDate(data.saleDate)
-  const desc = productDescription(data.item)
+  const warrantyItems = documentWarrantyItems(data)
 
   setFont(doc, 13, "bold")
-  text(doc, STORE_NAME, 105, 27, { align: "center" })
+  text(doc, companyName, 105, 27, { align: "center" })
 
   doc.setFillColor(245, 246, 247)
   doc.rect(17, 31, 176, 11, "F")
@@ -445,13 +529,13 @@ export async function generateWarrantyPDF(data: SaleDocumentData) {
   text(doc, data.customerPhone || "", 40, 57)
 
   setFont(doc, 8.5)
-  text(doc, STORE_NAME, 194, 49, { align: "right" })
-  text(doc, STORE_ADDRESS, 194, 53, { align: "right" })
-  text(doc, STORE_PHONE, 194, 57, { align: "right" })
+  text(doc, companyName, 194, 49, { align: "right" })
+  text(doc, data.company?.address || "", 194, 53, { align: "right" })
+  text(doc, data.company?.phone || "", 194, 57, { align: "right" })
   setFont(doc, 8.5, "normal", "#6b7280")
-  text(doc, STORE_EMAIL, 194, 61, { align: "right" })
+  text(doc, data.company?.email || "", 194, 61, { align: "right" })
   setFont(doc, 8.5)
-  text(doc, `Vendedor: ${seller}`, 194, 65, { align: "right" })
+  text(doc, `Vendedor: ${seller || "—"}`, 194, 65, { align: "right" })
   text(doc, `Data da Venda: ${saleDate}`, 194, 73, { align: "right" })
 
   setFont(doc, 8.5, "normal", "#6b7280")
@@ -459,21 +543,28 @@ export async function generateWarrantyPDF(data: SaleDocumentData) {
   text(doc, "GARANTIA", 176, 82, { align: "center" })
   doc.setDrawColor(205, 213, 222)
   doc.line(17, 83, 193, 83)
-  doc.setFillColor(245, 245, 245)
-  doc.rect(17, 83, 176, 4, "F")
-  setFont(doc, 8.2)
-  text(doc, doc.splitTextToSize(desc, 148).slice(0, 1), 17, 86)
-  text(doc, warrantyLabel(data.item.warrantyMonths), 176, 86, { align: "center" })
+  let rowY = 83
+  for (const item of warrantyItems) {
+    const rowH = 10
+    doc.setFillColor(245, 245, 245)
+    doc.rect(17, rowY, 176, rowH, "S")
+    setFont(doc, 8.2)
+    text(doc, doc.splitTextToSize(item.name, 142).slice(0, 2), 17, rowY + 4)
+    text(doc, doc.splitTextToSize(itemWarrantyLabel(item.warranty, item.warranty.durationMonths || data.item.warrantyMonths, data.company), 36).slice(0, 2), 176, rowY + 4, { align: "center" })
+    rowY += rowH
+  }
 
   setFont(doc, 8.5, "normal", "#6b7280")
-  text(doc, "DADOS ADICIONAIS", 105, 94, { align: "center" })
-  doc.line(17, 95, 193, 95)
+  const detailsY = rowY + 7
+  text(doc, "DADOS ADICIONAIS", 105, detailsY, { align: "center" })
+  doc.line(17, detailsY + 1, 193, detailsY + 1)
 
   setFont(doc, 72, "bold", "#f4f4f4")
   text(doc, "NT", 130, 170)
-  const termsEndY = drawWarrantyText(doc, 17, 100, 176, 4.45)
+  const startTermsY = detailsY + 6
+  const termsEndY = drawWarrantyText(doc, 17, startTermsY, 176, 4.45)
   const signatureY = ensurePageSpace(doc, Math.max(termsEndY + 12, 249), 14)
-  drawSignature(doc, signatureY, data.customerName)
+  drawSignature(doc, signatureY, data.customerName, companyName)
 
   doc.save(`${safeFileName(data.item.name)} - Garantia.pdf`)
 }

@@ -3,7 +3,7 @@ import { pool } from "@/lib/db"
 import { addDaysISO, formatPaymentMethod, getAdditionalItemDisplayName, getTradeInDisplayName } from "@/lib/helpers"
 import { calculateSplitPaymentEconomics } from "@/lib/sale-payments"
 import { parseQtyFromNotes } from "@/lib/sale-totals"
-import type { ReceiptLineItem, SaleDocumentData } from "@/lib/sale-documents"
+import type { DocumentWarranty, ReceiptLineItem, SaleDocumentData } from "@/lib/sale-documents"
 
 const TOKEN_PREFIX = "ntcv_"
 const TOKEN_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
@@ -1059,6 +1059,9 @@ function additionalDocumentItemName(item: AdditionalSaleItemRow) {
 function buildSaleDocuments(input: {
   row: SaleAccessRow
   additionalItems: AdditionalSaleItemRow[]
+  itemWarrantiesBySource: Map<string, PublicPurchaseItemWarranty>
+  hasItemWarranties: boolean
+  company: PublicPurchaseCompany
   paymentLines: Array<{ method: string; amount: number }>
   rawPaymentLines: PublicPaymentLine[]
   purchaseAmount: number
@@ -1087,6 +1090,42 @@ function buildSaleDocuments(input: {
   const warrantyAdditionalItemsSummary = input.additionalItems.length
     ? input.additionalItems.map((item) => `1x ${additionalDocumentItemName(item)}${item.type === "free" ? " (brinde)" : ""}`).join(", ")
     : null
+  const mainWarranty = input.itemWarrantiesBySource.get(`sales:${input.row.id}`)
+    || (input.hasItemWarranties ? noContractualWarranty(input.company.shortName) : legacyWarranty(dateOnly(input.row.warranty_start), dateOnly(input.row.warranty_end)))
+  const additionalWarranties = new Map(
+    input.additionalItems.map((item) => [
+      item.id,
+      input.itemWarrantiesBySource.get(`sales_additional_items:${item.id}`) || noContractualWarranty(input.company.shortName),
+    ])
+  )
+  const documentWarranty: DocumentWarranty = input.hasItemWarranties
+    ? {
+        mode: "item",
+        legacyWarranty: null,
+        items: [
+          {
+            name: mainName,
+            role: "principal",
+            type: "device",
+            warranty: mainWarranty,
+          },
+          ...input.additionalItems.map((item) => ({
+            name: additionalDocumentItemName(item),
+            role: item.type === "free" ? "free" : "upsell",
+            type: item.type === "free" ? "gift" : "additional",
+            warranty: additionalWarranties.get(item.id) || noContractualWarranty(input.company.shortName),
+          })),
+        ],
+      }
+    : {
+        mode: "legacy",
+        items: [],
+        legacyWarranty: {
+          months: warrantyMonths,
+          startsAt: dateOnly(input.row.warranty_start),
+          endsAt: dateOnly(input.row.warranty_end),
+        },
+      }
   const economics = calculateSplitPaymentEconomics({
     saleRevenue: input.purchaseAmount,
     payments: input.rawPaymentLines.map((payment) => ({
@@ -1116,6 +1155,7 @@ function buildSaleDocuments(input: {
       totalPrice: officialMainTotal,
       warrantyMonths,
       type: "principal",
+      warranty: mainWarranty,
     },
     ...input.additionalItems.map((item) => {
       const isFree = item.type === "free"
@@ -1129,6 +1169,7 @@ function buildSaleDocuments(input: {
         totalPrice: itemPrice,
         warrantyMonths,
         type: isFree ? "free" as const : "upsell" as const,
+        warranty: additionalWarranties.get(item.id),
       }
     }),
   ]
@@ -1139,8 +1180,14 @@ function buildSaleDocuments(input: {
     customerName: input.row.customer_name || "Cliente",
     customerCpf: input.row.customer_cpf || null,
     customerPhone: input.row.customer_phone || null,
+    company: {
+      displayName: input.company.displayName,
+      shortName: input.company.shortName,
+      phone: typeof input.settings.phone === "string" ? input.settings.phone : null,
+    },
     paymentMethod,
     payments: input.paymentLines,
+    documentWarranty,
   }
 
   const receiptDocument: SaleDocumentData = {
@@ -1155,6 +1202,7 @@ function buildSaleDocuments(input: {
       unitPrice: officialMainUnit,
       totalPrice: officialMainTotal,
       warrantyMonths,
+      warranty: mainWarranty,
     },
     receiptItems,
     receiptSummary: {
@@ -1183,6 +1231,7 @@ function buildSaleDocuments(input: {
       unitPrice: input.purchaseAmount,
       totalPrice: input.purchaseAmount,
       warrantyMonths,
+      warranty: mainWarranty,
     },
   }
 
@@ -1336,6 +1385,9 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
   const documents = buildSaleDocuments({
     row,
     additionalItems,
+    itemWarrantiesBySource,
+    hasItemWarranties,
+    company,
     paymentLines,
     rawPaymentLines,
     purchaseAmount,
