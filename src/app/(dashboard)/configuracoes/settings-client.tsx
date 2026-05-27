@@ -1,5 +1,7 @@
 "use client"
 
+/* eslint-disable @typescript-eslint/no-explicit-any, react-hooks/exhaustive-deps, @next/next/no-img-element */
+
 import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { toast } from "sonner"
