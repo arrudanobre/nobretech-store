@@ -22,6 +22,11 @@ import { getPublicProductBySlug } from "@/lib/catalog/queries"
 import { formatScore10 } from "@/lib/catalog/score"
 import { formatBRL } from "@/lib/helpers"
 import { getCatalogDisplayPrice, getCatalogSavings, isValidPromoPrice } from "@/lib/catalog/pricing"
+import {
+  buildCatalogLocationLabel,
+  buildCatalogProductUrl,
+  getCatalogCompanyIdentity,
+} from "@/lib/catalog/company-identity"
 
 export const dynamic = "force-dynamic"
 
@@ -33,42 +38,47 @@ export async function generateMetadata({
   params: Promise<Params>
 }): Promise<Metadata> {
   const { slug } = await params
-  const product = await getPublicProductBySlug(slug)
+  const identity = await getCatalogCompanyIdentity()
+  const product = await getPublicProductBySlug(slug, { brandShortName: identity.shortName })
   if (!product) {
     return { title: "Aparelho não encontrado" }
   }
 
-  const productUrl = `https://www.nobretechstore.com.br/catalogo/${product.slug}`
+  const productUrl = buildCatalogProductUrl(identity, product.slug)
   const displayPrice = getCatalogDisplayPrice(product)
   const hasPrice = Number.isFinite(displayPrice) && displayPrice > 0
+  const brandTail = identity.shortName ? ` na ${identity.shortName}` : ""
   const description = hasPrice
-    ? `${product.title} disponível por ${formatBRL(displayPrice)} na Nobretech Store. Veja fotos, condição, garantia e atendimento pelo WhatsApp.`
-    : `${product.title} disponível na Nobretech Store. Veja fotos, condição, garantia e atendimento pelo WhatsApp.`
+    ? `${product.title} disponível por ${formatBRL(displayPrice)}${brandTail}. Veja fotos, condição, garantia e atendimento pelo WhatsApp.`
+    : `${product.title} disponível${brandTail}. Veja fotos, condição, garantia e atendimento pelo WhatsApp.`
 
   const primaryImage = product.images[0]
-  const ogImageUrl = primaryImage?.url ?? "/og-nobretech-v2.png"
+  const ogImageUrl = primaryImage?.url ?? identity.ogImageUrl ?? undefined
+  const titleTail = identity.shortName ? ` | ${identity.shortName}` : ""
   const ogImageAlt = primaryImage?.alt
     ? `${product.title} — ${primaryImage.alt}`
-    : `${product.title} — Nobretech Store`
+    : `${product.title}${titleTail || ""}`
+
+  const og: Metadata["openGraph"] = {
+    title: `${product.title}${titleTail}`,
+    description,
+    locale: "pt_BR",
+    type: "website",
+    siteName: identity.displayName,
+  }
+  if (productUrl) og.url = productUrl
+  if (ogImageUrl) og.images = [{ url: ogImageUrl, alt: ogImageAlt }]
 
   return {
-    title: `${product.title} | Nobretech Store`,
+    title: `${product.title}${titleTail}`,
     description,
-    alternates: { canonical: productUrl },
-    openGraph: {
-      title: `${product.title} | Nobretech Store`,
-      description,
-      url: productUrl,
-      siteName: "Nobretech Store",
-      locale: "pt_BR",
-      type: "website",
-      images: [{ url: ogImageUrl, alt: ogImageAlt }],
-    },
+    alternates: productUrl ? { canonical: productUrl } : undefined,
+    openGraph: og,
     twitter: {
       card: "summary_large_image",
-      title: `${product.title} | Nobretech Store`,
+      title: `${product.title}${titleTail}`,
       description,
-      images: [{ url: ogImageUrl, alt: ogImageAlt }],
+      ...(ogImageUrl ? { images: [{ url: ogImageUrl, alt: ogImageAlt }] } : {}),
     },
   }
 }
@@ -79,16 +89,26 @@ export default async function CatalogoProductPage({
   params: Promise<Params>
 }) {
   const { slug } = await params
-  const product = await getPublicProductBySlug(slug)
+  const identity = await getCatalogCompanyIdentity()
+  const product = await getPublicProductBySlug(slug, { brandShortName: identity.shortName })
   if (!product) notFound()
 
   const isSealed = product.condition === "sealed"
   const hasPromo = isValidPromoPrice(product.price, product.promoPrice)
   const displayPrice = getCatalogDisplayPrice(product)
   const savings = getCatalogSavings(product)
+  const productUrl =
+    buildCatalogProductUrl(identity, product.slug) ?? `/catalogo/${product.slug}`
+  const location = buildCatalogLocationLabel(identity)
+  const supportLine = location
+    ? `Atendimento pelo WhatsApp e entrega presencial em ${identity.city ?? location}.`
+    : "Atendimento pelo canal configurado."
+  const callToFinalize = identity.shortName
+    ? `Chame a ${identity.shortName} no WhatsApp e confirme a disponibilidade.`
+    : "Chame a loja no WhatsApp e confirme a disponibilidade."
 
   return (
-    <CatalogShell>
+    <CatalogShell identity={identity}>
       <section className="overflow-x-hidden px-4 pb-36 pt-3 sm:px-6 sm:pb-20 sm:pt-6">
         <div className="mx-auto max-w-5xl min-w-0">
           <Link
@@ -150,7 +170,7 @@ export default async function CatalogoProductPage({
                     <ProductScoreBadge score={product.score} size="lg" />
                     <div className="leading-tight">
                       <p className="text-[10px] uppercase tracking-[0.22em] text-emerald-300/80">
-                        Score Nobretech
+                        Score
                       </p>
                       <p className="mt-1 text-[20px] font-semibold text-white">
                         {formatScore10(product.score)}
@@ -174,7 +194,7 @@ export default async function CatalogoProductPage({
                   <div className="mb-3 flex flex-wrap items-center gap-2">
                     <span className="inline-flex items-center gap-1 rounded-full bg-[#D6A84F] px-2.5 py-1 text-[10.5px] font-black uppercase tracking-[0.18em] text-[#160f05]">
                       <SealPercent className="h-3 w-3" weight="bold" />
-                      Oferta Nobretech
+                      Oferta
                     </span>
                     {savings ? (
                       <span className="rounded-full bg-emerald-500/15 px-2.5 py-1 text-[11px] font-semibold text-emerald-200 ring-1 ring-emerald-400/30">
@@ -196,14 +216,20 @@ export default async function CatalogoProductPage({
                   fallbackTotalText={product.installmentTotalText}
                   fallbackNote={product.installmentNote}
                 />
-                <p className="mt-3 text-[12px] leading-relaxed text-zinc-400">
-                  Atendimento pelo WhatsApp e entrega presencial em São Luís.
-                </p>
+                <p className="mt-3 text-[12px] leading-relaxed text-zinc-400">{supportLine}</p>
                 <div className="mt-4">
-                  <ProductWhatsAppCta product={product} />
+                  <ProductWhatsAppCta
+                    product={product}
+                    whatsappEndpoint={identity.whatsapp}
+                    brandShortName={identity.shortName}
+                  />
                 </div>
                 <div className="mt-3">
-                  <ProductShareActions productTitle={product.title} productSlug={product.slug} />
+                  <ProductShareActions
+                    productTitle={product.title}
+                    productUrl={productUrl}
+                    brandShortName={identity.shortName}
+                  />
                 </div>
               </div>
 
@@ -294,11 +320,13 @@ export default async function CatalogoProductPage({
                 <h2 className="font-[family-name:var(--font-syne)] text-[16px] font-semibold">
                   Quer este aparelho?
                 </h2>
-                <p className="mt-1 text-[12px] text-zinc-400">
-                  Chame a Nobretech no WhatsApp e confirme a disponibilidade.
-                </p>
+                <p className="mt-1 text-[12px] text-zinc-400">{callToFinalize}</p>
                 <div className="mt-4">
-                  <ProductWhatsAppCta product={product} />
+                  <ProductWhatsAppCta
+                    product={product}
+                    whatsappEndpoint={identity.whatsapp}
+                    brandShortName={identity.shortName}
+                  />
                 </div>
                 <p className="mt-3 inline-flex items-center justify-center gap-1.5 text-[11px] text-zinc-500">
                   <ChatCircle className="h-3 w-3" />
@@ -329,7 +357,12 @@ export default async function CatalogoProductPage({
             ) : null}
           </div>
           <div className="ml-auto shrink-0">
-            <ProductWhatsAppCta product={product} variant="sticky" />
+            <ProductWhatsAppCta
+              product={product}
+              whatsappEndpoint={identity.whatsapp}
+              brandShortName={identity.shortName}
+              variant="sticky"
+            />
           </div>
         </div>
       </div>

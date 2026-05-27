@@ -486,6 +486,7 @@ function mapRowToProduct(
   images: InventoryImageRow[],
   included: IncludedItemRow[],
   paymentSettings: CatalogPaymentSettings,
+  brandShortName: string | null,
 ): PublicCatalogProduct | null {
   if (!row.publication_id || !row.is_published) return null
 
@@ -525,7 +526,7 @@ function mapRowToProduct(
     color,
   })
 
-  const warrantyLabel = getCatalogWarrantyLabel(condition)
+  const warrantyLabel = getCatalogWarrantyLabel(condition, brandShortName)
   const availabilityLabel = "Pronta entrega"
 
   const finalImages: PublicCatalogImage[] =
@@ -565,11 +566,12 @@ function mapRowToProduct(
     included: item.is_included,
   }))
 
+  const brandFallback = brandShortName ? `pela ${brandShortName}` : "pela loja"
   const description =
     row.public_description?.trim() ||
     (isSealed
-      ? "Produto lacrado de fábrica, com disponibilidade confirmada pela Nobretech."
-      : "Unidade selecionada pela Nobretech, com fotos reais e condição conferida antes da publicação.")
+      ? `Produto lacrado de fábrica, com disponibilidade confirmada ${brandFallback}.`
+      : `Unidade selecionada ${brandFallback}, com fotos reais e condição conferida antes da publicação.`)
 
   return {
     id: row.id,
@@ -608,12 +610,18 @@ function mapRowToProduct(
     conditionReview: reviewToConditionItems(row, isSealed, warrantyLabel),
     includedItems,
     description,
-    whatsappMessage: defaultMessageForProduct({ title, storage, color }),
+    whatsappMessage: defaultMessageForProduct({ title, storage, color }, brandShortName),
     maskedImei,
   }
 }
 
-export async function listPublicCatalog(): Promise<PublicCatalogProduct[]> {
+export type PublicCatalogQueryOptions = {
+  brandShortName?: string | null
+}
+
+export async function listPublicCatalog(
+  options: PublicCatalogQueryOptions = {}
+): Promise<PublicCatalogProduct[]> {
   const companyId = await resolveCatalogCompanyId()
   if (!companyId) return []
 
@@ -637,15 +645,25 @@ export async function listPublicCatalog(): Promise<PublicCatalogProduct[]> {
     loadCatalogPaymentSettings(companyId),
   ])
 
+  const brandShortName = options.brandShortName ?? null
   const products: PublicCatalogProduct[] = []
   for (const row of rows) {
-    const product = mapRowToProduct(row, imagesByProduct.get(row.id) || [], itemsByInv.get(row.id) || [], paymentSettings)
+    const product = mapRowToProduct(
+      row,
+      imagesByProduct.get(row.id) || [],
+      itemsByInv.get(row.id) || [],
+      paymentSettings,
+      brandShortName,
+    )
     if (product) products.push(product)
   }
   return products
 }
 
-export async function getPublicProductBySlug(slug: string): Promise<PublicCatalogProduct | null> {
+export async function getPublicProductBySlug(
+  slug: string,
+  options: PublicCatalogQueryOptions = {}
+): Promise<PublicCatalogProduct | null> {
   const parsed = parseCatalogSlug(slug)
   if (!parsed) return null
 
@@ -672,5 +690,11 @@ export async function getPublicProductBySlug(slug: string): Promise<PublicCatalo
     fetchIncludedItems(companyId, [row.id]),
     loadCatalogPaymentSettings(companyId),
   ])
-  return mapRowToProduct(row, imagesByProduct.get(row.id) || [], itemsByInv.get(row.id) || [], paymentSettings)
+  return mapRowToProduct(
+    row,
+    imagesByProduct.get(row.id) || [],
+    itemsByInv.get(row.id) || [],
+    paymentSettings,
+    options.brandShortName ?? null,
+  )
 }

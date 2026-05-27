@@ -1,13 +1,28 @@
 import { ImageResponse } from "next/og"
 import { loadOgFonts } from "@/lib/og/fonts"
+import { getCatalogCompanyIdentity, buildCatalogLocationLabel } from "@/lib/catalog/company-identity"
 
 export const runtime = "nodejs"
-export const alt = "Catálogo Nobretech Store"
+export const alt = "Catálogo da loja"
 export const size = { width: 1200, height: 630 }
 export const contentType = "image/png"
 
 export default async function CatalogOpenGraphImage() {
-  const { syne700, syne800, inter400, inter500 } = await loadOgFonts()
+  const [{ syne700, syne800, inter400, inter500 }, identity] = await Promise.all([
+    loadOgFonts(),
+    getCatalogCompanyIdentity(),
+  ])
+
+  const brandName = identity.shortName
+  const eyebrow = `${identity.displayName} · Catálogo`
+  const location = buildCatalogLocationLabel(identity)
+  const supportLine = location
+    ? `Atendimento pelo WhatsApp e entrega presencial em ${identity.city ?? location}.`
+    : "Atendimento pelo canal configurado."
+  const domainLine =
+    identity.canonicalDomain?.replace(/^https?:\/\//, "").replace(/\/+$/, "")
+      ? `${identity.canonicalDomain.replace(/^https?:\/\//, "").replace(/\/+$/, "")}/catalogo`
+      : ""
 
   return new ImageResponse(
     (
@@ -44,7 +59,6 @@ export default async function CatalogOpenGraphImage() {
           }}
         />
 
-        {/* Abstract device cards in background — discrete vitrine cue */}
         <div
           style={{
             position: "absolute",
@@ -111,7 +125,7 @@ export default async function CatalogOpenGraphImage() {
               fontWeight: 700,
             }}
           >
-            Nobretech Store · Catálogo
+            {eyebrow}
           </div>
         </div>
 
@@ -136,7 +150,7 @@ export default async function CatalogOpenGraphImage() {
             }}
           >
             <span>Catálogo</span>
-            <span style={{ color: "#F4D57A" }}>Nobretech.</span>
+            <span style={{ color: "#F4D57A" }}>{brandName}.</span>
           </div>
           <div
             style={{
@@ -168,7 +182,7 @@ export default async function CatalogOpenGraphImage() {
             >
               <span>Aparelhos selecionados. Fotos reais nos seminovos.</span>
               <span style={{ color: "rgba(244,244,245,0.55)", fontSize: "22px", marginTop: "6px" }}>
-                Atendimento pelo WhatsApp e entrega presencial em São Luís.
+                {supportLine}
               </span>
             </div>
           </div>
@@ -189,9 +203,11 @@ export default async function CatalogOpenGraphImage() {
           }}
         >
           <span>Fotos reais · Garantia · Pronta entrega</span>
-          <span style={{ color: "#F2D88A", letterSpacing: "0.04em", textTransform: "none" }}>
-            nobretechstore.com.br/catalogo
-          </span>
+          {domainLine ? (
+            <span style={{ color: "#F2D88A", letterSpacing: "0.04em", textTransform: "none" }}>
+              {domainLine}
+            </span>
+          ) : null}
         </div>
       </div>
     ),

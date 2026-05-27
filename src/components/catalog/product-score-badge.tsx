@@ -50,14 +50,14 @@ export function ProductScoreBadge({ score, size = "md", showLabel = false, label
     <div className="inline-flex items-center gap-2">
       <div
         className={`flex flex-col items-center justify-center rounded-full font-bold leading-none shadow-[0_10px_26px_rgba(0,0,0,0.38)] ring-2 ${palette.bg} ${palette.text} ${palette.ring} ${SIZE_CLASSES[size]}`}
-        aria-label={`Score Nobretech ${formatted} de 10${label ? `, ${label}` : ""}`}
+        aria-label={`Score ${formatted} de 10${label ? `, ${label}` : ""}`}
       >
         <span>{formatted}</span>
         {size !== "sm" ? <span className="mt-0.5 text-[9px] font-medium opacity-80">/10</span> : null}
       </div>
       {showLabel && label ? (
         <div className="flex flex-col">
-          <span className="text-[10px] uppercase tracking-[0.2em] text-zinc-500">Score Nobretech</span>
+          <span className="text-[10px] uppercase tracking-[0.2em] text-zinc-500">Score</span>
           <span className={`text-sm font-medium ${palette.text}`}>{label}</span>
         </div>
       ) : null}

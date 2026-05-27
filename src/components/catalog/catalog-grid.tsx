@@ -33,9 +33,10 @@ const SORT_LABELS: Record<SortMode, string> = {
 
 type Props = {
   products: PublicCatalogProduct[]
+  whatsappUrl?: string | null
 }
 
-export function CatalogGrid({ products }: Props) {
+export function CatalogGrid({ products, whatsappUrl = null }: Props) {
   const [query, setQuery] = useState("")
   const [chip, setChip] = useState<Chip["id"]>("all")
   const [sort, setSort] = useState<SortMode>("recent")
@@ -179,6 +180,7 @@ export function CatalogGrid({ products }: Props) {
           <CatalogEmptyState
             title="Nenhum aparelho encontrado"
             description="Ajuste a busca ou chame a equipe no WhatsApp. Toda semana entram novidades."
+            whatsappUrl={whatsappUrl}
           />
         ) : (
           <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">

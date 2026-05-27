@@ -32,7 +32,7 @@ export function CatalogCardStatus({ product }: Props) {
             }`}
           >
             <MainIcon className="h-3.5 w-3.5" weight="bold" />
-            {hasPromo ? "Oferta Nobretech" : statusLabel(product)}
+            {hasPromo ? "Oferta" : statusLabel(product)}
           </span>
         </div>
       </div>

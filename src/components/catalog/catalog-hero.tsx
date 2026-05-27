@@ -1,7 +1,14 @@
 import { ArrowRight } from "@phosphor-icons/react/dist/ssr"
-import { NOBRETECH_WHATSAPP_BASE } from "@/lib/catalog/whatsapp"
+import type { CatalogCompanyIdentity } from "@/lib/catalog/company-identity"
 
-export function CatalogHero({ availableCount }: { availableCount: number }) {
+type Props = {
+  availableCount: number
+  identity: CatalogCompanyIdentity
+}
+
+export function CatalogHero({ availableCount, identity }: Props) {
+  const eyebrow = `Catálogo ${identity.shortName ?? "loja"}`
+
   return (
     <section className="relative px-4 pb-4 pt-5 sm:px-6 sm:pb-7 sm:pt-9">
       <div className="mx-auto max-w-6xl">
@@ -16,7 +23,7 @@ export function CatalogHero({ availableCount }: { availableCount: number }) {
           />
           <div className="relative max-w-2xl">
             <span className="inline-flex items-center gap-2 rounded-full border border-[#D6A84F]/30 bg-[#D6A84F]/12 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.25em] text-[#F2D88A]">
-              Catálogo Nobretech
+              {eyebrow}
             </span>
             <h1 className="mt-3.5 font-[family-name:var(--font-syne)] text-[1.85rem] font-semibold leading-[1.05] tracking-tight sm:text-[2.6rem]">
               Tecnologia com <span className="text-[#F2D88A]">procedência</span>.
@@ -34,14 +41,16 @@ export function CatalogHero({ availableCount }: { availableCount: number }) {
                 Ver seleção
                 <ArrowRight className="h-4 w-4" />
               </a>
-              <a
-                href={NOBRETECH_WHATSAPP_BASE}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex h-11 items-center justify-center rounded-2xl border border-white/[0.1] bg-transparent px-4 text-[13px] font-medium text-zinc-200 transition hover:bg-white/[0.05]"
-              >
-                Falar no WhatsApp
-              </a>
+              {identity.whatsapp ? (
+                <a
+                  href={identity.whatsapp.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex h-11 items-center justify-center rounded-2xl border border-white/[0.1] bg-transparent px-4 text-[13px] font-medium text-zinc-200 transition hover:bg-white/[0.05]"
+                >
+                  Falar no WhatsApp
+                </a>
+              ) : null}
             </div>
             {availableCount > 0 ? (
               <p className="mt-3 text-[11px] text-zinc-500">

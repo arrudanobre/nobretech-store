@@ -5,7 +5,8 @@ import { Check, ShareNetwork } from "@phosphor-icons/react/dist/ssr"
 
 type Props = {
   productTitle: string
-  productSlug: string
+  productUrl: string
+  brandShortName?: string | null
 }
 
 function WhatsAppGlyph({ className }: { className?: string }) {
@@ -22,11 +23,13 @@ function WhatsAppGlyph({ className }: { className?: string }) {
   )
 }
 
-export function ProductShareActions({ productTitle, productSlug }: Props) {
+export function ProductShareActions({ productTitle, productUrl, brandShortName = null }: Props) {
   const [copied, setCopied] = useState(false)
 
-  const productUrl = `https://www.nobretechstore.com.br/catalogo/${productSlug}`
-  const whatsappText = `Olha esse produto da Nobretech: ${productTitle}\n${productUrl}`
+  const shareText = brandShortName
+    ? `Olha esse produto da ${brandShortName}: ${productTitle}`
+    : `Olha esse produto: ${productTitle}`
+  const whatsappText = `${shareText}\n${productUrl}`
   const whatsappHref = `https://wa.me/?text=${encodeURIComponent(whatsappText)}`
 
   async function handleNativeShare() {
@@ -34,7 +37,7 @@ export function ProductShareActions({ productTitle, productSlug }: Props) {
       try {
         await navigator.share({
           title: productTitle,
-          text: `Olha esse produto da Nobretech: ${productTitle}`,
+          text: shareText,
           url: productUrl,
         })
         return

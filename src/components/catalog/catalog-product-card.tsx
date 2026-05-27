@@ -109,7 +109,7 @@ export function CatalogProductCard({ product, priority = false }: Props) {
                 </span>
               </div>
               <p className="text-[11.5px] font-medium text-zinc-300">
-                Score Nobretech <span className="text-emerald-200">{formatScore10(product.score)}/10</span>
+                Score <span className="text-emerald-200">{formatScore10(product.score)}/10</span>
                 <span className="ml-1 text-zinc-500">{product.scoreLabel}</span>
               </p>
             </>

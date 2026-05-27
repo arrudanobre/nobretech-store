@@ -86,7 +86,7 @@ export function ProductConditionList({ items, variant }: Props) {
       },
       {
         label: "Pronta entrega",
-        description: "Disponibilidade confirmada pela Nobretech.",
+        description: "Disponibilidade confirmada pela loja.",
         icon: CheckCircle,
       },
       {
