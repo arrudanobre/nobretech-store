@@ -5,6 +5,8 @@ import { canAccess, canEditFinance, requireApiAuthContext, type AuthorizedAuthCo
 import { syncTransactionMovement } from "@/lib/finance/sync-transaction-movement"
 import { restoreInventoryVariantQuantity } from "@/lib/inventory/inventory-variants"
 import { parseQtyFromNotes } from "@/lib/sale-totals"
+import { materializeSaleItemsWithClient } from "@/lib/sales/sale-items"
+import { applySaleWarranties } from "@/lib/warranty"
 
 type RouteContext = {
   params: Promise<{ id: string }> | { id: string }
@@ -239,7 +241,11 @@ async function restoreInventoryQuantity(
   )
 }
 
-async function completeReservation(client: PoolClient, sale: SaleRow) {
+async function completeReservation(
+  client: PoolClient,
+  sale: SaleRow,
+  actor: { userId: string; email: string }
+) {
   await client.query(
     "UPDATE sales SET sale_status = 'completed' WHERE id = $1::uuid AND company_id = $2::uuid",
     [sale.id, sale.company_id]
@@ -293,6 +299,24 @@ async function completeReservation(client: PoolClient, sale: SaleRow) {
       ]
     )
   }
+
+  if (!sale.sale_date) {
+    throw new SaleReservationError(
+      "Reserva sem sale_date não pode iniciar garantia automaticamente. Defina a data efetiva antes de concluir.",
+      409
+    )
+  }
+
+  await materializeSaleItemsWithClient(client, sale.company_id, sale.id)
+  await applySaleWarranties(
+    client,
+    {
+      companyId: sale.company_id,
+      saleId: sale.id,
+      startsAt: sale.sale_date,
+    },
+    { userId: actor.userId, email: actor.email }
+  )
 
   if (sale.trade_in_id) {
     const tradeIn = await client.query<{ linked_inventory_id: string | null }>(
@@ -480,7 +504,7 @@ export async function POST(request: Request, context: RouteContext) {
 
   const body = await request.json().catch(() => ({}))
   const action = String(body.action || "")
-  const { appUserId, companyId, role } = authResult.context
+  const { appUserId, companyId, role, email } = authResult.context
 
   if (action === "complete" && !canEditFinance(role)) {
     return NextResponse.json({ error: { message: "Apenas owner pode concluir reserva pelo financeiro." } }, { status: 403 })
@@ -517,7 +541,7 @@ export async function POST(request: Request, context: RouteContext) {
         await client.query("ROLLBACK")
         return NextResponse.json({ error: { message: "Apenas reservas podem ser concluídas por esta ação." } }, { status: 400 })
       }
-      await completeReservation(client, sale)
+      await completeReservation(client, sale, { userId: appUserId, email })
       await writeSaleAudit(client, {
         companyId,
         userId: appUserId,

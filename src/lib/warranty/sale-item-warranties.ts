@@ -450,6 +450,24 @@ async function fetchSaleItemsForWarranty(
   return result.rows
 }
 
+async function hasActiveWarrantyForSaleItem(
+  client: PoolClient,
+  companyId: string,
+  saleItemId: string
+): Promise<boolean> {
+  const result = await client.query<{ exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM sale_item_warranties
+       WHERE company_id = $1
+         AND sale_item_id = $2
+         AND active = TRUE
+     ) AS exists`,
+    [companyId, saleItemId]
+  )
+  return Boolean(result.rows[0]?.exists)
+}
+
 async function resolveDefaultPolicyIdForItem(
   client: PoolClient,
   companyId: string,
@@ -609,6 +627,11 @@ export async function applySaleWarranties(
   const skipped: ApplySaleWarrantiesResult["skipped"] = []
 
   for (const item of items) {
+    if (await hasActiveWarrantyForSaleItem(client, companyId, item.id)) {
+      skipped.push({ saleItemId: item.id, reason: "Garantia ativa ja existente." })
+      continue
+    }
+
     let selection: WarrantySelectionInput | null | undefined
 
     if (item.item_role === "main") {

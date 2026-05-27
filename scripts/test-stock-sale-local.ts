@@ -159,6 +159,14 @@ async function seedWarrantyPolicies(client: Client, companyId: string) {
     [companyId, `${TAG} policy 3m`]
   )
 
+  await client.query(
+    `INSERT INTO warranty_policy_terms (warranty_policy_id, term_type, title, body, sort_order)
+     VALUES
+       ($1::uuid, 'coverage', 'Cobertura local 6m', 'Termo local 6m para smoke de garantia por item.', 10),
+       ($2::uuid, 'coverage', 'Cobertura local 3m', 'Termo local 3m para smoke de garantia por item.', 10)`,
+    [policy6m.id, policy3m.id]
+  )
+
   return { policy6mId: policy6m.id, policy3mId: policy3m.id }
 }
 
@@ -306,12 +314,20 @@ async function callSalesPost(ctx: SeedContext, payload: unknown): Promise<SaleRe
 }
 
 async function callCancel(ctx: SeedContext, saleId: string) {
+  return callReservationAction(ctx, saleId, "cancel")
+}
+
+async function callComplete(ctx: SeedContext, saleId: string) {
+  return callReservationAction(ctx, saleId, "complete")
+}
+
+async function callReservationAction(ctx: SeedContext, saleId: string, action: "cancel" | "complete") {
   const { POST } = await import("../src/app/api/sales/[id]/reservation/route")
   const response = await POST(
     new Request(`http://localhost/api/sales/${saleId}/reservation`, {
       method: "POST",
       headers: testHeaders(ctx),
-      body: JSON.stringify({ action: "cancel" }),
+      body: JSON.stringify({ action }),
     }),
     { params: { id: saleId } }
   )
@@ -349,6 +365,8 @@ async function saleWarrantySummary(client: Client, saleId: string) {
     warranty_duration_months: string | null
     warranty_policy_id: string | null
     warranty_starts_at: string | null
+    policy_snapshot_id: string | null
+    terms_snapshot_count: string | null
   }>(
     client,
     `SELECT
@@ -360,7 +378,9 @@ async function saleWarrantySummary(client: Client, saleId: string) {
        (SELECT COUNT(*)::text FROM sale_item_warranties WHERE sale_id = s.id AND active = TRUE) AS warranties_count,
        (SELECT duration_months::text FROM sale_item_warranties WHERE sale_id = s.id AND active = TRUE ORDER BY created_at ASC LIMIT 1) AS warranty_duration_months,
        (SELECT warranty_policy_id::text FROM sale_item_warranties WHERE sale_id = s.id AND active = TRUE ORDER BY created_at ASC LIMIT 1) AS warranty_policy_id,
-       (SELECT starts_at::date::text FROM sale_item_warranties WHERE sale_id = s.id AND active = TRUE ORDER BY created_at ASC LIMIT 1) AS warranty_starts_at
+       (SELECT starts_at::date::text FROM sale_item_warranties WHERE sale_id = s.id AND active = TRUE ORDER BY created_at ASC LIMIT 1) AS warranty_starts_at,
+       (SELECT policy_snapshot->>'warranty_policy_id' FROM sale_item_warranties WHERE sale_id = s.id AND active = TRUE ORDER BY created_at ASC LIMIT 1) AS policy_snapshot_id,
+       (SELECT jsonb_array_length(terms_snapshot)::text FROM sale_item_warranties WHERE sale_id = s.id AND active = TRUE ORDER BY created_at ASC LIMIT 1) AS terms_snapshot_count
      FROM sales s
      WHERE s.id = $1::uuid`,
     [saleId]
@@ -481,6 +501,8 @@ async function main() {
     assert(effectiveDefaultWarranty.warranties_count === "1", "Venda default nao criou sale_item_warranty")
     assert(effectiveDefaultWarranty.warranty_duration_months === "6", "Venda default nao criou garantia de 6 meses")
     assert(effectiveDefaultWarranty.warranty_policy_id === ctx.policy6mId, "Venda default nao usou policy 6m")
+    assert(effectiveDefaultWarranty.policy_snapshot_id === ctx.policy6mId, "Venda default nao salvou snapshot da policy 6m")
+    assert(Number(effectiveDefaultWarranty.terms_snapshot_count || 0) > 0, "Venda default nao salvou terms_snapshot")
     assert(effectiveDefaultWarranty.warranty_start === today(), "Legado warranty_start mudou inesperadamente")
     assert(effectiveDefaultWarranty.warranty_starts_at === today(), "Garantia por item deveria iniciar em saleDate")
 
@@ -509,6 +531,8 @@ async function main() {
     assert(effective3mWarranty.warranties_count === "1", "Venda 3m nao criou sale_item_warranty")
     assert(effective3mWarranty.warranty_duration_months === "3", "Venda 3m nao criou garantia de 3 meses")
     assert(effective3mWarranty.warranty_policy_id === ctx.policy3mId, "Venda 3m nao usou policy 3m")
+    assert(effective3mWarranty.policy_snapshot_id === ctx.policy3mId, "Venda 3m nao salvou snapshot da policy 3m")
+    assert(Number(effective3mWarranty.terms_snapshot_count || 0) > 0, "Venda 3m nao salvou terms_snapshot")
 
     const explicitNullItem = await seedInventory(client, ctx, {
       name: "iPhone garantia nula",
@@ -588,6 +612,55 @@ async function main() {
     assert(reservedSale.body.data.warrantyApplied?.created === 0, "API deveria reportar zero garantias criadas na reserva")
     assert(reservedAfter.status === "reserved", "Reserva nao marcou estoque como reserved")
     assert(reservedAfter.commercial_status === "reserved", "Reserva nao marcou commercial_status=reserved")
+
+    const reservedComplete = await callComplete(ctx, reservedSale.body.data.saleId)
+    assert(reservedComplete.status === 200, reservedComplete.body.error?.message || `Efetivacao reserva HTTP ${reservedComplete.status}`)
+    const reservedCompletedWarranty = await saleWarrantySummary(client, reservedSale.body.data.saleId)
+    console.log("GARANTIA reserva efetivada", { sale: reservedCompletedWarranty, api: reservedComplete.body })
+    assert(reservedCompletedWarranty.sale_status === "completed", "Reserva efetivada nao virou completed")
+    assert(reservedCompletedWarranty.sale_items_count === "1", "Reserva efetivada perdeu sale_items")
+    assert(reservedCompletedWarranty.warranties_count === "1", "Reserva efetivada nao criou sale_item_warranty")
+    assert(reservedCompletedWarranty.warranty_duration_months === "6", "Reserva efetivada deveria aplicar default 6m")
+    assert(reservedCompletedWarranty.warranty_policy_id === ctx.policy6mId, "Reserva efetivada nao usou policy default 6m")
+    assert(reservedCompletedWarranty.policy_snapshot_id === ctx.policy6mId, "Reserva efetivada nao salvou snapshot da policy 6m")
+    assert(Number(reservedCompletedWarranty.terms_snapshot_count || 0) > 0, "Reserva efetivada nao salvou terms_snapshot")
+    assert(reservedCompletedWarranty.warranty_starts_at === today(), "Reserva efetivada deveria iniciar garantia em saleDate")
+    assert(reservedCompletedWarranty.warranty_start === today(), "Legado warranty_start mudou na efetivacao")
+
+    const reservedCompleteAgain = await callComplete(ctx, reservedSale.body.data.saleId)
+    assert(reservedCompleteAgain.status === 200, reservedCompleteAgain.body.error?.message || `Reefetivacao reserva HTTP ${reservedCompleteAgain.status}`)
+    const reservedAfterSecondComplete = await saleWarrantySummary(client, reservedSale.body.data.saleId)
+    console.log("GARANTIA reserva efetivada novamente", { sale: reservedAfterSecondComplete, api: reservedCompleteAgain.body })
+    assert(reservedAfterSecondComplete.warranties_count === "1", "Efetivacao repetida duplicou garantia por item")
+
+    const reserved3mItem = await seedInventory(client, ctx, {
+      name: "iPhone reserva com escolha 3m nao preservada",
+      productType: "device",
+      quantity: 1,
+      hasSerial: true,
+      price: 2500,
+    })
+    const reserved3mSale = await callSalesPost(
+      ctx,
+      salePayload({
+        ctx,
+        main: reserved3mItem,
+        total: 3500,
+        saleStatus: "reserved",
+        isReservation: true,
+        warrantySelections: { main: { warrantyPolicyId: ctx.policy3mId, manualSelection: true } },
+      })
+    )
+    assert(reserved3mSale.status === 200 && reserved3mSale.body.data?.saleId, reserved3mSale.body.error?.message || `Reserva 3m HTTP ${reserved3mSale.status}`)
+    const reserved3mBeforeComplete = await saleWarrantySummary(client, reserved3mSale.body.data.saleId)
+    assert(reserved3mBeforeComplete.warranties_count === "0", "Reserva 3m nao deveria criar garantia na criacao")
+    const reserved3mComplete = await callComplete(ctx, reserved3mSale.body.data.saleId)
+    assert(reserved3mComplete.status === 200, reserved3mComplete.body.error?.message || `Efetivacao reserva 3m HTTP ${reserved3mComplete.status}`)
+    const reserved3mAfterComplete = await saleWarrantySummary(client, reserved3mSale.body.data.saleId)
+    console.log("GARANTIA reserva 3m efetivada com default", { sale: reserved3mAfterComplete, api: reserved3mComplete.body })
+    assert(reserved3mAfterComplete.warranties_count === "1", "Reserva 3m efetivada nao criou garantia")
+    assert(reserved3mAfterComplete.warranty_duration_months === "6", "Escolha 3m da reserva nao e preservada; efetivacao deve aplicar default 6m")
+    assert(reserved3mAfterComplete.warranty_policy_id === ctx.policy6mId, "Reserva 3m efetivada deveria usar default 6m por ausencia de persistencia da escolha")
 
     const customersBeforeWalkIn = await scalar<{ count: string }>(
       client,
