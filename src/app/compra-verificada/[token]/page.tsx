@@ -325,11 +325,12 @@ function itemWarrantyTitle(warranty: PurchaseItemWarranty, company?: PurchaseCom
 
 function itemWarrantyPeriod(warranty: PurchaseItemWarranty) {
   if (warranty.source === "none") return null
+  if (warranty.nature === "manufacturer" && !warranty.endsAt) return "Conforme cobertura do fabricante"
   if (warranty.startsAt && warranty.endsAt) {
     return `Válida de ${formatPublicDate(warranty.startsAt)} até ${formatPublicDate(warranty.endsAt)}`
   }
   if (warranty.startsAt) return `Início em ${formatPublicDate(warranty.startsAt)}`
-  if (warranty.nature === "manufacturer") return "Conforme cobertura informada"
+  if (warranty.nature === "manufacturer") return "Conforme cobertura do fabricante"
   return null
 }
 
@@ -1031,6 +1032,11 @@ function VerifiedPurchaseWarrantyCard({ purchase }: { purchase: Purchase }) {
             }
             const period = itemWarrantyPeriod(warranty)
             const isLinked = warranty.source === "item"
+            const itemStatus = getWarrantyStatus(warranty.startsAt, warranty.endsAt)
+            const itemProgress = isLinked && warranty.startsAt && warranty.endsAt
+              ? getWarrantyProgress(warranty.startsAt, warranty.endsAt)
+              : null
+            const itemProgressPct = Math.round((itemProgress ?? 0) * 100)
 
             return (
               <div key={item.id} className={`rounded-[1.2rem] border p-4 ${isLinked ? "border-emerald-100 bg-emerald-50/45" : "border-slate-200 bg-slate-50/70"}`}>
@@ -1052,6 +1058,35 @@ function VerifiedPurchaseWarrantyCard({ purchase }: { purchase: Purchase }) {
                   <p className={`text-sm font-extrabold leading-5 ${isLinked ? "text-navy-900" : "text-slate-700"}`}>{itemWarrantyTitle(warranty, purchase.company)}</p>
                   {period && <p className="mt-1 text-sm font-semibold leading-5 text-slate-600">{period}</p>}
                   {warranty.note && <p className="mt-2 text-xs font-semibold leading-5 text-slate-500">{warranty.note}</p>}
+                  {itemProgress !== null && (
+                    <div className="mt-4">
+                      <div className="relative h-3 rounded-full bg-slate-100 shadow-inner">
+                        <div
+                          className={`h-3 rounded-full ${itemStatus === "expired" ? "bg-amber-400" : itemStatus === "active" ? "bg-emerald-500" : "bg-royal-500"}`}
+                          style={{ width: `${itemProgressPct}%` }}
+                        />
+                        <div
+                          className="absolute top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-4 border-white bg-navy-900 shadow-md"
+                          style={{ left: `${itemProgressPct}%` }}
+                          aria-label="Hoje"
+                        />
+                      </div>
+                      <div className="mt-3 grid grid-cols-3 items-start gap-2 text-xs">
+                        <div>
+                          <p className="font-bold text-slate-500">Início</p>
+                          <p className="mt-0.5 font-semibold text-slate-900">{formatPublicDate(warranty.startsAt)}</p>
+                        </div>
+                        <div className="text-center">
+                          <p className="font-bold text-slate-500">Hoje</p>
+                          <p className="mt-0.5 font-semibold text-slate-900">{itemProgressPct}%</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-bold text-slate-500">Fim</p>
+                          <p className="mt-0.5 font-semibold text-slate-900">{formatPublicDate(warranty.endsAt)}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )
