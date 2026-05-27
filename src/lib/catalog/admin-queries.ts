@@ -27,6 +27,8 @@ type InventoryRow = {
   model: string | null
   storage: string | null
   color: string | null
+  product_type: string | null
+  accessory_class: string | null
   category_snapshot: string | null
 }
 
@@ -42,9 +44,22 @@ const INVENTORY_QUERY = `
     pc.model AS model,
     pc.storage AS storage,
     pc.color AS color,
+    i.product_type,
+    sub.accessory_class,
     i.category_name_snapshot AS category_snapshot
   FROM inventory i
   LEFT JOIN product_catalog pc ON pc.id = i.catalog_id
+  LEFT JOIN product_categories cat
+    ON cat.company_id = i.company_id
+   AND cat.is_active = TRUE
+   AND cat.deleted_at IS NULL
+   AND cat.slug = pc.category
+  LEFT JOIN product_subcategories sub
+    ON sub.company_id = i.company_id
+   AND sub.is_active = TRUE
+   AND sub.deleted_at IS NULL
+   AND sub.category_id = cat.id
+   AND sub.normalized_name = LOWER(i.subcategory_name_snapshot)
   WHERE i.company_id = $1::uuid
     AND i.status IN ('active', 'in_stock', 'reserved', 'pending')
   ORDER BY i.created_at DESC
@@ -265,6 +280,8 @@ export async function loadAdminCatalog(companyId: string): Promise<{
 
     const readiness = getCatalogPublicationReadiness({
       productKind: condition,
+      productType: row.product_type,
+      accessoryClass: row.accessory_class,
       inventoryStatus: row.status,
       publication,
       review,

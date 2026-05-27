@@ -6,7 +6,7 @@ import { syncTransactionMovement } from "@/lib/finance/sync-transaction-movement
 import { restoreInventoryVariantQuantity } from "@/lib/inventory/inventory-variants"
 import { parseQtyFromNotes } from "@/lib/sale-totals"
 import { materializeSaleItemsWithClient } from "@/lib/sales/sale-items"
-import { applySaleWarranties } from "@/lib/warranty"
+import { applySaleWarranties, assertSaleAccessoriesClassified } from "@/lib/warranty"
 
 type RouteContext = {
   params: Promise<{ id: string }> | { id: string }
@@ -308,6 +308,7 @@ async function completeReservation(
   }
 
   await materializeSaleItemsWithClient(client, sale.company_id, sale.id)
+  await assertSaleAccessoriesClassified(client, sale.company_id, sale.id)
   await applySaleWarranties(
     client,
     {

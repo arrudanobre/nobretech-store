@@ -3,6 +3,10 @@ import "server-only"
 import type { PoolClient } from "pg"
 import { pool } from "@/lib/db"
 import { buildAuditMetadata, recordCompanySettingsAuditLog, rowToSnapshot } from "@/lib/company-settings/audit"
+import {
+  ACCESSORY_CLASSIFICATION_SALE_ERROR,
+  isUnclassifiedAccessory,
+} from "@/lib/warranty/accessory-classification"
 import { resolveDefaultWarranty } from "./default-resolver"
 import type {
   WarrantyActor,
@@ -417,6 +421,13 @@ export type ApplySaleWarrantiesResult = {
   skipped: Array<{ saleItemId: string; reason: string }>
 }
 
+export class AccessoryClassificationRequiredError extends Error {
+  constructor(message = ACCESSORY_CLASSIFICATION_SALE_ERROR) {
+    super(message)
+    this.name = "AccessoryClassificationRequiredError"
+  }
+}
+
 type EligibleSaleItemRow = {
   id: string
   sale_id: string
@@ -477,6 +488,23 @@ async function fetchSaleItemsForWarranty(
     [companyId, saleId]
   )
   return result.rows
+}
+
+export async function assertSaleAccessoriesClassified(
+  client: PoolClient,
+  companyId: string,
+  saleId: string
+): Promise<void> {
+  const items = await fetchSaleItemsForWarranty(client, companyId, saleId)
+  const unclassified = items.find((item) =>
+    isUnclassifiedAccessory({
+      productType: item.inv_product_type ?? item.item_type,
+      accessoryClass: item.accessory_class,
+    })
+  )
+  if (unclassified) {
+    throw new AccessoryClassificationRequiredError()
+  }
 }
 
 async function hasActiveWarrantyForSaleItem(
@@ -668,6 +696,11 @@ export async function applySaleWarranties(
       selection = selections?.main
     } else if (item.source_id) {
       selection = selections?.additionalBySourceId?.[item.source_id]
+      if (selection === undefined && item.inventory_item_id) {
+        selection = selections?.additionalBySourceId?.[item.inventory_item_id]
+      }
+    } else if (item.inventory_item_id) {
+      selection = selections?.additionalBySourceId?.[item.inventory_item_id]
     }
 
     let warrantyPolicyId: string | null = null

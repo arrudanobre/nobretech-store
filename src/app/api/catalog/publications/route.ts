@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server"
 import { pool } from "@/lib/db"
 import { requireApiAuthContext } from "@/lib/auth-context"
 import { loadAdminCatalog } from "@/lib/catalog/admin-queries"
+import {
+  ACCESSORY_CLASSIFICATION_PUBLICATION_ERROR,
+  isUnclassifiedAccessory,
+} from "@/lib/warranty/accessory-classification"
 
 export const runtime = "nodejs"
 
@@ -72,8 +76,23 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const inventoryResult = await pool.query<{ id: string; status: string }>(
-    "SELECT id, status FROM inventory WHERE id = $1::uuid AND company_id = $2::uuid LIMIT 1",
+  const inventoryResult = await pool.query<{ id: string; status: string; product_type: string | null; accessory_class: string | null }>(
+    `SELECT i.id, i.status, i.product_type, sub.accessory_class
+     FROM inventory i
+     LEFT JOIN product_catalog pc ON pc.id = i.catalog_id
+     LEFT JOIN product_categories cat
+       ON cat.company_id = i.company_id
+      AND cat.is_active = TRUE
+      AND cat.deleted_at IS NULL
+      AND cat.slug = pc.category
+     LEFT JOIN product_subcategories sub
+       ON sub.company_id = i.company_id
+      AND sub.is_active = TRUE
+      AND sub.deleted_at IS NULL
+      AND sub.category_id = cat.id
+      AND sub.normalized_name = LOWER(i.subcategory_name_snapshot)
+     WHERE i.id = $1::uuid AND i.company_id = $2::uuid
+     LIMIT 1`,
     [inventoryItemId, companyId],
   )
   if (!inventoryResult.rows[0]) {
@@ -169,6 +188,16 @@ export async function POST(request: NextRequest) {
   add("notes_internal", notesInternal)
 
   const action = body.action || "save"
+  if (action === "publish" && isUnclassifiedAccessory({
+    productType: inventoryResult.rows[0].product_type,
+    accessoryClass: inventoryResult.rows[0].accessory_class,
+  })) {
+    return NextResponse.json(
+      { data: null, error: { message: ACCESSORY_CLASSIFICATION_PUBLICATION_ERROR } },
+      { status: 400 },
+    )
+  }
+
   if (action === "publish") {
     updates.push("is_published = TRUE", "public_status = 'published'", "published_at = NOW()")
   } else if (action === "unpublish") {
