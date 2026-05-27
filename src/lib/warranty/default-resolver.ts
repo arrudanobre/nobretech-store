@@ -51,7 +51,6 @@ export type WarrantyDecision =
       reason: string
       ruleId:
         | "non_durable_accessory"
-        | "gift"
         | "unclassified_accessory"
         | "missing_classification"
         | "fallback"
@@ -100,12 +99,8 @@ function isStructuredClassificationEmpty(ctx: WarrantyItemContext): boolean {
 }
 
 export function resolveDefaultWarranty(ctx: WarrantyItemContext): WarrantyDecision {
-  // 0. Brindes nunca recebem garantia automática.
-  if (ctx.isGift) {
-    return { source: "none", reason: "Brinde sem garantia automatica.", ruleId: "gift" }
-  }
-
   // 1. Sem nenhum dado estruturado disponível → warning + skip.
+  // Brindes seguem a classificação estruturada do item; não há bloqueio automático por papel.
   if (isStructuredClassificationEmpty(ctx)) {
     return {
       source: "none",

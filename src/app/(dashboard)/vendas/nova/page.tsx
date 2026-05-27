@@ -46,7 +46,9 @@ type InventoryProduct = {
   category?: string | null
   product_type?: string | null
   category_name_snapshot?: string | null
+  subcategory_name_snapshot?: string | null
   category_normalized?: string | null
+  accessory_class?: "durable" | "non_durable" | null
   model?: string | null
   storage?: string | null
   color?: string | null
@@ -123,6 +125,11 @@ type AdditionalSaleItem = {
   name: string
   brand?: string | null
   category?: string | null
+  product_type?: string | null
+  category_name_snapshot?: string | null
+  subcategory_name_snapshot?: string | null
+  category_normalized?: string | null
+  accessory_class?: "durable" | "non_durable" | null
   model?: string | null
   color?: string | null
   productImage?: ProductImageRecord | null
@@ -138,6 +145,19 @@ type AdditionalSaleItem = {
   selectedVariantId?: string | null
   selectedVariantName?: string | null
   selectedVariantColorHex?: string | null
+}
+
+type SaleItemWarrantySource = "manufacturer" | "store" | "none"
+
+type SaleItemWarrantyDraft = {
+  source: SaleItemWarrantySource
+  months: string
+  manualEndsAt: string
+  manual: boolean
+}
+
+function normalizeAccessoryClassValue(value: unknown): "durable" | "non_durable" | null {
+  return value === "durable" || value === "non_durable" ? value : null
 }
 
 const SALE_ORIGINS = [
@@ -690,6 +710,49 @@ function getSaleItemKind(product: {
   return "device"
 }
 
+function saleItemCondition(product: { grade?: string | null }): "sealed" | "seminovo" | "used" | "open_box" | null {
+  if (product.grade === "Lacrado") return "sealed"
+  if (product.grade === "A+" || product.grade === "A" || product.grade === "A-") return "seminovo"
+  if (product.grade === "B+" || product.grade === "B") return "used"
+  return null
+}
+
+function getSuggestedWarrantyDraft(product: {
+  brand?: string | null
+  category?: string | null
+  category_name_snapshot?: string | null
+  category_normalized?: string | null
+  product_type?: string | null
+  accessory_class?: "durable" | "non_durable" | null
+  grade?: string | null
+  imei?: string | null
+  serial_number?: string | null
+  serialNumber?: string | null
+  hasVariants?: boolean
+  variants?: InventorySaleVariant[]
+}): SaleItemWarrantyDraft {
+  const kind = getSaleItemKind(product)
+  if (kind === "accessory") {
+    if (product.accessory_class === "durable") {
+      return { source: "store", months: "3", manualEndsAt: "", manual: false }
+    }
+    return { source: "none", months: "3", manualEndsAt: "", manual: false }
+  }
+  const brand = normalizeSaleKindValue(product.brand)
+  const category = normalizeSaleKindValue(product.category || product.category_name_snapshot || product.category_normalized)
+  const isApple = brand === "apple" || ["iphone", "ipad", "macbook", "applewatch", "apple_watch", "airpods"].includes(category)
+  if (saleItemCondition(product) === "sealed" && isApple) {
+    return { source: "manufacturer", months: "12", manualEndsAt: "", manual: false }
+  }
+  return { source: "store", months: "6", manualEndsAt: "", manual: false }
+}
+
+function getWarrantyDraftLabel(draft: SaleItemWarrantyDraft): string {
+  if (draft.source === "manufacturer") return `Fabricante · ${draft.months} meses`
+  if (draft.source === "store") return `Loja · ${draft.months} meses`
+  return "Sem garantia contratual"
+}
+
 type SaleCustomerType = "identified" | "walk_in"
 
 const WALK_IN_CUSTOMER_LABEL = "Cliente avulso"
@@ -767,6 +830,7 @@ function NewSaleContent() {
   >([])
   const [selectedWarrantyPolicyId, setSelectedWarrantyPolicyId] = useState<string>("")
   const [warrantyManualEndsAt, setWarrantyManualEndsAt] = useState<string>("")
+  const [itemWarrantyDrafts, setItemWarrantyDrafts] = useState<Record<string, SaleItemWarrantyDraft>>({})
   const [hasTradeIn, setHasTradeIn] = useState(false)
   const [tradeIn, setTradeIn] = useState({ category: "", modelIdx: 0, storage: "", color: "", imei: "", grade: "", batteryHealth: "", value: "" })
   const [tradeInOverageDecision, setTradeInOverageDecision] = useState<"" | "credit" | "change" | "block">("")
@@ -926,13 +990,21 @@ function NewSaleContent() {
       try {
         const { data, error } = await supabase
           .from("inventory")
-          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, grade, status, quantity, condition_notes, notes, type, supplier_name, product_type, category_name_snapshot, catalog:catalog_id(model, variant, storage, color, brand, category)")
+          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, grade, status, quantity, condition_notes, notes, type, supplier_name, product_type, category_name_snapshot, subcategory_name_snapshot, catalog:catalog_id(model, variant, storage, color, brand, category)")
           .in("status", ["active", "in_stock"] as any)
           .order("created_at", { ascending: false })
 
         if (error) throw error
 
         const imageMap: Record<string, ProductImageRecord | null> = await fetchProductImageMap((data || []).map((item: any) => item.id)).catch(() => ({}))
+        const { data: subcategoryRows } = await (supabase.from("product_subcategories") as any)
+          .select("normalized_name, accessory_class")
+          .eq("is_active", true)
+          .is("deleted_at", null)
+          .catch(() => ({ data: [] }))
+        const accessoryClassBySubcategory = new Map<string, "durable" | "non_durable" | null>(
+          (subcategoryRows || []).map((row: any) => [normalizeSaleKindValue(row.normalized_name), normalizeAccessoryClassValue(row.accessory_class)])
+        )
         const products: InventoryProduct[] = (data || []).map((item: any) => {
           return {
             id: item.id,
@@ -941,7 +1013,9 @@ function NewSaleContent() {
             category: item.catalog?.category || null,
             product_type: item.product_type || null,
             category_name_snapshot: item.category_name_snapshot || null,
+            subcategory_name_snapshot: item.subcategory_name_snapshot || null,
             category_normalized: item.catalog?.category || null,
+            accessory_class: accessoryClassBySubcategory.get(normalizeSaleKindValue(item.subcategory_name_snapshot)) || null,
             model: item.catalog?.model || null,
             storage: item.catalog?.storage || null,
             color: item.catalog?.color || null,
@@ -1016,7 +1090,7 @@ function NewSaleContent() {
     const fetchProduct = async () => {
       try {
         const { data: items, error } = await (supabase.from("inventory") as any)
-          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, grade, status, quantity, condition_notes, notes, type, supplier_name, product_type, category_name_snapshot, catalog:catalog_id(model, variant, storage, color, brand, category)")
+          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, grade, status, quantity, condition_notes, notes, type, supplier_name, product_type, category_name_snapshot, subcategory_name_snapshot, catalog:catalog_id(model, variant, storage, color, brand, category)")
           .eq("id", preselectId)
           .single()
 
@@ -1030,6 +1104,14 @@ function NewSaleContent() {
           return
         }
 
+        const { data: subcategoryRows } = await (supabase.from("product_subcategories") as any)
+          .select("normalized_name, accessory_class")
+          .eq("is_active", true)
+          .is("deleted_at", null)
+          .catch(() => ({ data: [] }))
+        const accessoryClassBySubcategory = new Map<string, "durable" | "non_durable" | null>(
+          (subcategoryRows || []).map((row: any) => [normalizeSaleKindValue(row.normalized_name), normalizeAccessoryClassValue(row.accessory_class)])
+        )
         const product: InventoryProduct = {
           id: items.id,
           name: getProductName(items),
@@ -1037,7 +1119,9 @@ function NewSaleContent() {
           category: items.catalog?.category || null,
           product_type: items.product_type || null,
           category_name_snapshot: items.category_name_snapshot || null,
+          subcategory_name_snapshot: items.subcategory_name_snapshot || null,
           category_normalized: items.catalog?.category || null,
+          accessory_class: accessoryClassBySubcategory.get(normalizeSaleKindValue(items.subcategory_name_snapshot)) || null,
           model: items.catalog?.model || null,
           storage: items.catalog?.storage || null,
           color: items.catalog?.color || null,
@@ -1275,7 +1359,9 @@ function NewSaleContent() {
           category: item.category || null,
           product_type: item.product_type || null,
           category_name_snapshot: item.category_name_snapshot || null,
+          subcategory_name_snapshot: item.subcategory_name_snapshot || null,
           category_normalized: item.category_normalized || item.category || null,
+          accessory_class: item.accessory_class || null,
           model: item.model || null,
           color: item.color || null,
           productImage: item.productImage || null,
@@ -1587,6 +1673,10 @@ function NewSaleContent() {
         const variant = saleAvailableVariants(overstockedAdditionalVariant).find((v) => v.id === overstockedAdditionalVariant.selectedVariantId)
         throw new Error(`Só existe ${variant?.quantity || 0} unidade disponível na variação ${variant?.colorName || "selecionada"}.`)
       }
+      if (unclassifiedAccessoryItem) {
+        throw new Error("Classifique este acessório como Durável ou Não durável antes de vender.")
+      }
+      const warrantySelectionsPayload = buildWarrantySelectionPayload()
 
       // 0. Get user's company_id (required for RLS on all inserts)
       const { data: { user } } = await supabase.auth.getUser()
@@ -1758,20 +1848,7 @@ function NewSaleContent() {
                 : {}),
             },
           } : {}),
-          ...(selectedWarrantyPolicyId ? {
-            warrantySelections: {
-              main:
-                selectedWarrantyPolicyId === "none"
-                  ? { warrantyPolicyId: null }
-                  : {
-                      warrantyPolicyId: selectedWarrantyPolicyId,
-                      manualSelection: true,
-                      ...(selectedWarrantyPolicy?.calculationMode === "manual_dates" && warrantyManualEndsAt
-                        ? { manualEndsAt: warrantyManualEndsAt }
-                        : {}),
-                    },
-            },
-          } : {}),
+          warrantySelections: warrantySelectionsPayload,
         }),
       })
 
@@ -1992,6 +2069,87 @@ function NewSaleContent() {
       })
       .slice(0, 10)
   }, [inventoryProducts, selectedProduct?.id, additionalFilter, additionalSearchTerm, additionalSaleItems])
+  const saleWarrantyItems = useMemo(() => {
+    const rows: Array<{
+      key: string
+      sourceId: string
+      name: string
+      role: "principal" | "upsell" | "brinde"
+      kind: "device" | "accessory"
+      item: InventoryProduct | AdditionalSaleItem
+    }> = []
+    if (selectedProduct) {
+      rows.push({
+        key: "main",
+        sourceId: selectedProduct.id,
+        name: selectedProduct.name,
+        role: "principal",
+        kind: getSaleItemKind(selectedProduct),
+        item: selectedProduct,
+      })
+    }
+    for (const item of additionalSaleItems) {
+      rows.push({
+        key: `additional:${item.itemId}`,
+        sourceId: item.itemId,
+        name: getAdditionalItemDisplayName(item.name),
+        role: item.type === "free" ? "brinde" : "upsell",
+        kind: getSaleItemKind(item),
+        item,
+      })
+    }
+    return rows
+  }, [selectedProduct, additionalSaleItems])
+
+  const getItemWarrantyDraft = useCallback((key: string, item: InventoryProduct | AdditionalSaleItem) => {
+    return itemWarrantyDrafts[key] || getSuggestedWarrantyDraft(item)
+  }, [itemWarrantyDrafts])
+
+  const updateItemWarrantyDraft = useCallback((key: string, item: InventoryProduct | AdditionalSaleItem, partial: Partial<SaleItemWarrantyDraft>) => {
+    setItemWarrantyDrafts((previous) => ({
+      ...previous,
+      [key]: { ...getSuggestedWarrantyDraft(item), ...previous[key], ...partial, manual: true },
+    }))
+  }, [])
+
+  const findWarrantyPolicyForDraft = useCallback((draft: SaleItemWarrantyDraft) => {
+    if (draft.source === "none") return null
+    const nature = draft.source === "manufacturer" ? "manufacturer" : "contractual"
+    const months = Number.parseInt(draft.months, 10)
+    return selectableWarrantyPolicies.find((policy) =>
+      policy.warrantyNature === nature &&
+      policy.calculationMode === "calendar_months" &&
+      policy.defaultMonths === months
+    ) || null
+  }, [selectableWarrantyPolicies])
+
+  const buildWarrantySelectionPayload = useCallback(() => {
+    const additionalBySourceId: Record<string, { warrantyPolicyId: string | null; manualSelection?: boolean; manualEndsAt?: string }> = {}
+    const makeSelection = (draft: SaleItemWarrantyDraft) => {
+      if (draft.source === "none") return { warrantyPolicyId: null, manualSelection: true }
+      const policy = findWarrantyPolicyForDraft(draft)
+      if (!policy) {
+        throw new Error(`Política de garantia ${getWarrantyDraftLabel(draft)} não está disponível para venda.`)
+      }
+      return {
+        warrantyPolicyId: policy.id,
+        manualSelection: draft.manual,
+        ...(policy.calculationMode === "manual_dates" && draft.manualEndsAt ? { manualEndsAt: draft.manualEndsAt } : {}),
+      }
+    }
+    const main = selectedProduct ? makeSelection(getItemWarrantyDraft("main", selectedProduct)) : undefined
+    for (const item of additionalSaleItems) {
+      additionalBySourceId[item.itemId] = makeSelection(getItemWarrantyDraft(`additional:${item.itemId}`, item))
+    }
+    return {
+      ...(main ? { main } : {}),
+      ...(Object.keys(additionalBySourceId).length > 0 ? { additionalBySourceId } : {}),
+    }
+  }, [additionalSaleItems, findWarrantyPolicyForDraft, getItemWarrantyDraft, selectedProduct])
+
+  const unclassifiedAccessoryItem = saleWarrantyItems.find((row) =>
+    row.kind === "accessory" && row.item.accessory_class == null
+  )
   const tradeInModelOptions = useMemo(() => {
     const term = tradeInModelSearch.trim().toLowerCase()
     return Object.entries(PRODUCT_CATALOG)
@@ -2780,7 +2938,82 @@ function NewSaleContent() {
             </div>
           </SectionCard>
 
-          <SectionCard eyebrow="4. Pagamentos" title="Pagamentos" description="Distribua como essa venda será paga.">
+          {saleWarrantyItems.length > 0 && (
+            <SectionCard eyebrow="4. Garantia" title="Garantia dos itens" description="Revise a garantia de cada item antes de finalizar a venda.">
+              <div className="space-y-3">
+                {saleWarrantyItems.map((row) => {
+                  const draft = getItemWarrantyDraft(row.key, row.item)
+                  const missingClass = row.kind === "accessory" && row.item.accessory_class == null
+                  const policy = findWarrantyPolicyForDraft(draft)
+                  return (
+                    <div key={row.key} className="rounded-2xl border border-gray-100 bg-white p-4">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <p className="text-sm font-bold text-navy-900">{row.name}</p>
+                          <p className="text-xs text-gray-500">
+                            {row.kind === "accessory" ? "Acessório" : "Aparelho"} · {row.role}
+                          </p>
+                          <p className="mt-1 text-xs font-semibold text-royal-700">Sugerido: {getWarrantyDraftLabel(getSuggestedWarrantyDraft(row.item))}</p>
+                        </div>
+                        <Badge variant={missingClass ? "yellow" : draft.source === "none" ? "gray" : "green"} dot>
+                          {missingClass ? "Classificação pendente" : getWarrantyDraftLabel(draft)}
+                        </Badge>
+                      </div>
+                      {missingClass && (
+                        <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+                          Classifique este acessório como Durável ou Não durável antes de vender.
+                        </div>
+                      )}
+                      <div className="mt-3 grid gap-3 md:grid-cols-[180px_160px_1fr]">
+                        <label className="block">
+                          <span className="mb-1 block text-xs font-medium text-navy-900">Fonte</span>
+                          <select
+                            value={draft.source}
+                            onChange={(event) => updateItemWarrantyDraft(row.key, row.item, { source: event.target.value as SaleItemWarrantySource })}
+                            className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
+                          >
+                            <option value="manufacturer">Fabricante</option>
+                            <option value="store">Loja</option>
+                            <option value="none">Sem garantia</option>
+                          </select>
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-xs font-medium text-navy-900">Meses</span>
+                          <select
+                            value={draft.months}
+                            disabled={draft.source === "none"}
+                            onChange={(event) => updateItemWarrantyDraft(row.key, row.item, { months: event.target.value })}
+                            className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10 disabled:bg-gray-50 disabled:text-gray-400"
+                          >
+                            <option value="3">3 meses</option>
+                            <option value="6">6 meses</option>
+                            <option value="12">12 meses</option>
+                          </select>
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-xs font-medium text-navy-900">Data final manual</span>
+                          <input
+                            type="date"
+                            value={draft.manualEndsAt}
+                            disabled={draft.source !== "manufacturer"}
+                            onChange={(event) => updateItemWarrantyDraft(row.key, row.item, { manualEndsAt: event.target.value })}
+                            className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10 disabled:bg-gray-50 disabled:text-gray-400"
+                          />
+                        </label>
+                      </div>
+                      {draft.source !== "none" && !policy && (
+                        <p className="mt-2 text-xs font-semibold text-red-600">
+                          Não há política selecionável para {getWarrantyDraftLabel(draft)}. Ajuste a seleção antes de concluir.
+                        </p>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </SectionCard>
+          )}
+
+          <SectionCard eyebrow="5. Pagamentos" title="Pagamentos" description="Distribua como essa venda será paga.">
             {storeAmountDue > 0 && (
               <div className="mb-4 rounded-[20px] border border-warning-500/30 bg-warning-100/40 p-4">
                 <div className="flex items-start gap-3">
@@ -3299,7 +3532,7 @@ function NewSaleContent() {
             )}
           </SectionCard>
 
-          <SectionCard eyebrow="5. Garantia e Observações" title="Garantia e Observações" description={warrantyIssueText}>
+          <SectionCard eyebrow="6. Garantia legada e Observações" title="Garantia legada e Observações" description={warrantyIssueText}>
             <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)] xl:items-start">
               <div className="rounded-[20px] border border-gray-100 bg-surface p-4">
                 <div className="mb-3 flex items-center gap-3">
@@ -3307,8 +3540,8 @@ function NewSaleContent() {
                     <ShieldCheck className="h-5 w-5" />
                   </div>
                   <div>
-                    <p className="text-sm font-bold text-navy-900">Garantia</p>
-                    <p className="text-xs text-gray-500">{warrantyIssueText}</p>
+                    <p className="text-sm font-bold text-navy-900">Garantia geral legada</p>
+                    <p className="text-xs text-gray-500">Preserva os campos antigos do recibo e da venda.</p>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
@@ -3327,36 +3560,6 @@ function NewSaleContent() {
                     </button>
                   ))}
                 </div>
-                {selectableWarrantyPolicies.length > 0 && (
-                  <div className="mt-3">
-                    <label className="mb-1 block text-xs font-medium text-navy-900">Política de garantia</label>
-                    <select
-                      value={selectedWarrantyPolicyId}
-                      onChange={(event) => handleWarrantyPolicyChange(event.target.value)}
-                      className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
-                    >
-                      <option value="">Padrão da loja</option>
-                      <option value="none">Sem política vinculada</option>
-                      {selectableWarrantyPolicies.map((policy) => (
-                        <option key={policy.id} value={policy.id}>
-                          {policy.selectionLabel || policy.name}
-                          {policy.isDefault ? " · padrão" : ""}
-                        </option>
-                      ))}
-                    </select>
-                    {selectedWarrantyPolicy?.calculationMode === "manual_dates" && (
-                      <div className="mt-2">
-                        <label className="mb-1 block text-xs font-medium text-navy-900">Data final da garantia</label>
-                        <input
-                          type="date"
-                          value={warrantyManualEndsAt}
-                          onChange={(event) => setWarrantyManualEndsAt(event.target.value)}
-                          className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-navy-900 outline-none transition focus:border-royal-500 focus:ring-2 focus:ring-royal-500/10"
-                        />
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
 
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
