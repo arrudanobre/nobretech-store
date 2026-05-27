@@ -3,6 +3,7 @@ import "server-only"
 import type { PoolClient } from "pg"
 import { pool } from "@/lib/db"
 import { buildAuditMetadata, recordCompanySettingsAuditLog, rowToSnapshot } from "@/lib/company-settings/audit"
+import { resolveDefaultWarranty } from "./default-resolver"
 import type {
   WarrantyActor,
   WarrantyCalculationMode,
@@ -425,6 +426,11 @@ type EligibleSaleItemRow = {
   item_role: "main" | "upsell" | "gift" | "accessory" | "service" | "other"
   item_type: "device" | "accessory" | "service" | "other"
   is_gift: boolean
+  display_name: string | null
+  inv_grade: string | null
+  pc_brand: string | null
+  pc_category: string | null
+  inv_category: string | null
 }
 
 async function fetchSaleItemsForWarranty(
@@ -441,8 +447,15 @@ async function fetchSaleItemsForWarranty(
        si.source_id,
        si.item_role,
        si.item_type,
-       si.is_gift
+       si.is_gift,
+       si.display_name,
+       inv.grade            AS inv_grade,
+       pc.brand             AS pc_brand,
+       pc.category          AS pc_category,
+       inv.category_name_snapshot AS inv_category
      FROM sale_items si
+     LEFT JOIN inventory inv      ON inv.id = si.inventory_item_id
+     LEFT JOIN product_catalog pc ON pc.id = inv.catalog_id
      WHERE si.company_id = $1 AND si.sale_id = $2 AND si.active = TRUE
      ORDER BY si.sort_order ASC, si.created_at ASC`,
     [companyId, saleId]
@@ -468,35 +481,36 @@ async function hasActiveWarrantyForSaleItem(
   return Boolean(result.rows[0]?.exists)
 }
 
-async function resolveDefaultPolicyIdForItem(
+function getConditionFromGradeLocal(
+  grade: string | null
+): "sealed" | "seminovo" | "used" | "open_box" | null {
+  if (!grade) return null
+  const g = grade.trim()
+  if (g === "Lacrado") return "sealed"
+  if (g === "A+" || g === "A" || g === "A-") return "seminovo"
+  if (g === "B+" || g === "B") return "used"
+  return null
+}
+
+async function findPolicyForDecision(
   client: PoolClient,
   companyId: string,
-  item: EligibleSaleItemRow
+  warrantyNature: WarrantyNature,
+  durationMonths: number
 ): Promise<string | null> {
-  // Only main devices with linked inventory are eligible for auto-default.
-  // Inventory does not carry product_condition/origin today, so we match
-  // by product_type only and let specificity+priority pick the best is_default policy.
-  if (item.item_role !== "main") return null
-  if (item.item_type !== "device") return null
-  if (!item.inventory_item_id) return null
-
   const result = await client.query<{ id: string }>(
     `SELECT id FROM warranty_policies
      WHERE company_id = $1
        AND active = TRUE
-       AND is_default = TRUE
        AND applies_to_sale = TRUE
+       AND warranty_nature = $2
+       AND calculation_mode = 'calendar_months'
+       AND default_months = $3
        AND effective_from <= NOW()
        AND (effective_until IS NULL OR effective_until > NOW())
-       AND (product_type IS NULL OR product_type = 'device')
-       AND calculation_mode <> 'manual_dates'
-     ORDER BY
-       (CASE WHEN product_type IS NOT NULL THEN 1 ELSE 0 END +
-        CASE WHEN product_condition IS NOT NULL THEN 1 ELSE 0 END +
-        CASE WHEN product_origin IS NOT NULL THEN 1 ELSE 0 END) DESC,
-       priority ASC, effective_from DESC, updated_at DESC
+     ORDER BY is_default DESC, priority ASC, updated_at DESC
      LIMIT 1`,
-    [companyId]
+    [companyId, warrantyNature, durationMonths]
   )
   return result.rows[0]?.id ?? null
 }
@@ -652,12 +666,40 @@ export async function applySaleWarranties(
       }
       warrantyPolicyId = selection.warrantyPolicyId
     } else {
-      warrantyPolicyId = await resolveDefaultPolicyIdForItem(client, companyId, item)
-      if (!warrantyPolicyId) {
-        skipped.push({ saleItemId: item.id, reason: "Sem politica default aplicavel." })
+      const decision = resolveDefaultWarranty({
+        brand: item.pc_brand,
+        category: item.pc_category ?? item.inv_category,
+        condition: getConditionFromGradeLocal(item.inv_grade),
+        productType: item.item_type,
+        itemRole: item.item_role,
+        displayName: item.display_name,
+        isGift: item.is_gift,
+      })
+
+      if (decision.source === "none") {
+        skipped.push({ saleItemId: item.id, reason: decision.reason })
         continue
       }
-      selection = { warrantyPolicyId, manualSelection: false }
+
+      warrantyPolicyId = await findPolicyForDecision(
+        client,
+        companyId,
+        decision.warrantyNature,
+        decision.durationMonths
+      )
+      if (!warrantyPolicyId) {
+        skipped.push({
+          saleItemId: item.id,
+          reason: `Sem policy ativa para ${decision.warrantyNature} ${decision.durationMonths}m (rule ${decision.ruleId}).`,
+        })
+        continue
+      }
+
+      selection = {
+        warrantyPolicyId,
+        manualSelection: false,
+        warrantyLabel: decision.label,
+      }
     }
 
     const result = await insertWarrantyForSaleItem(
