@@ -1,13 +1,18 @@
 import { ArrowRight } from "@phosphor-icons/react/dist/ssr"
 import type { CatalogCompanyIdentity } from "@/lib/catalog/company-identity"
+import type { CatalogPublicSettings } from "@/lib/catalog/settings"
 
 type Props = {
   availableCount: number
   identity: CatalogCompanyIdentity
+  settings: CatalogPublicSettings
 }
 
-export function CatalogHero({ availableCount, identity }: Props) {
+const DEFAULT_TAGLINE = "Aparelhos selecionados pela loja."
+
+export function CatalogHero({ availableCount, identity, settings }: Props) {
   const eyebrow = `Catálogo ${identity.shortName ?? "loja"}`
+  const tagline = settings.heroTagline ?? DEFAULT_TAGLINE
 
   return (
     <section className="relative px-4 pb-4 pt-5 sm:px-6 sm:pb-7 sm:pt-9">
@@ -31,7 +36,7 @@ export function CatalogHero({ availableCount, identity }: Props) {
               Confiança que você vê.
             </h1>
             <p className="mt-3 text-[13.5px] leading-relaxed text-zinc-300 sm:text-[14.5px]">
-              Aparelhos selecionados, fotos reais nos seminovos e atendimento direto pelo WhatsApp.
+              {tagline}
             </p>
             <div className="mt-5 flex items-center gap-3">
               <a

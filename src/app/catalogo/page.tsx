@@ -6,6 +6,7 @@ import { CatalogGrid } from "@/components/catalog/catalog-grid"
 import { CatalogEmptyState } from "@/components/catalog/catalog-empty-state"
 import { listPublicCatalog } from "@/lib/catalog/queries"
 import { getCatalogCompanyIdentity } from "@/lib/catalog/company-identity"
+import { resolveCatalogPublicConfig } from "@/lib/catalog/settings"
 
 export const dynamic = "force-dynamic"
 
@@ -44,20 +45,36 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function CatalogoPage() {
   const identity = await getCatalogCompanyIdentity()
-  const products = await listPublicCatalog({ brandShortName: identity.shortName })
+  const [products, config] = await Promise.all([
+    listPublicCatalog({ brandShortName: identity.shortName }),
+    resolveCatalogPublicConfig(identity.companyId),
+  ])
 
   return (
     <CatalogShell identity={identity}>
-      <CatalogHero availableCount={products.length} identity={identity} />
-      <CatalogTrustCards />
+      <CatalogHero availableCount={products.length} identity={identity} settings={config.settings} />
+      <CatalogTrustCards badges={config.catalogBadges} />
       {products.length === 0 ? (
         <section className="px-4 pb-16 pt-2 sm:px-6">
           <div className="mx-auto max-w-6xl">
-            <CatalogEmptyState whatsappUrl={identity.whatsapp?.url ?? null} />
+            <CatalogEmptyState
+              title={config.settings.emptyStateTitle}
+              description={config.settings.emptyStateDescription}
+              whatsappUrl={identity.whatsapp?.url ?? null}
+            />
           </div>
         </section>
       ) : (
-        <CatalogGrid products={products} whatsappUrl={identity.whatsapp?.url ?? null} />
+        <CatalogGrid
+          products={products}
+          whatsappUrl={identity.whatsapp?.url ?? null}
+          copy={{
+            gridHeading: config.settings.gridHeading,
+            gridSubheading: config.settings.gridSubheading,
+            noResultsTitle: config.settings.noResultsTitle,
+            noResultsDescription: config.settings.noResultsDescription,
+          }}
+        />
       )}
     </CatalogShell>
   )

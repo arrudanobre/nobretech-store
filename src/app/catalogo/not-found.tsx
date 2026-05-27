@@ -2,12 +2,15 @@ import Link from "next/link"
 import { CatalogShell } from "@/components/catalog/catalog-shell"
 import { CatalogEmptyState } from "@/components/catalog/catalog-empty-state"
 import { getCatalogCompanyIdentity } from "@/lib/catalog/company-identity"
+import { getCatalogSettings } from "@/lib/catalog/settings"
 
 export default async function CatalogoNotFound() {
   const identity = await getCatalogCompanyIdentity()
-  const description = identity.shortName
+  const settings = await getCatalogSettings(identity.companyId ?? "")
+  const fallbackDescription = identity.shortName
     ? `Este aparelho saiu do catálogo ou ainda não foi publicado. Fale com a ${identity.shortName} para receber a seleção atual.`
     : "Este aparelho saiu do catálogo ou ainda não foi publicado. Fale com a loja para receber a seleção atual."
+  const description = settings.emptyStateDescription ?? fallbackDescription
 
   return (
     <CatalogShell identity={identity}>

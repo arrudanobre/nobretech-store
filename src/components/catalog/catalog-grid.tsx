@@ -31,12 +31,29 @@ const SORT_LABELS: Record<SortMode, string> = {
   score_desc: "Melhor score",
 }
 
+type CatalogGridCopy = {
+  gridHeading: string | null
+  gridSubheading: string | null
+  noResultsTitle: string | null
+  noResultsDescription: string | null
+}
+
 type Props = {
   products: PublicCatalogProduct[]
   whatsappUrl?: string | null
+  copy?: CatalogGridCopy
 }
 
-export function CatalogGrid({ products, whatsappUrl = null }: Props) {
+const GRID_HEADING_FALLBACK = "Produtos disponíveis"
+const GRID_SUBHEADING_FALLBACK = "Disponibilidade confirmada pela loja."
+const NO_RESULTS_TITLE_FALLBACK = "Nenhum produto encontrado"
+const NO_RESULTS_DESCRIPTION_FALLBACK = "Ajuste a busca para ver mais opções."
+
+export function CatalogGrid({ products, whatsappUrl = null, copy }: Props) {
+  const gridHeading = copy?.gridHeading ?? GRID_HEADING_FALLBACK
+  const gridSubheading = copy?.gridSubheading ?? GRID_SUBHEADING_FALLBACK
+  const noResultsTitle = copy?.noResultsTitle ?? NO_RESULTS_TITLE_FALLBACK
+  const noResultsDescription = copy?.noResultsDescription ?? NO_RESULTS_DESCRIPTION_FALLBACK
   const [query, setQuery] = useState("")
   const [chip, setChip] = useState<Chip["id"]>("all")
   const [sort, setSort] = useState<SortMode>("recent")
@@ -78,10 +95,10 @@ export function CatalogGrid({ products, whatsappUrl = null }: Props) {
         <div className="mb-4 flex items-end justify-between gap-3">
           <div>
             <h2 className="font-[family-name:var(--font-syne)] text-[20px] font-semibold sm:text-[24px]">
-              Seleção disponível
+              {gridHeading}
             </h2>
             <p className="mt-1 text-[12px] leading-snug text-zinc-400">
-              Publicamos apenas produtos com disponibilidade confirmada.
+              {gridSubheading}
             </p>
           </div>
           {filtered.length > 0 ? (
@@ -178,8 +195,8 @@ export function CatalogGrid({ products, whatsappUrl = null }: Props) {
 
         {filtered.length === 0 ? (
           <CatalogEmptyState
-            title="Nenhum aparelho encontrado"
-            description="Ajuste a busca ou chame a equipe no WhatsApp. Toda semana entram novidades."
+            title={noResultsTitle}
+            description={noResultsDescription}
             whatsappUrl={whatsappUrl}
           />
         ) : (

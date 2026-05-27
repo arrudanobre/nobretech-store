@@ -1,10 +1,13 @@
 import { ChatCircle, Storefront } from "@phosphor-icons/react/dist/ssr"
 
 type Props = {
-  title?: string
-  description?: string
+  title?: string | null
+  description?: string | null
   whatsappUrl?: string | null
 }
+
+const FALLBACK_TITLE = "Catálogo da loja"
+const FALLBACK_DESCRIPTION = "Em breve teremos novidades disponíveis."
 
 export function CatalogEmptyState({ title, description, whatsappUrl = null }: Props) {
   return (
@@ -13,11 +16,10 @@ export function CatalogEmptyState({ title, description, whatsappUrl = null }: Pr
         <Storefront className="h-5 w-5" weight="duotone" />
       </span>
       <h2 className="mt-4 font-[family-name:var(--font-syne)] text-xl font-semibold text-white">
-        {title || "Seleção em atualização"}
+        {title || FALLBACK_TITLE}
       </h2>
       <p className="mt-2 text-sm leading-relaxed text-zinc-400">
-        {description ||
-          "Publicamos apenas produtos com disponibilidade confirmada. Chame a equipe no WhatsApp para receber a seleção atual."}
+        {description || FALLBACK_DESCRIPTION}
       </p>
       {whatsappUrl ? (
         <a
