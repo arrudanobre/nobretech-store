@@ -2,7 +2,7 @@ import { ImageResponse } from "next/og"
 import { loadOgFonts } from "@/lib/og/fonts"
 
 export const runtime = "nodejs"
-export const alt = "Portal de Transparência Nobretech Store"
+export const alt = "Portal de Transparência"
 export const size = { width: 1200, height: 630 }
 export const contentType = "image/png"
 
@@ -62,7 +62,7 @@ export default async function PortalOpenGraphImage() {
               fontWeight: 700,
             }}
           >
-            Nobretech Store
+            Compra verificada
           </div>
         </div>
 

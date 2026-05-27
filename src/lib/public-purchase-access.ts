@@ -13,10 +13,12 @@ const LOCK_MINUTES = 15
 export type PublicPurchaseIntro = {
   available: boolean
   lockedUntil: string | null
+  company: PublicPurchaseCompany
   message?: string
 }
 
 export type PublicPurchaseDetails = {
+  company: PublicPurchaseCompany
   customerName: string
   support: {
     whatsappUrl: string | null
@@ -99,6 +101,11 @@ export type PublicPurchaseDetails = {
     publicNote: string | null
     timeline: Array<{ label: string; date: string | null; active: boolean }>
   }>
+}
+
+export type PublicPurchaseCompany = {
+  displayName: string | null
+  shortName: string | null
 }
 
 export type PublicPurchaseIssue = {
@@ -191,6 +198,9 @@ type SaleAccessRow = {
   warranty_end: string | Date | null
   warranty_months: number | null
   warranty_pdf_url: string | null
+  company_name: string | null
+  company_display_name: string | null
+  company_short_name: string | null
   company_settings: Record<string, unknown> | string | null
   inventory_id: string | null
   inventory_purchase_date: string | Date | null
@@ -337,10 +347,10 @@ function maskCpf(cpf?: string | null) {
   return `***.${digits.slice(3, 6)}.${digits.slice(6, 9)}-**`
 }
 
-function packagingLabel(type?: string | null, notes?: string | null) {
+function packagingLabel(type?: string | null, notes?: string | null, companyShortName?: string | null) {
   const note = notes?.trim()
   if (type === "original_box") return "Caixa original"
-  if (type === "nobretech_box") return "Caixa Nobretech"
+  if (type === "nobretech_box") return companyShortName ? `Caixa ${companyShortName}` : "Caixa da loja"
   if (type === "no_box") return "Sem caixa"
   if (type === "other") return note || "Outro"
   return "Não informado"
@@ -389,11 +399,28 @@ function itemWarrantyNote(warranty: Pick<SaleItemWarrantyRow, "warranty_nature" 
   return null
 }
 
-function noContractualWarranty(): PublicPurchaseItemWarranty {
+function publicCompanyBrand(row: Pick<SaleAccessRow, "company_name" | "company_display_name" | "company_short_name">): PublicPurchaseCompany {
+  const displayName = cleanDisplayText(row.company_display_name) || cleanDisplayText(row.company_name)
+  const shortName = cleanDisplayText(row.company_short_name) || displayName
+  return {
+    displayName,
+    shortName,
+  }
+}
+
+function storeWarrantyLabel(companyShortName?: string | null) {
+  return companyShortName ? `Garantia ${companyShortName}` : "Garantia da loja"
+}
+
+function noContractualWarranty(companyShortName?: string | null): PublicPurchaseItemWarranty {
+  const label = companyShortName
+    ? `Sem Garantia ${companyShortName} contratual vinculada a este item.`
+    : "Sem garantia contratual da loja vinculada a este item."
+
   return {
     source: "none",
     name: null,
-    label: "Sem Garantia Nobretech contratual vinculada a este item.",
+    label,
     nature: null,
     startsAt: null,
     endsAt: null,
@@ -415,13 +442,23 @@ function legacyWarranty(start: string | null, end: string | null): PublicPurchas
   }
 }
 
-function publicItemWarranty(row: SaleItemWarrantyRow): PublicPurchaseItemWarranty {
+function publicItemWarranty(row: SaleItemWarrantyRow, companyShortName?: string | null): PublicPurchaseItemWarranty {
   const startsAt = dateOnly(row.starts_at)
   const endsAt = dateOnly(row.ends_at)
+  const durationLabel = row.duration_months
+    ? ` — ${row.duration_months} meses`
+    : row.duration_days
+      ? ` — ${row.duration_days} dias`
+      : ""
+  const isContractual = row.warranty_nature === "contractual"
+  const label = isContractual
+    ? `${storeWarrantyLabel(companyShortName)}${durationLabel}`
+    : row.warranty_label
+
   return {
     source: "item",
-    name: row.warranty_name,
-    label: row.warranty_label,
+    name: isContractual ? label : row.warranty_name,
+    label,
     nature: row.warranty_nature,
     startsAt,
     endsAt,
@@ -450,7 +487,7 @@ function firstPhoto(photos?: string[] | null) {
   return photos?.find((photo) => typeof photo === "string" && photo.trim()) || null
 }
 
-function buildProvenance(row: SaleAccessRow) {
+function buildProvenance(row: SaleAccessRow, companyShortName?: string | null) {
   const stockEntryDate = dateOnly(row.inventory_purchase_date) || dateOnly(row.inventory_created_at)
   const inspectionDate = dateOnly(row.checklist_completed_at) || dateOnly(row.checklist_created_at)
   const hasPreviousOwner = Boolean(row.previous_owner_name || row.previous_owner_cpf || row.inventory_origin === "trade_in")
@@ -459,15 +496,23 @@ function buildProvenance(row: SaleAccessRow) {
   const kind: PublicPurchaseDetails["provenance"]["kind"] = hasPreviousOwner ? "trade_in" : isSealed ? "sealed" : stockEntryDate ? "supplier" : "unknown"
   const descriptions = {
     trade_in: "Este aparelho passou por validação de origem, conferência técnica e registro de entrada antes da venda.",
-    supplier: "Este aparelho foi adquirido por fornecedor parceiro da Nobretech e passou por registro de entrada, conferência técnica e validação antes da venda.",
+    supplier: companyShortName
+      ? `Este aparelho foi adquirido por fornecedor parceiro da ${companyShortName} e passou por registro de entrada, conferência técnica e validação antes da venda.`
+      : "Este aparelho foi adquirido por fornecedor parceiro da loja e passou por registro de entrada, conferência técnica e validação antes da venda.",
     sealed: "Este produto foi adquirido por fornecedor/distribuidor parceiro e passou por validação comercial antes da venda.",
-    unknown: "Este aparelho possui rastreabilidade em atualização no sistema da Nobretech.",
+    unknown: companyShortName
+      ? `Este aparelho possui rastreabilidade em atualização no sistema da ${companyShortName}.`
+      : "Este aparelho possui rastreabilidade em atualização no sistema da loja.",
   } satisfies Record<typeof kind, string>
   const privacyNotes = {
     trade_in: "Dados parcialmente ocultos por segurança e conformidade com a LGPD.",
-    supplier: "Informações comerciais do fornecedor preservadas por segurança e política interna da Nobretech.",
+    supplier: companyShortName
+      ? `Informações comerciais do fornecedor preservadas por segurança e política interna da ${companyShortName}.`
+      : "Informações comerciais do fornecedor preservadas por segurança e política interna da loja.",
     sealed: "Informações comerciais preservadas por política interna.",
-    unknown: "Informações de procedência ainda estão sendo atualizadas pela Nobretech.",
+    unknown: companyShortName
+      ? `Informações de procedência ainda estão sendo atualizadas pela ${companyShortName}.`
+      : "Informações de procedência ainda estão sendo atualizadas pela loja.",
   } satisfies Record<typeof kind, string>
 
   return {
@@ -713,7 +758,7 @@ async function getPublicPaymentsForSale(saleId: string) {
   }))
 }
 
-async function getSaleItemWarrantiesForSale(saleId: string) {
+async function getSaleItemWarrantiesForSale(saleId: string, companyShortName?: string | null) {
   const result = await pool.query<SaleItemWarrantyRow>(
     `
       SELECT
@@ -743,7 +788,7 @@ async function getSaleItemWarrantiesForSale(saleId: string) {
   return new Map(
     result.rows
       .filter((row) => row.source_table && row.source_id)
-      .map((row) => [`${row.source_table}:${row.source_id}`, publicItemWarranty(row)])
+      .map((row) => [`${row.source_table}:${row.source_id}`, publicItemWarranty(row, companyShortName)])
   )
 }
 
@@ -814,6 +859,9 @@ async function getSaleByToken(token: string) {
         s.warranty_end,
         s.warranty_months,
         s.warranty_pdf_url,
+        co.name AS company_name,
+        cbp.display_name AS company_display_name,
+        cbp.short_name AS company_short_name,
         s.inventory_id,
         COALESCE(co.settings, '{}'::jsonb) || jsonb_strip_nulls(jsonb_build_object(
           'pix_fee_pct', fs.pix_fee_pct,
@@ -880,6 +928,14 @@ async function getSaleByToken(token: string) {
       FROM sales s
       LEFT JOIN customers c ON c.id = s.customer_id
       LEFT JOIN companies co ON co.id = s.company_id
+      LEFT JOIN LATERAL (
+        SELECT display_name, short_name
+        FROM company_brand_profile
+        WHERE company_id = s.company_id
+          AND active = TRUE
+        ORDER BY updated_at DESC
+        LIMIT 1
+      ) cbp ON true
       LEFT JOIN financial_settings fs ON fs.company_id = s.company_id
       LEFT JOIN trade_ins ti ON ti.id = s.trade_in_id
       LEFT JOIN inventory tii ON tii.id = ti.linked_inventory_id
@@ -914,10 +970,12 @@ function isAvailable(row: SaleAccessRow | null) {
 
 export async function getPublicPurchaseIntro(token: string): Promise<PublicPurchaseIntro> {
   const row = await getSaleByToken(token)
+  const company = row ? publicCompanyBrand(row) : { displayName: null, shortName: null }
   if (!isAvailable(row)) {
     return {
       available: false,
       lockedUntil: null,
+      company,
       message: "Esta compra não está disponível para consulta.",
     }
   }
@@ -925,6 +983,7 @@ export async function getPublicPurchaseIntro(token: string): Promise<PublicPurch
   return {
     available: true,
     lockedUntil: row && isLocked(row) ? new Date(row.public_access_locked_until as string).toISOString() : null,
+    company,
   }
 }
 
@@ -1150,10 +1209,11 @@ function buildTechnicalReportDocument(row: SaleAccessRow): PublicTechnicalReport
 }
 
 async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPurchaseDetails> {
+  const company = publicCompanyBrand(row)
   const additionalItems = await getAdditionalItemsForSale(row.id)
   const variantSelections = await getSaleVariantSelections(row.id)
   const publicPayments = await getPublicPaymentsForSale(row.id)
-  const itemWarrantiesBySource = await getSaleItemWarrantiesForSale(row.id)
+  const itemWarrantiesBySource = await getSaleItemWarrantiesForSale(row.id, company.shortName)
   const hasItemWarranties = itemWarrantiesBySource.size > 0
   const inventoryIds = [
     row.inventory_id,
@@ -1213,7 +1273,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
     color: row.color || null,
     grade: row.grade || null,
     batteryHealth: row.battery_health === null || row.battery_health === undefined ? null : Number(row.battery_health),
-    boxType: packagingLabel(row.packaging_type, row.packaging_notes),
+    boxType: packagingLabel(row.packaging_type, row.packaging_notes, company.shortName),
     photoUrl: principalImage?.image_url || firstPhoto(row.inventory_photos),
     imei: maskTrailing(row.imei),
     serial: maskTrailing(row.serial_number),
@@ -1222,7 +1282,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
     originalAmount: null,
     warrantyStart,
     warrantyEnd,
-    warranty: itemWarrantiesBySource.get(`sales:${row.id}`) || (hasItemWarranties ? noContractualWarranty() : legacyWarranty(warrantyStart, warrantyEnd)),
+    warranty: itemWarrantiesBySource.get(`sales:${row.id}`) || (hasItemWarranties ? noContractualWarranty(company.shortName) : legacyWarranty(warrantyStart, warrantyEnd)),
     issues: principalIssues,
   }
 
@@ -1252,7 +1312,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
         color: item.color || null,
         grade: item.grade || null,
         batteryHealth: item.battery_health === null || item.battery_health === undefined ? null : Number(item.battery_health),
-        boxType: packagingLabel(item.packaging_type, item.packaging_notes),
+        boxType: packagingLabel(item.packaging_type, item.packaging_notes, company.shortName),
         photoUrl: itemImage?.image_url || null,
         imei: maskTrailing(item.imei),
         serial: maskTrailing(item.serial_number),
@@ -1261,7 +1321,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
         originalAmount: itemType === "free" ? originalAmount : null,
         warrantyStart: null,
         warrantyEnd: null,
-        warranty: itemWarrantiesBySource.get(`sales_additional_items:${item.id}`) || noContractualWarranty(),
+        warranty: itemWarrantiesBySource.get(`sales_additional_items:${item.id}`) || noContractualWarranty(company.shortName),
         issues,
       }
     }),
@@ -1286,6 +1346,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
   const technicalReportDocument = buildTechnicalReportDocument(row)
 
   return {
+    company,
     customerName: firstName(row.customer_name) || "cliente",
     support,
     sale: {
@@ -1319,7 +1380,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
       originalAmount: principalItem.originalAmount,
     },
     purchaseItems,
-    provenance: buildProvenance(row),
+    provenance: buildProvenance(row, company.shortName),
     documents: {
       receiptAvailable: true,
       warrantyAvailable: Boolean(warrantyStart && warrantyEnd) || Boolean(row.warranty_pdf_url),

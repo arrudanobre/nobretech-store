@@ -29,10 +29,12 @@ import { generateReceiptPDF, generateWarrantyPDF, type SaleDocumentData } from "
 type Intro = {
   available: boolean
   lockedUntil: string | null
+  company: PurchaseCompany
   message?: string
 }
 
 type Purchase = {
+  company: PurchaseCompany
   customerName: string
   support: {
     whatsappUrl: string | null
@@ -120,6 +122,11 @@ type Purchase = {
     publicNote: string | null
     timeline: Array<{ label: string; date: string | null; active: boolean }>
   }>
+}
+
+type PurchaseCompany = {
+  displayName: string | null
+  shortName: string | null
 }
 
 type PurchaseItem = {
@@ -279,9 +286,29 @@ function getWarrantyStatusCopy(status: WarrantyState) {
   return map[status]
 }
 
-function warrantyNatureLabel(nature?: string | null) {
+function companyDisplayName(company?: PurchaseCompany | null) {
+  return company?.displayName?.trim() || company?.shortName?.trim() || "Loja"
+}
+
+function companyShortName(company?: PurchaseCompany | null) {
+  return company?.shortName?.trim() || company?.displayName?.trim() || null
+}
+
+function storeWarrantyLabel(company?: PurchaseCompany | null) {
+  const shortName = companyShortName(company)
+  return shortName ? `Garantia ${shortName}` : "Garantia da loja"
+}
+
+function noContractualWarrantyLabel(company?: PurchaseCompany | null) {
+  const shortName = companyShortName(company)
+  return shortName
+    ? `Sem Garantia ${shortName} contratual vinculada a este item.`
+    : "Sem garantia contratual da loja vinculada a este item."
+}
+
+function warrantyNatureLabel(nature?: string | null, company?: PurchaseCompany | null) {
   const labels: Record<string, string> = {
-    contractual: "Garantia Nobretech",
+    contractual: storeWarrantyLabel(company),
     manufacturer: "Garantia do fabricante",
     legal: "Garantia legal",
     operational_support: "Suporte operacional",
@@ -290,9 +317,10 @@ function warrantyNatureLabel(nature?: string | null) {
   return nature ? labels[nature] || nature : null
 }
 
-function itemWarrantyTitle(warranty: PurchaseItemWarranty) {
-  if (warranty.source === "none") return warranty.label || "Sem Garantia Nobretech contratual vinculada a este item."
-  return warranty.label || warranty.name || warrantyNatureLabel(warranty.nature) || "Garantia vinculada"
+function itemWarrantyTitle(warranty: PurchaseItemWarranty, company?: PurchaseCompany | null) {
+  if (warranty.source === "none") return warranty.label || noContractualWarrantyLabel(company)
+  if (warranty.nature === "contractual") return warranty.label || storeWarrantyLabel(company)
+  return warranty.label || warranty.name || warrantyNatureLabel(warranty.nature, company) || "Garantia vinculada"
 }
 
 function itemWarrantyPeriod(warranty: PurchaseItemWarranty) {
@@ -408,6 +436,7 @@ function WhatsAppIcon({ className = "" }: { className?: string }) {
 }
 
 function VerifiedPurchaseHero({ purchase }: { purchase: Purchase }) {
+  const displayName = companyDisplayName(purchase.company)
   return (
     <section className="space-y-3 lg:col-span-2">
       <header className="flex items-center justify-between gap-3 px-1">
@@ -416,7 +445,7 @@ function VerifiedPurchaseHero({ purchase }: { purchase: Purchase }) {
             <ShieldCheck className="h-5 w-5" />
           </span>
           <p className="text-[0.95rem] font-black uppercase tracking-[0.13em] text-navy-900">
-            NOBRETECH <span className="text-royal-600">STORE</span>
+            {displayName}
           </p>
         </div>
         <span className="hidden items-center gap-1.5 rounded-full border border-[#dce6f2] bg-white px-3 py-2 text-xs font-extrabold text-slate-700 sm:inline-flex">
@@ -433,7 +462,7 @@ function VerifiedPurchaseHero({ purchase }: { purchase: Purchase }) {
           <div className="min-w-0">
             <h2 className="text-2xl font-extrabold leading-tight text-navy-900">Olá, {purchase.customerName}</h2>
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              Aqui você encontra todos os detalhes da sua compra realizada na Nobretech Store.
+              Aqui você encontra todos os detalhes da sua compra realizada na {displayName}.
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
               <StatusPill tone="green">
@@ -469,18 +498,19 @@ function PinGate({
   onPinChange: (value: string) => void
   onSubmit: () => void
 }) {
+  const displayName = companyDisplayName(intro?.company)
   return (
     <PortalShell tone="dark">
       <section className="lg:col-span-2 lg:mx-auto lg:flex lg:min-h-[calc(100vh-4rem)] lg:w-full lg:max-w-5xl lg:items-center">
         <div className="grid w-full overflow-hidden rounded-[1.75rem] border border-white/10 bg-[#07111f]/95 shadow-[0_30px_100px_rgba(0,0,0,0.45)] lg:grid-cols-[0.95fr_1.05fr]">
           <div className="border-b border-white/10 bg-[linear-gradient(160deg,#081427_0%,#0c2447_100%)] p-6 sm:p-8 lg:border-b-0 lg:border-r">
-            <p className="text-xs font-bold uppercase tracking-[0.24em] text-white/55">Nobretech Store</p>
+            <p className="text-xs font-bold uppercase tracking-[0.24em] text-white/55">{displayName}</p>
             <div className="mt-10 max-w-md">
               <p className="text-xs font-bold uppercase tracking-[0.22em] text-royal-100">Compra Verificada</p>
               <h1 className="mt-4 text-4xl font-black leading-none text-white sm:text-5xl">Olá!</h1>
               <p className="mt-3 text-xl font-bold leading-7 text-white/90">Digite o PIN para acessar seu pedido.</p>
               <p className="mt-4 text-sm leading-6 text-white/62">
-                A Nobretech protege os detalhes da sua compra até confirmar o código de segurança da etiqueta.
+                A {displayName} protege os detalhes da sua compra até confirmar o código de segurança da etiqueta.
               </p>
             </div>
             <div className="mt-10 grid gap-3 text-sm text-white/72">
@@ -642,11 +672,12 @@ function VerifiedPurchaseProvenanceCard({ purchase }: { purchase: Purchase }) {
 }
 
 function VerifiedPurchaseTimelineCard({ purchase }: { purchase: Purchase }) {
+  const displayName = companyDisplayName(purchase.company)
   const events = [
     { label: "Aparelho adquirido pelo antigo proprietário", date: purchase.provenance.previousPurchaseDate },
-    { label: "Aparelho recebido pela Nobretech", date: purchase.provenance.receivedAt },
+    { label: `Aparelho recebido pela ${displayName}`, date: purchase.provenance.receivedAt },
     { label: "Inspeção técnica realizada", date: purchase.provenance.inspectionDate },
-    { label: "Entrada no estoque da Nobretech", date: purchase.provenance.stockEntryDate },
+    { label: `Entrada no estoque da ${displayName}`, date: purchase.provenance.stockEntryDate },
     { label: "Venda realizada", date: purchase.sale.date },
   ].filter((event) => event.date)
 
@@ -991,7 +1022,7 @@ function VerifiedPurchaseWarrantyCard({ purchase }: { purchase: Purchase }) {
             const warranty = item.warranty || {
               source: "none" as const,
               name: null,
-              label: "Sem Garantia Nobretech contratual vinculada a este item.",
+              label: noContractualWarrantyLabel(purchase.company),
               nature: null,
               startsAt: null,
               endsAt: null,
@@ -1012,13 +1043,13 @@ function VerifiedPurchaseWarrantyCard({ purchase }: { purchase: Purchase }) {
                     <p className="mt-3 text-sm font-extrabold leading-5 text-navy-900">{fallback(item.model)}</p>
                     {item.variationText && <p className="mt-0.5 text-xs font-semibold text-slate-500">{item.variationText}</p>}
                   </div>
-                  {isLinked && warrantyNatureLabel(warranty.nature) && (
-                    <p className="text-xs font-black uppercase tracking-wide text-emerald-700">{warrantyNatureLabel(warranty.nature)}</p>
+                  {isLinked && warrantyNatureLabel(warranty.nature, purchase.company) && (
+                    <p className="text-xs font-black uppercase tracking-wide text-emerald-700">{warrantyNatureLabel(warranty.nature, purchase.company)}</p>
                   )}
                 </div>
 
                 <div className="mt-3 rounded-2xl bg-white/85 p-3 ring-1 ring-slate-200/70">
-                  <p className={`text-sm font-extrabold leading-5 ${isLinked ? "text-navy-900" : "text-slate-700"}`}>{itemWarrantyTitle(warranty)}</p>
+                  <p className={`text-sm font-extrabold leading-5 ${isLinked ? "text-navy-900" : "text-slate-700"}`}>{itemWarrantyTitle(warranty, purchase.company)}</p>
                   {period && <p className="mt-1 text-sm font-semibold leading-5 text-slate-600">{period}</p>}
                   {warranty.note && <p className="mt-2 text-xs font-semibold leading-5 text-slate-500">{warranty.note}</p>}
                 </div>

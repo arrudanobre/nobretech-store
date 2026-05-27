@@ -10,7 +10,11 @@ Nesse modo, cada item exibe somente a garantia vinculada ao seu próprio `sale_i
 
 Capa, película, brindes e acessórios simples sem `sale_item_warranties` aparecem com a mensagem:
 
-> Sem Garantia Nobretech contratual vinculada a este item.
+> Sem Garantia {shortName} contratual vinculada a este item.
+
+Quando o nome curto da empresa não estiver disponível, o fallback público é:
+
+> Sem garantia contratual da loja vinculada a este item.
 
 O portal também informa, em texto curto, que danos por uso, queda, impacto, riscos, mau uso ou desgaste natural não são cobertos como garantia contratual.
 
