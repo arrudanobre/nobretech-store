@@ -7,7 +7,7 @@ export async function GET() {
   const auth = await requireApiAuthContext()
   if (!auth.ok) return auth.response
 
-  const policies = await getSelectableWarrantyPolicies(auth.context.companyId)
+  const policies = await getSelectableWarrantyPolicies(auth.context.companyId, { usageContext: "sale" })
 
   return NextResponse.json({
     data: policies.map((p) => ({

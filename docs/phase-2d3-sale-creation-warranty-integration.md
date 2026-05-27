@@ -139,6 +139,7 @@ Quando a Fase 2F migrar o portal:
   - **Case C:** `warrantyPolicyId: null` → 0 garantias criadas ✅
   - **Case D:** UUID inválido → erro claro e venda bloqueada ✅
   - **Case E:** `sales.warranty_months` legado **inalterado** ✅
+  - **Case F:** `saleStatus='reserved'` → `sale_items` materializado, 0 `sale_item_warranties`, garantia não iniciada ✅
 
 ## Arquivos alterados / criados
 
@@ -148,6 +149,7 @@ Quando a Fase 2F migrar o portal:
 - `src/app/api/sales/route.ts` — wire `materializeSaleItemsWithClient` + `applySaleWarranties` na transação; parse de `warrantySelections`
 - `src/app/api/warranty/selectable-policies/route.ts` — **novo** GET endpoint
 - `src/app/(dashboard)/vendas/nova/page.tsx` — fetch das políticas + state + Select UI mínima + envio de `warrantySelections.main` no body
+- `migrations/warranty_sale_policy_flags.sql` — migration idempotente preparada para ativar `applies_to_sale=true` nas policies selecionáveis de venda, sem aplicação em produção nesta etapa
 
 ## Fora do escopo (não alterado)
 
@@ -162,10 +164,15 @@ Quando a Fase 2F migrar o portal:
 ## Riscos / remanescentes
 
 - **inventory.product_condition/origin não existem** → resolver default usa apenas `product_type`. Funciona enquanto existir apenas 1 default por scope, garantido pelo índice único parcial. Quando houver múltiplos defaults por scope no futuro, a inferência precisará de campo adicional em `inventory` ou critério explícito do consumidor.
-- **`applies_to_sale` flag não filtra a UI** (o endpoint `/api/warranty/selectable-policies` retorna todas as políticas selecionáveis ativas independentemente desse flag). Decisão consciente para esta fase para não bloquear a Nobretech onde todas as policies têm `applies_to_sale=false` por seed legado. Migração desse flag pode ser feita em fase futura sem impacto neste código.
+- **`applies_to_sale` agora é respeitado em venda**: o endpoint `/api/warranty/selectable-policies` chama `getSelectableWarrantyPolicies(..., { usageContext: "sale" })`; o default automático de venda busca apenas policies com `applies_to_sale=TRUE`; e uma policy manual com `applies_to_sale=FALSE` é rejeitada com erro claro. Como o seed legado pode ter deixado policies da Nobretech com `applies_to_sale=FALSE`, foi criada a migration local idempotente `migrations/warranty_sale_policy_flags.sql` para ativar, em aplicação controlada futura, apenas:
+  - `Garantia Nobretech - Seminovo`
+  - `Garantia Nobretech - Seminovo 3 meses`
+  - `Garantia fabricante - Produto lacrado`
+  - `Garantia legal - Produto duravel 90 dias` permanece não selecionável.
 - **Itens adicionais sem UI** — o backend já aceita `warrantySelections.additionalBySourceId` mas a UI não envia. Quando a Fase 2E precisar (recibo individualizado), basta adicionar selects no painel de itens adicionais.
-- **Reservas (`saleStatus='reserved'`)** entram no mesmo fluxo e criam garantia desde o instante da reserva. Spec dizia "Garantia será emitida somente após recebimento" — o legado mostra isso na UI mas a garantia interna fica registrada igualmente. Comportamento aceitável: garantia existe no banco; documentos/portal decidirão quando exibir.
-- **`warrantyStart` hoje = data de hoje** (vem do legado). Pode não bater com `sale_date` em casos de antedatar — herdamos o comportamento legado.
+- **Reservas (`saleStatus='reserved'`) não iniciam garantia**. A API continua materializando `sale_items`, mas pula completamente `applySaleWarranties`: não resolve default, não valida policy ausente, não cria `sale_item_warranties` e não inicia contagem. A garantia da reserva deve nascer em fase futura, no momento da efetivação/entrega.
+- **Data de início da garantia por item**: para venda efetivada, `sale_item_warranties.starts_at` usa `sale_date`, que é a melhor data efetiva já existente no fluxo atual. Os campos legados `sales.warranty_start` / `sales.warranty_end` continuam sendo gravados sem alteração para consumidores antigos.
+- **Coexistência legado/novo**: `sales.warranty_*` continua a fonte dos consumidores atuais. `sale_item_warranties` nasce somente para venda efetivada e segue sem consumidores públicos nesta fase. Portal/documentos serão migrados depois, com fallback planejado para o legado.
 
 ## Pronto para deploy?
 

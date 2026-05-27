@@ -3,7 +3,7 @@ import "server-only"
 import type { PoolClient } from "pg"
 import { pool } from "@/lib/db"
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export type SaleItemSourceTable = "sales" | "sales_additional_items"
 export type SaleItemRole = "main" | "upsell" | "gift" | "accessory" | "service" | "other"

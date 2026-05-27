@@ -332,7 +332,9 @@ function parseAndValidateInput(
     }
   }
 
-  const warrantySelectionsResult = parseWarrantySelections(b.warrantySelections)
+  const warrantySelectionsResult = inputIsReservation(saleStatus, b.isReservation)
+    ? { ok: true as const, value: null }
+    : parseWarrantySelections(b.warrantySelections)
   if (!warrantySelectionsResult.ok) return { ok: false, error: warrantySelectionsResult.error }
   const warrantySelections = warrantySelectionsResult.value
 
@@ -371,7 +373,7 @@ function parseAndValidateInput(
       tradeIn,
       payments,
       productName,
-      isReservation: Boolean(b.isReservation),
+      isReservation: inputIsReservation(saleStatus, b.isReservation),
       selectedVariantId: isUuid(b.selectedVariantId) ? b.selectedVariantId : null,
       selectedVariantName: safeString(b.selectedVariantName, 120),
       selectedVariantColorHex: safeString(b.selectedVariantColorHex, 30),
@@ -380,10 +382,18 @@ function parseAndValidateInput(
   }
 }
 
-function parseWarrantySelection(raw: unknown): WarrantySelectionInput | null | undefined {
-  if (raw === undefined) return undefined
-  if (raw === null) return null
-  if (typeof raw !== "object" || Array.isArray(raw)) return undefined
+function inputIsReservation(saleStatus: string, isReservation: unknown): boolean {
+  return saleStatus === "reserved" || isReservation === true
+}
+
+function parseWarrantySelection(
+  raw: unknown
+): { ok: true; value: WarrantySelectionInput | null | undefined } | { ok: false; error: string } {
+  if (raw === undefined) return { ok: true, value: undefined }
+  if (raw === null) return { ok: true, value: null }
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, error: "Seleção de garantia inválida." }
+  }
   const obj = raw as Record<string, unknown>
   const policyIdRaw = obj.warrantyPolicyId
   let warrantyPolicyId: string | null = null
@@ -392,17 +402,20 @@ function parseWarrantySelection(raw: unknown): WarrantySelectionInput | null | u
   } else if (typeof policyIdRaw === "string" && isUuid(policyIdRaw)) {
     warrantyPolicyId = policyIdRaw
   } else if (policyIdRaw !== undefined) {
-    return undefined
+    return { ok: false, error: "Política de garantia inválida." }
   }
   return {
-    warrantyPolicyId,
-    manualEndsAt: typeof obj.manualEndsAt === "string" ? safeDate(obj.manualEndsAt) : null,
-    warrantyName: safeString(obj.warrantyName, 300),
-    warrantyLabel: safeString(obj.warrantyLabel, 300),
-    manufacturerCoverageReference: safeString(obj.manufacturerCoverageReference, 300),
-    manufacturerCoverageUrl: safeString(obj.manufacturerCoverageUrl, 1000),
-    manualNotes: safeString(obj.manualNotes, 2000),
-    manualSelection: Boolean(obj.manualSelection),
+    ok: true,
+    value: {
+      warrantyPolicyId,
+      manualEndsAt: typeof obj.manualEndsAt === "string" ? safeDate(obj.manualEndsAt) : null,
+      warrantyName: safeString(obj.warrantyName, 300),
+      warrantyLabel: safeString(obj.warrantyLabel, 300),
+      manufacturerCoverageReference: safeString(obj.manufacturerCoverageReference, 300),
+      manufacturerCoverageUrl: safeString(obj.manufacturerCoverageUrl, 1000),
+      manualNotes: safeString(obj.manualNotes, 2000),
+      manualSelection: Boolean(obj.manualSelection),
+    },
   }
 }
 
@@ -417,14 +430,16 @@ function parseWarrantySelections(
   const result: SaleWarrantySelections = {}
   if ("main" in obj) {
     const parsed = parseWarrantySelection(obj.main)
-    if (parsed !== undefined) result.main = parsed
+    if (!parsed.ok) return { ok: false, error: parsed.error }
+    if (parsed.value !== undefined) result.main = parsed.value
   }
   if (obj.additionalBySourceId && typeof obj.additionalBySourceId === "object" && !Array.isArray(obj.additionalBySourceId)) {
     const map: Record<string, WarrantySelectionInput | null> = {}
     for (const [k, v] of Object.entries(obj.additionalBySourceId as Record<string, unknown>)) {
       if (!isUuid(k)) continue
       const parsed = parseWarrantySelection(v)
-      if (parsed !== undefined) map[k] = parsed
+      if (!parsed.ok) return { ok: false, error: parsed.error }
+      if (parsed.value !== undefined) map[k] = parsed.value
     }
     if (Object.keys(map).length > 0) result.additionalBySourceId = map
   }
@@ -956,25 +971,27 @@ export async function POST(request: NextRequest) {
       ]
     )
 
-    // 14. Materialize sale_items (canonical contract) + apply per-item warranties
+    // 14. Materialize sale_items (canonical contract) + apply per-item warranties for effective sales.
     //     This runs inside the same transaction so any failure rolls back the entire sale.
     //     Legacy sales.warranty_* fields above remain unchanged.
     await materializeSaleItemsWithClient(client, companyId, saleId!)
     let warrantyApplied = { created: 0, skipped: 0 }
-    try {
-      const warrantyResult = await applySaleWarranties(
-        client,
-        {
-          companyId,
-          saleId: saleId!,
-          startsAt: input.warrantyStart,
-          selections: input.warrantySelections ?? undefined,
-        },
-        { userId: appUserId, email: authResult.context.email }
-      )
-      warrantyApplied = { created: warrantyResult.created.length, skipped: warrantyResult.skipped.length }
-    } catch (err) {
-      throw new SaleOperationalError(err instanceof Error ? err.message : "Erro ao aplicar garantia por item.")
+    if (!input.isReservation) {
+      try {
+        const warrantyResult = await applySaleWarranties(
+          client,
+          {
+            companyId,
+            saleId: saleId!,
+            startsAt: input.saleDate,
+            selections: input.warrantySelections ?? undefined,
+          },
+          { userId: appUserId, email: authResult.context.email }
+        )
+        warrantyApplied = { created: warrantyResult.created.length, skipped: warrantyResult.skipped.length }
+      } catch (err) {
+        throw new SaleOperationalError(err instanceof Error ? err.message : "Erro ao aplicar garantia por item.")
+      }
     }
 
     await client.query("COMMIT")

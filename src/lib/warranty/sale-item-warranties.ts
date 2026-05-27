@@ -11,7 +11,7 @@ import type {
   WarrantyTermType,
 } from "./types"
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const CALCULATION_MODES: WarrantyCalculationMode[] = ["calendar_months", "fixed_days", "manual_dates"]
 const WARRANTY_NATURES: WarrantyNature[] = ["legal", "contractual", "manufacturer", "operational_support", "legacy"]
@@ -215,6 +215,7 @@ type WarrantySnapshotBundle = {
     warrantyNature: WarrantyNature
     isSelectable: boolean
     active: boolean
+    appliesToSale: boolean
     calculationMode: WarrantyCalculationMode
     defaultMonths: number | null
     defaultDays: number | null
@@ -236,7 +237,7 @@ export async function buildWarrantySnapshot(
     `SELECT id, company_id, name, warranty_nature, product_type, product_condition, product_origin,
             default_months, default_days, calculation_mode, public_label_template,
             selection_label, selection_description, legal_basis,
-            is_selectable, active, effective_from, effective_until
+            is_selectable, active, applies_to_sale, effective_from, effective_until
      FROM warranty_policies
      WHERE id = $1 AND company_id = $2
      LIMIT 1`,
@@ -286,6 +287,7 @@ export async function buildWarrantySnapshot(
       warrantyNature: row.warranty_nature as WarrantyNature,
       isSelectable: Boolean(row.is_selectable),
       active: Boolean(row.active),
+      appliesToSale: Boolean(row.applies_to_sale),
       calculationMode: row.calculation_mode as WarrantyCalculationMode,
       defaultMonths: (row.default_months as number | null) ?? null,
       defaultDays: (row.default_days as number | null) ?? null,
@@ -465,6 +467,7 @@ async function resolveDefaultPolicyIdForItem(
      WHERE company_id = $1
        AND active = TRUE
        AND is_default = TRUE
+       AND applies_to_sale = TRUE
        AND effective_from <= NOW()
        AND (effective_until IS NULL OR effective_until > NOW())
        AND (product_type IS NULL OR product_type = 'device')
@@ -498,6 +501,7 @@ async function insertWarrantyForSaleItem(
   const snapshot = await buildWarrantySnapshot(params.companyId, params.warrantyPolicyId, client)
   if (!snapshot) return { ok: false, error: "Politica de garantia nao encontrada para esta empresa." }
   if (!snapshot.policy.active) return { ok: false, error: "Politica de garantia inativa nao pode ser vinculada." }
+  if (!snapshot.policy.appliesToSale) return { ok: false, error: "Politica de garantia nao habilitada para venda." }
   if (params.selection.manualSelection === true && !snapshot.policy.isSelectable) {
     return { ok: false, error: "Politica nao e selecionavel manualmente." }
   }
@@ -714,6 +718,10 @@ export async function createSaleItemWarranty(
     if (!snapshot.policy.active) {
       await client.query("ROLLBACK")
       return buildError("Politica de garantia inativa nao pode ser vinculada.")
+    }
+    if (!snapshot.policy.appliesToSale) {
+      await client.query("ROLLBACK")
+      return buildError("Politica de garantia nao habilitada para venda.")
     }
     if (input.manualSelection === true && !snapshot.policy.isSelectable) {
       await client.query("ROLLBACK")

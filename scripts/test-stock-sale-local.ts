@@ -1,15 +1,29 @@
 import { randomUUID } from "node:crypto"
+import Module from "node:module"
 import { Client } from "pg"
 
 const TAG = "TESTE_ESTOQUE_VENDA_LOCAL"
 const LOCAL_URL = "postgresql://nobretech:nobretech@localhost:5433/nobretech_local"
 const LOCAL_TOKEN = "TESTE_ATOMIC_SALE_LOCAL"
 
+type ModuleWithLoad = typeof Module & {
+  _load: (request: string, parent: NodeModule | null | undefined, isMain: boolean) => unknown
+}
+
+const moduleWithLoad = Module as ModuleWithLoad
+const originalModuleLoad = moduleWithLoad._load
+moduleWithLoad._load = (request, parent, isMain) => {
+  if (request === "server-only") return {}
+  return originalModuleLoad(request, parent, isMain)
+}
+
 type SeedContext = {
   companyId: string
   userId: string
   customerId: string
   accountId: string
+  policy6mId: string
+  policy3mId: string
 }
 
 type InventorySeed = {
@@ -24,7 +38,12 @@ type TestRunTracker = {
 type SaleResponse = {
   status: number
   body: {
-    data: { saleId: string; paymentIds: string[]; transactionIds: string[] } | null
+    data: {
+      saleId: string
+      paymentIds: string[]
+      transactionIds: string[]
+      warrantyApplied?: { created: number; skipped: number }
+    } | null
     error: { message: string } | null
   }
 }
@@ -93,7 +112,54 @@ async function seedBase(client: Client, tracker: TestRunTracker): Promise<SeedCo
   )
 
   await client.query(`INSERT INTO financial_settings (company_id) VALUES ($1::uuid) ON CONFLICT (company_id) DO NOTHING`, [company.id])
-  return { companyId: company.id, userId: user.id, customerId: customer.id, accountId: account.id }
+  const policies = await seedWarrantyPolicies(client, company.id)
+  return { companyId: company.id, userId: user.id, customerId: customer.id, accountId: account.id, ...policies }
+}
+
+async function seedWarrantyPolicies(client: Client, companyId: string) {
+  const policy6m = await scalar<{ id: string }>(
+    client,
+    `INSERT INTO warranty_policies (
+       company_id, name, product_type, product_condition, product_origin,
+       default_months, default_days, calculation_mode, warranty_nature,
+       public_label_template, internal_description, requires_customer_identification,
+       applies_to_sale, applies_to_catalog, applies_to_portal, applies_to_documents,
+       active, is_selectable, is_default, selection_label, selection_description,
+       priority, effective_from
+     ) VALUES (
+       $1::uuid, 'Garantia Nobretech - Seminovo', 'device', 'used', NULL,
+       6, NULL, 'calendar_months', 'contractual',
+       '6 meses de Garantia Nobretech', $2, TRUE,
+       TRUE, FALSE, FALSE, FALSE,
+       TRUE, TRUE, TRUE, '6 meses Nobretech', 'Garantia contratual Nobretech para aparelho seminovo aprovado.',
+       10, NOW()
+     )
+     RETURNING id`,
+    [companyId, `${TAG} policy 6m`]
+  )
+
+  const policy3m = await scalar<{ id: string }>(
+    client,
+    `INSERT INTO warranty_policies (
+       company_id, name, product_type, product_condition, product_origin,
+       default_months, default_days, calculation_mode, warranty_nature,
+       public_label_template, internal_description, requires_customer_identification,
+       applies_to_sale, applies_to_catalog, applies_to_portal, applies_to_documents,
+       active, is_selectable, is_default, selection_label, selection_description,
+       priority, effective_from
+     ) VALUES (
+       $1::uuid, 'Garantia Nobretech - Seminovo 3 meses', 'device', 'used', NULL,
+       3, NULL, 'calendar_months', 'contractual',
+       '3 meses de Garantia Nobretech', $2, TRUE,
+       TRUE, FALSE, FALSE, FALSE,
+       TRUE, TRUE, FALSE, '3 meses Nobretech', 'Garantia contratual Nobretech reduzida para casos especificos.',
+       20, NOW()
+     )
+     RETURNING id`,
+    [companyId, `${TAG} policy 3m`]
+  )
+
+  return { policy6mId: policy6m.id, policy3mId: policy3m.id }
 }
 
 async function seedInventory(
@@ -141,6 +207,11 @@ function salePayload(input: {
   ctx: SeedContext
   main: InventorySeed
   total: number
+  saleStatus?: "completed" | "reserved"
+  isReservation?: boolean
+  warrantySelections?: unknown
+  warrantyStart?: string
+  warrantyEnd?: string
   customerType?: "identified" | "walk_in"
   walkInLabel?: string | null
   walkInPhone?: string | null
@@ -167,6 +238,7 @@ function salePayload(input: {
   const paymentMethod = input.paymentMethod || "pix"
   const paymentStatus = input.paymentStatus || "received"
   const paymentDueDate = input.paymentDueDate || date
+  const saleStatus = input.saleStatus || "completed"
   return {
     inventoryId: input.main.id,
     customerType,
@@ -180,10 +252,10 @@ function salePayload(input: {
     cardFeePct: 0,
     paymentMethod,
     warrantyMonths: 3,
-    warrantyStart: date,
-    warrantyEnd: addMonths(date, 3),
+    warrantyStart: input.warrantyStart || date,
+    warrantyEnd: input.warrantyEnd || addMonths(input.warrantyStart || date, 3),
     sourceType: "own",
-    saleStatus: "completed",
+    saleStatus,
     paymentDueDate,
     saleDate: date,
     saleOrigin: "local_stock_test",
@@ -195,8 +267,9 @@ function salePayload(input: {
     selectedVariantId: input.selectedVariantId || null,
     selectedVariantName: input.selectedVariantName || null,
     selectedVariantColorHex: null,
-    isReservation: false,
+    isReservation: input.isReservation ?? saleStatus === "reserved",
     additionalItems: input.additionalItems || [],
+    ...(input.warrantySelections !== undefined ? { warrantySelections: input.warrantySelections } : {}),
     payments: [
       {
         paymentMethod,
@@ -265,6 +338,35 @@ async function inventoryState(client: Client, inventoryId: string) {
   )
 }
 
+async function saleWarrantySummary(client: Client, saleId: string) {
+  return scalar<{
+    sale_status: string
+    warranty_months: string
+    warranty_start: string
+    warranty_end: string
+    sale_items_count: string
+    warranties_count: string
+    warranty_duration_months: string | null
+    warranty_policy_id: string | null
+    warranty_starts_at: string | null
+  }>(
+    client,
+    `SELECT
+       s.sale_status,
+       s.warranty_months::text,
+       s.warranty_start::text,
+       s.warranty_end::text,
+       (SELECT COUNT(*)::text FROM sale_items WHERE sale_id = s.id AND active = TRUE) AS sale_items_count,
+       (SELECT COUNT(*)::text FROM sale_item_warranties WHERE sale_id = s.id AND active = TRUE) AS warranties_count,
+       (SELECT duration_months::text FROM sale_item_warranties WHERE sale_id = s.id AND active = TRUE ORDER BY created_at ASC LIMIT 1) AS warranty_duration_months,
+       (SELECT warranty_policy_id::text FROM sale_item_warranties WHERE sale_id = s.id AND active = TRUE ORDER BY created_at ASC LIMIT 1) AS warranty_policy_id,
+       (SELECT starts_at::date::text FROM sale_item_warranties WHERE sale_id = s.id AND active = TRUE ORDER BY created_at ASC LIMIT 1) AS warranty_starts_at
+     FROM sales s
+     WHERE s.id = $1::uuid`,
+    [saleId]
+  )
+}
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)
 }
@@ -329,6 +431,9 @@ async function cleanupCreatedTestCompany(client: Client, tracker: TestRunTracker
         (SELECT COUNT(*) FROM sale_payments WHERE company_id = $1::uuid) +
         (SELECT COUNT(*) FROM transactions WHERE company_id = $1::uuid) +
         (SELECT COUNT(*) FROM financial_account_movements WHERE company_id = $1::uuid) +
+        (SELECT COUNT(*) FROM sale_items WHERE company_id = $1::uuid) +
+        (SELECT COUNT(*) FROM sale_item_warranties WHERE company_id = $1::uuid) +
+        (SELECT COUNT(*) FROM warranty_policies WHERE company_id = $1::uuid) +
         (SELECT COUNT(*) FROM warranties WHERE company_id = $1::uuid) +
         (SELECT COUNT(*) FROM audit_logs WHERE company_id = $1::uuid)
       )::text AS leftover_count
@@ -355,6 +460,134 @@ async function main() {
     const ctx = await seedBase(client, tracker)
     console.log(`Banco local: ${databaseUrl}`)
     console.log(`Empresa de teste: ${ctx.companyId}`)
+    console.log(`Policies de garantia: 6m=${ctx.policy6mId} 3m=${ctx.policy3mId}`)
+
+    const effectiveDefaultItem = await seedInventory(client, ctx, {
+      name: "iPhone garantia default 6m",
+      productType: "device",
+      quantity: 1,
+      hasSerial: true,
+      price: 3000,
+    })
+    const effectiveDefaultSale = await callSalesPost(ctx, salePayload({ ctx, main: effectiveDefaultItem, total: 4300 }))
+    assert(
+      effectiveDefaultSale.status === 200 && effectiveDefaultSale.body.data?.saleId,
+      effectiveDefaultSale.body.error?.message || `Venda garantia default HTTP ${effectiveDefaultSale.status}`
+    )
+    const effectiveDefaultWarranty = await saleWarrantySummary(client, effectiveDefaultSale.body.data.saleId)
+    console.log("GARANTIA venda efetivada default", effectiveDefaultWarranty)
+    assert(effectiveDefaultWarranty.sale_status === "completed", "Venda default deveria estar completed")
+    assert(effectiveDefaultWarranty.sale_items_count === "1", "Venda default nao materializou sale_items")
+    assert(effectiveDefaultWarranty.warranties_count === "1", "Venda default nao criou sale_item_warranty")
+    assert(effectiveDefaultWarranty.warranty_duration_months === "6", "Venda default nao criou garantia de 6 meses")
+    assert(effectiveDefaultWarranty.warranty_policy_id === ctx.policy6mId, "Venda default nao usou policy 6m")
+    assert(effectiveDefaultWarranty.warranty_start === today(), "Legado warranty_start mudou inesperadamente")
+    assert(effectiveDefaultWarranty.warranty_starts_at === today(), "Garantia por item deveria iniciar em saleDate")
+
+    const effective3mItem = await seedInventory(client, ctx, {
+      name: "iPhone garantia manual 3m",
+      productType: "device",
+      quantity: 1,
+      hasSerial: true,
+      price: 2800,
+    })
+    const effective3mSale = await callSalesPost(
+      ctx,
+      salePayload({
+        ctx,
+        main: effective3mItem,
+        total: 3900,
+        warrantySelections: { main: { warrantyPolicyId: ctx.policy3mId, manualSelection: true } },
+      })
+    )
+    assert(
+      effective3mSale.status === 200 && effective3mSale.body.data?.saleId,
+      effective3mSale.body.error?.message || `Venda garantia 3m HTTP ${effective3mSale.status}`
+    )
+    const effective3mWarranty = await saleWarrantySummary(client, effective3mSale.body.data.saleId)
+    console.log("GARANTIA venda efetivada 3m", effective3mWarranty)
+    assert(effective3mWarranty.warranties_count === "1", "Venda 3m nao criou sale_item_warranty")
+    assert(effective3mWarranty.warranty_duration_months === "3", "Venda 3m nao criou garantia de 3 meses")
+    assert(effective3mWarranty.warranty_policy_id === ctx.policy3mId, "Venda 3m nao usou policy 3m")
+
+    const explicitNullItem = await seedInventory(client, ctx, {
+      name: "iPhone garantia nula",
+      productType: "device",
+      quantity: 1,
+      hasSerial: true,
+      price: 2400,
+    })
+    const explicitNullSale = await callSalesPost(
+      ctx,
+      salePayload({
+        ctx,
+        main: explicitNullItem,
+        total: 3300,
+        warrantySelections: { main: { warrantyPolicyId: null } },
+      })
+    )
+    assert(
+      explicitNullSale.status === 200 && explicitNullSale.body.data?.saleId,
+      explicitNullSale.body.error?.message || `Venda garantia null HTTP ${explicitNullSale.status}`
+    )
+    const explicitNullWarranty = await saleWarrantySummary(client, explicitNullSale.body.data.saleId)
+    console.log("GARANTIA venda efetivada null", explicitNullWarranty)
+    assert(explicitNullWarranty.sale_items_count === "1", "Venda null nao materializou sale_items")
+    assert(explicitNullWarranty.warranties_count === "0", "Venda null nao deveria criar garantia por item")
+
+    const invalidPolicyItem = await seedInventory(client, ctx, {
+      name: "iPhone garantia uuid invalido",
+      productType: "device",
+      quantity: 1,
+      hasSerial: true,
+      price: 2200,
+    })
+    const invalidPolicySale = await callSalesPost(
+      ctx,
+      salePayload({
+        ctx,
+        main: invalidPolicyItem,
+        total: 3100,
+        warrantySelections: { main: { warrantyPolicyId: "uuid-invalido" } },
+      })
+    )
+    console.log("GARANTIA uuid invalido", invalidPolicySale)
+    assert(invalidPolicySale.status === 400, "UUID invalido deveria bloquear venda efetivada")
+    assert(/garantia/i.test(invalidPolicySale.body.error?.message || ""), "UUID invalido deveria retornar erro claro de garantia")
+    const invalidPolicyAfter = await inventoryState(client, invalidPolicyItem.id)
+    assert(Number(invalidPolicyAfter.quantity) === 1, "Venda com UUID invalido nao deveria baixar estoque")
+
+    const reservedItem = await seedInventory(client, ctx, {
+      name: "iPhone reserva sem garantia",
+      productType: "device",
+      quantity: 1,
+      hasSerial: true,
+      price: 2600,
+    })
+    const reservedSale = await callSalesPost(
+      ctx,
+      salePayload({
+        ctx,
+        main: reservedItem,
+        total: 3600,
+        saleStatus: "reserved",
+        isReservation: true,
+        warrantySelections: { main: { warrantyPolicyId: "uuid-invalido" } },
+      })
+    )
+    assert(
+      reservedSale.status === 200 && reservedSale.body.data?.saleId,
+      reservedSale.body.error?.message || `Reserva HTTP ${reservedSale.status}`
+    )
+    const reservedWarranty = await saleWarrantySummary(client, reservedSale.body.data.saleId)
+    const reservedAfter = await inventoryState(client, reservedItem.id)
+    console.log("GARANTIA reserva", { sale: reservedWarranty, inventory: reservedAfter, api: reservedSale.body.data })
+    assert(reservedWarranty.sale_status === "reserved", "Reserva nao persistiu sale_status=reserved")
+    assert(reservedWarranty.sale_items_count === "1", "Reserva nao materializou sale_items")
+    assert(reservedWarranty.warranties_count === "0", "Reserva nao deveria criar sale_item_warranties")
+    assert(reservedSale.body.data.warrantyApplied?.created === 0, "API deveria reportar zero garantias criadas na reserva")
+    assert(reservedAfter.status === "reserved", "Reserva nao marcou estoque como reserved")
+    assert(reservedAfter.commercial_status === "reserved", "Reserva nao marcou commercial_status=reserved")
 
     const customersBeforeWalkIn = await scalar<{ count: string }>(
       client,
