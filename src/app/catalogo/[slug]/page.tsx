@@ -27,6 +27,9 @@ import {
   buildCatalogProductUrl,
   getCatalogCompanyIdentity,
 } from "@/lib/catalog/company-identity"
+import { resolveCatalogPublicConfig } from "@/lib/catalog/settings"
+import { Camera, ChatCircle as ChatCircleIcon, SealCheck as SealCheckIcon, ShieldCheck as ShieldCheckIcon, Storefront, Truck as TruckIcon } from "@phosphor-icons/react/dist/ssr"
+import type { CatalogTrustBadgeIcon } from "@/lib/catalog/settings"
 
 export const dynamic = "force-dynamic"
 
@@ -90,7 +93,10 @@ export default async function CatalogoProductPage({
 }) {
   const { slug } = await params
   const identity = await getCatalogCompanyIdentity()
-  const product = await getPublicProductBySlug(slug, { brandShortName: identity.shortName })
+  const [product, config] = await Promise.all([
+    getPublicProductBySlug(slug, { brandShortName: identity.shortName }),
+    resolveCatalogPublicConfig(identity.companyId),
+  ])
   if (!product) notFound()
 
   const isSealed = product.condition === "sealed"
@@ -233,11 +239,11 @@ export default async function CatalogoProductPage({
                 </div>
               </div>
 
-              <ul className="grid min-w-0 grid-cols-3 gap-2">
-                <TrustItem icon={<ShieldCheck className="h-4 w-4" weight="duotone" />} label={product.warrantyLabel} />
-                <TrustItem icon={<Truck className="h-4 w-4" weight="duotone" />} label={product.availabilityLabel} />
-                <TrustItem icon={<SealCheck className="h-4 w-4" weight="duotone" />} label="Procedência verificada" />
-              </ul>
+              <ProductTrustRow
+                warrantyLabel={product.warrantyLabel}
+                availabilityLabel={product.availabilityLabel}
+                extraBadge={config.productBadges[0] ?? null}
+              />
             </div>
           </div>
 
@@ -261,6 +267,7 @@ export default async function CatalogoProductPage({
                   <ProductConditionList
                     items={product.conditionReview}
                     variant={isSealed ? "sealed" : "seminovo"}
+                    productBadges={config.productBadges}
                   />
                 </div>
               </section>
@@ -376,5 +383,37 @@ function TrustItem({ icon, label }: { icon: React.ReactNode; label: string }) {
       <span className="text-[#F2D88A]">{icon}</span>
       <span className="text-[11px] font-medium leading-tight text-zinc-200">{label}</span>
     </li>
+  )
+}
+
+const PRODUCT_TRUST_ICONS: Record<CatalogTrustBadgeIcon, typeof Storefront> = {
+  camera: Camera,
+  shield_check: ShieldCheckIcon,
+  seal_check: SealCheckIcon,
+  chat_circle: ChatCircleIcon,
+  truck: TruckIcon,
+  storefront: Storefront,
+}
+
+function ProductTrustRow({
+  warrantyLabel,
+  availabilityLabel,
+  extraBadge,
+}: {
+  warrantyLabel: string
+  availabilityLabel: string
+  extraBadge: { iconKey: CatalogTrustBadgeIcon; label: string } | null
+}) {
+  const ExtraIcon = extraBadge ? PRODUCT_TRUST_ICONS[extraBadge.iconKey] ?? Storefront : null
+  const cols = extraBadge ? "grid-cols-3" : "grid-cols-2"
+
+  return (
+    <ul className={`grid min-w-0 ${cols} gap-2`}>
+      <TrustItem icon={<ShieldCheck className="h-4 w-4" weight="duotone" />} label={warrantyLabel} />
+      <TrustItem icon={<Truck className="h-4 w-4" weight="duotone" />} label={availabilityLabel} />
+      {extraBadge && ExtraIcon ? (
+        <TrustItem icon={<ExtraIcon className="h-4 w-4" weight="duotone" />} label={extraBadge.label} />
+      ) : null}
+    </ul>
   )
 }

@@ -91,10 +91,6 @@ export function CatalogProductCard({ product, priority = false }: Props) {
                   <ShieldCheck className="h-3 w-3 text-[#F2D88A]" weight="duotone" />
                   {product.warrantyLabel}
                 </span>
-                <span className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/[0.045] px-2.5 py-1 text-[10.5px] font-semibold text-zinc-200">
-                  <SealCheck className="h-3 w-3 text-[#F2D88A]" weight="duotone" />
-                  Procedência conferida
-                </span>
               </div>
             </>
           ) : product.scoreLabel ? (
@@ -149,7 +145,7 @@ export function CatalogProductCard({ product, priority = false }: Props) {
           <div className="flex items-center justify-between gap-2">
             <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[10.5px] font-medium text-emerald-200 ring-1 ring-emerald-400/40">
               <Truck className="h-3 w-3" weight="duotone" />
-              Pronta entrega
+              {product.availabilityLabel}
             </span>
             <span className="inline-flex items-center gap-1 text-[11.5px] font-medium text-zinc-300 transition group-hover:text-[#F2D88A]">
               Ver detalhes

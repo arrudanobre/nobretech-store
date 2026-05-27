@@ -1,6 +1,7 @@
 import {
   BatteryCharging,
   Camera,
+  ChatCircle,
   CheckCircle,
   Cpu,
   DeviceMobile,
@@ -9,10 +10,13 @@ import {
   SealCheck,
   ShieldCheck,
   SpeakerHigh,
+  Storefront,
+  Truck,
   WifiHigh,
 } from "@phosphor-icons/react/dist/ssr"
 import type { PublicCatalogConditionItem } from "@/lib/catalog/types"
 import { formatScore10, getScoreTone } from "@/lib/catalog/score"
+import type { CatalogTrustBadge, CatalogTrustBadgeIcon } from "@/lib/catalog/settings"
 
 const ICON_MAP: Record<string, typeof DeviceMobile> = {
   screen: DeviceMobile,
@@ -25,6 +29,15 @@ const ICON_MAP: Record<string, typeof DeviceMobile> = {
   audio: SpeakerHigh,
   connectivity: WifiHigh,
   functions: Cpu,
+}
+
+const BADGE_ICON_MAP: Record<CatalogTrustBadgeIcon, typeof DeviceMobile> = {
+  camera: Camera,
+  shield_check: ShieldCheck,
+  seal_check: SealCheck,
+  chat_circle: ChatCircle,
+  truck: Truck,
+  storefront: Storefront,
 }
 
 const TONE_TEXT: Record<ReturnType<typeof getScoreTone>, string> = {
@@ -44,6 +57,10 @@ const GROUPS = [
 type Props = {
   items: PublicCatalogConditionItem[]
   variant: "sealed" | "seminovo"
+  productBadges?: CatalogTrustBadge[]
+  sealedHeaderLabel?: string
+  sealedHeaderDescription?: string
+  sealedPackagingBadge?: { label: string; description: string }
 }
 
 function normalizeText(value: string) {
@@ -64,37 +81,35 @@ function shouldShowDescription(stateLabel?: string, description?: string) {
   return state !== note && !state.includes(note) && !note.includes(state)
 }
 
-export function ProductConditionList({ items, variant }: Props) {
+const SEALED_HEADER_FALLBACK_LABEL = "Produto lacrado de fábrica"
+const SEALED_HEADER_FALLBACK_DESCRIPTION = "Unidade sem uso anterior, com embalagem original."
+
+export function ProductConditionList({
+  items,
+  variant,
+  productBadges = [],
+  sealedHeaderLabel,
+  sealedHeaderDescription,
+  sealedPackagingBadge,
+}: Props) {
   if (items.length === 0) return null
 
   if (variant === "sealed") {
-    const warrantyLabel =
+    const headerLabel = sealedHeaderLabel ?? SEALED_HEADER_FALLBACK_LABEL
+    const warrantyTermDescription =
       items.find((item) => item.key === "functions")?.description ||
       items.find((item) => item.label.toLowerCase().includes("garantia"))?.description ||
-      "Garantia oficial"
-    const sealedSubtitle = `Unidade sem uso anterior, com embalagem original e ${warrantyLabel}.`
-    const trustPoints = [
-      {
-        label: "Embalagem lacrada",
-        description: "Produto sem uso anterior.",
-        icon: Package,
-      },
-      {
-        label: warrantyLabel,
-        description: "Garantia oficial Apple conforme consulta no momento da ativação.",
-        icon: ShieldCheck,
-      },
-      {
-        label: "Pronta entrega",
-        description: "Disponibilidade confirmada pela loja.",
-        icon: CheckCircle,
-      },
-      {
-        label: "Procedência verificada",
-        description: "Disponibilidade conferida antes da publicação.",
-        icon: SealCheck,
-      },
-    ]
+      null
+    const headerDescription =
+      sealedHeaderDescription ??
+      (warrantyTermDescription
+        ? `Unidade sem uso anterior, com embalagem original e ${warrantyTermDescription}.`
+        : SEALED_HEADER_FALLBACK_DESCRIPTION)
+
+    const packagingBadge = sealedPackagingBadge ?? {
+      label: "Embalagem lacrada",
+      description: "Produto sem uso anterior.",
+    }
 
     return (
       <div className="relative overflow-hidden rounded-[28px] border border-[#D6A84F]/35 bg-gradient-to-br from-[#201A0B]/70 via-white/[0.035] to-transparent p-5 shadow-[0_24px_80px_rgba(214,168,79,0.08)] backdrop-blur">
@@ -105,31 +120,44 @@ export function ProductConditionList({ items, variant }: Props) {
             <SealCheck className="h-5 w-5" weight="fill" />
           </span>
           <div className="min-w-0">
-            <p className="text-[16px] font-semibold leading-tight text-[#F5DC97]">
-              Produto lacrado de fábrica
-            </p>
-            <p className="mt-1 text-[12.5px] leading-relaxed text-zinc-300">{sealedSubtitle}</p>
+            <p className="text-[16px] font-semibold leading-tight text-[#F5DC97]">{headerLabel}</p>
+            <p className="mt-1 text-[12.5px] leading-relaxed text-zinc-300">{headerDescription}</p>
           </div>
         </div>
-        <ul className="relative mt-4 grid gap-2.5 sm:grid-cols-2">
-          {trustPoints.map((item) => {
-            const Icon = item.icon
-            return (
-              <li
-                key={item.label}
-                className="flex items-start gap-2.5 rounded-2xl border border-white/10 bg-black/20 px-3 py-3"
-              >
+        {productBadges.length > 0 || packagingBadge ? (
+          <ul className="relative mt-4 grid gap-2.5 sm:grid-cols-2">
+            {packagingBadge ? (
+              <li className="flex items-start gap-2.5 rounded-2xl border border-white/10 bg-black/20 px-3 py-3">
                 <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#D6A84F]/12 text-[#F2D88A] ring-1 ring-[#D6A84F]/20">
-                  <Icon className="h-4 w-4" weight="duotone" />
+                  <Package className="h-4 w-4" weight="duotone" />
                 </span>
                 <span className="min-w-0">
-                  <span className="block text-[12.5px] font-semibold leading-tight text-zinc-100">{item.label}</span>
-                  <span className="mt-0.5 block text-[11.5px] leading-snug text-zinc-400">{item.description}</span>
+                  <span className="block text-[12.5px] font-semibold leading-tight text-zinc-100">{packagingBadge.label}</span>
+                  <span className="mt-0.5 block text-[11.5px] leading-snug text-zinc-400">{packagingBadge.description}</span>
                 </span>
               </li>
-            )
-          })}
-        </ul>
+            ) : null}
+            {productBadges.map((badge) => {
+              const Icon = BADGE_ICON_MAP[badge.iconKey] ?? CheckCircle
+              return (
+                <li
+                  key={badge.id}
+                  className="flex items-start gap-2.5 rounded-2xl border border-white/10 bg-black/20 px-3 py-3"
+                >
+                  <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#D6A84F]/12 text-[#F2D88A] ring-1 ring-[#D6A84F]/20">
+                    <Icon className="h-4 w-4" weight="duotone" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[12.5px] font-semibold leading-tight text-zinc-100">{badge.label}</span>
+                    {badge.description ? (
+                      <span className="mt-0.5 block text-[11.5px] leading-snug text-zinc-400">{badge.description}</span>
+                    ) : null}
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
+        ) : null}
       </div>
     )
   }
