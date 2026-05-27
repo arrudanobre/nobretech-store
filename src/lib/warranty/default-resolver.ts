@@ -1,21 +1,32 @@
 // Pure central resolver for default sale-item warranty.
-// Decides between manufacturer / store contractual / none based on
-// brand + category + condition + productType + display name. The
-// integration layer maps the decision to a warranty_policies row.
+// Consumes ONLY structured classification data: product_type, brand,
+// categorySlug, subcategorySlug, accessoryClass, condition. Never
+// inspects display name, title, or free text. When every structured
+// field is null, returns 'none' with a missing_product_classification
+// warning so the integration layer can log it.
 
 import type { WarrantyCalculationMode, WarrantyNature } from "./types"
 
+export type WarrantyAccessoryClass = "durable" | "non_durable"
+
 export type WarrantyItemContext = {
   brand: string | null
-  category: string | null
+  categorySlug: string | null
+  subcategorySlug: string | null
+  accessoryClass: WarrantyAccessoryClass | null
+  productType: "device" | "accessory" | "service" | "other" | "warranty" | "bundle" | null
   condition: "sealed" | "seminovo" | "used" | "open_box" | null
-  productType: "device" | "accessory" | "service" | "other" | null
   itemRole: "main" | "upsell" | "gift" | "accessory" | "service" | "other"
-  displayName: string | null
   isGift: boolean
+  inventoryItemId: string | null
 }
 
 export type WarrantyDecisionSource = "manufacturer" | "item" | "none"
+
+export type WarrantyMissingClassificationWarning = {
+  event: "missing_product_classification"
+  inventoryItemId: string | null
+}
 
 export type WarrantyDecision =
   | {
@@ -35,107 +46,76 @@ export type WarrantyDecision =
       durationMonths: number
       ruleId: "apple_used_6m" | "device_used_6m" | "durable_accessory_3m"
     }
-  | { source: "none"; reason: string; ruleId: "non_durable_accessory" | "gift" | "fallback" }
+  | {
+      source: "none"
+      reason: string
+      ruleId:
+        | "non_durable_accessory"
+        | "gift"
+        | "unclassified_accessory"
+        | "missing_classification"
+        | "fallback"
+      warning?: WarrantyMissingClassificationWarning
+    }
 
-const APPLE_BRAND_RE = /(^|\s)apple($|\s)/i
-const APPLE_CATEGORIES = [
-  "iphone",
-  "ipad",
-  "macbook",
-  "apple watch",
-  "applewatch",
-  "watch",
-  "airpods",
-]
+const APPLE_BRAND_CANONICAL = "apple"
+const APPLE_DEVICE_CATEGORY_SLUGS = new Set(["iphone", "ipad", "macbook", "applewatch", "airpods"])
 
-const DURABLE_ACCESSORY_KEYWORDS = [
-  "stylus",
-  "caneta",
-  "fone",
-  "fones",
-  "headphone",
-  "earphone",
-  "earbud",
-  "carregador",
-  "charger",
-  "cabo",
-  "cable",
-  "powerbank",
-  "power bank",
-  "bateria externa",
-  "caixa de som",
-  "speaker",
-  "soundbar",
-  "teclado",
-  "keyboard",
-  "mouse",
-  "trackpad",
-  "magic mouse",
-  "magic keyboard",
-  "hub",
-  "dock",
-  "adaptador",
-]
-
-const NON_DURABLE_KEYWORDS = [
-  "capa",
-  "case",
-  "cover",
-  "pelicula",
-  "película",
-  "screen protector",
-  "suporte",
-  "holder",
-  "stand",
-  "porta",
-  "bolsa",
-  "estojo",
-  "pochete",
-]
-
-function norm(value: string | null | undefined): string {
-  if (!value) return ""
-  return value
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
+function normalizeBrand(brand: string | null): string | null {
+  if (!brand) return null
+  const trimmed = brand.trim().toLowerCase()
+  return trimmed || null
 }
 
 function isAppleBrand(brand: string | null): boolean {
-  if (!brand) return false
-  return APPLE_BRAND_RE.test(brand)
+  return normalizeBrand(brand) === APPLE_BRAND_CANONICAL
 }
 
-function matchesAppleCategory(category: string | null, displayName: string | null): boolean {
-  const hay = `${norm(category)} ${norm(displayName)}`.trim()
-  if (!hay) return false
-  return APPLE_CATEGORIES.some((c) => hay.includes(c))
+function isAppleDeviceCategory(categorySlug: string | null): boolean {
+  if (!categorySlug) return false
+  return APPLE_DEVICE_CATEGORY_SLUGS.has(categorySlug.toLowerCase())
 }
 
 function isAppleProduct(ctx: WarrantyItemContext): boolean {
   if (isAppleBrand(ctx.brand)) return true
-  // Brand may not be populated for items materialized from product names.
-  return matchesAppleCategory(ctx.category, ctx.displayName)
-}
-
-function matchKeywords(ctx: WarrantyItemContext, keywords: string[]): boolean {
-  const hay = `${norm(ctx.category)} ${norm(ctx.displayName)}`
-  if (!hay) return false
-  return keywords.some((k) => hay.includes(k))
+  // Brand may be unset on catalog rows seeded before brand became mandatory.
+  // The category slug is still a structured controlled value (FK-equivalent
+  // to product_categories.slug), so we accept it as a secondary signal.
+  return isAppleDeviceCategory(ctx.categorySlug)
 }
 
 function isUsedCondition(condition: WarrantyItemContext["condition"]): boolean {
   return condition === "used" || condition === "open_box" || condition === "seminovo"
 }
 
+function isStructuredClassificationEmpty(ctx: WarrantyItemContext): boolean {
+  return (
+    ctx.productType == null &&
+    ctx.categorySlug == null &&
+    ctx.subcategorySlug == null &&
+    ctx.accessoryClass == null &&
+    ctx.brand == null &&
+    ctx.condition == null
+  )
+}
+
 export function resolveDefaultWarranty(ctx: WarrantyItemContext): WarrantyDecision {
-  // Gifts never carry contractual or manufacturer warranty by default.
+  // 0. Brindes nunca recebem garantia automática.
   if (ctx.isGift) {
     return { source: "none", reason: "Brinde sem garantia automatica.", ruleId: "gift" }
   }
 
-  // 1. Apple sealed device → manufacturer 12 months
+  // 1. Sem nenhum dado estruturado disponível → warning + skip.
+  if (isStructuredClassificationEmpty(ctx)) {
+    return {
+      source: "none",
+      reason: "Produto sem classificacao estruturada (product_type/category/subcategory/brand).",
+      ruleId: "missing_classification",
+      warning: { event: "missing_product_classification", inventoryItemId: ctx.inventoryItemId },
+    }
+  }
+
+  // 2. Apple sealed device → fabricante 12 meses.
   if (ctx.productType === "device" && ctx.condition === "sealed" && isAppleProduct(ctx)) {
     return {
       source: "manufacturer",
@@ -148,7 +128,7 @@ export function resolveDefaultWarranty(ctx: WarrantyItemContext): WarrantyDecisi
     }
   }
 
-  // 2. Apple used / open_box / seminovo → store contractual 6 months
+  // 3. Apple usado/seminovo/open_box → contratual loja 6 meses.
   if (ctx.productType === "device" && isUsedCondition(ctx.condition) && isAppleProduct(ctx)) {
     return {
       source: "item",
@@ -160,8 +140,7 @@ export function resolveDefaultWarranty(ctx: WarrantyItemContext): WarrantyDecisi
     }
   }
 
-  // 3. Generic device used/open_box (non-Apple) → store contractual 6 months
-  //    Preserves behaviour for non-Apple seminovos that exist in stock.
+  // 4. Device não-Apple usado/seminovo → contratual loja 6 meses.
   if (ctx.productType === "device" && isUsedCondition(ctx.condition)) {
     return {
       source: "item",
@@ -173,28 +152,34 @@ export function resolveDefaultWarranty(ctx: WarrantyItemContext): WarrantyDecisi
     }
   }
 
-  // 4. Non-durable accessories → no warranty
-  //    Checked before durable to avoid false positives ("capa" inside a longer name).
-  if (matchKeywords(ctx, NON_DURABLE_KEYWORDS)) {
+  // 5. Acessórios — exclusivamente via accessory_class estruturado.
+  if (ctx.productType === "accessory") {
+    if (ctx.accessoryClass === "non_durable") {
+      return {
+        source: "none",
+        reason: "Acessorio nao duravel sem cobertura contratual padrao.",
+        ruleId: "non_durable_accessory",
+      }
+    }
+    if (ctx.accessoryClass === "durable") {
+      return {
+        source: "item",
+        label: "Garantia contratual da loja",
+        warrantyNature: "contractual",
+        calculationMode: "calendar_months",
+        durationMonths: 3,
+        ruleId: "durable_accessory_3m",
+      }
+    }
+    // accessory_class IS NULL — subcategoria sem classificação.
     return {
       source: "none",
-      reason: "Acessorio sem cobertura contratual padrao (capa/pelicula/suporte).",
-      ruleId: "non_durable_accessory",
+      reason: "Acessorio sem classificacao (accessory_class nao configurado).",
+      ruleId: "unclassified_accessory",
+      warning: { event: "missing_product_classification", inventoryItemId: ctx.inventoryItemId },
     }
   }
 
-  // 5. Durable accessories → store contractual 3 months
-  if (matchKeywords(ctx, DURABLE_ACCESSORY_KEYWORDS)) {
-    return {
-      source: "item",
-      label: "Garantia contratual da loja",
-      warrantyNature: "contractual",
-      calculationMode: "calendar_months",
-      durationMonths: 3,
-      ruleId: "durable_accessory_3m",
-    }
-  }
-
-  // 6. Fallback — no regra aplicável.
+  // 6. Nenhuma regra aplicável.
   return { source: "none", reason: "Sem regra automatica aplicavel.", ruleId: "fallback" }
 }

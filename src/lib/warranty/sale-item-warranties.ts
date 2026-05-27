@@ -426,11 +426,12 @@ type EligibleSaleItemRow = {
   item_role: "main" | "upsell" | "gift" | "accessory" | "service" | "other"
   item_type: "device" | "accessory" | "service" | "other"
   is_gift: boolean
-  display_name: string | null
   inv_grade: string | null
   pc_brand: string | null
-  pc_category: string | null
-  inv_category: string | null
+  category_slug: string | null
+  subcategory_slug: string | null
+  accessory_class: "durable" | "non_durable" | null
+  inv_product_type: "device" | "accessory" | "service" | "warranty" | "bundle" | null
 }
 
 async function fetchSaleItemsForWarranty(
@@ -438,6 +439,9 @@ async function fetchSaleItemsForWarranty(
   companyId: string,
   saleId: string
 ): Promise<EligibleSaleItemRow[]> {
+  // Structured-only join: product_catalog.category matches product_categories.slug,
+  // and inventory.subcategory_name_snapshot matches product_subcategories.normalized_name.
+  // No free-text parsing is performed by the resolver.
   const result = await client.query<EligibleSaleItemRow>(
     `SELECT
        si.id,
@@ -448,14 +452,26 @@ async function fetchSaleItemsForWarranty(
        si.item_role,
        si.item_type,
        si.is_gift,
-       si.display_name,
-       inv.grade            AS inv_grade,
-       pc.brand             AS pc_brand,
-       pc.category          AS pc_category,
-       inv.category_name_snapshot AS inv_category
+       inv.grade        AS inv_grade,
+       inv.product_type AS inv_product_type,
+       pc.brand         AS pc_brand,
+       cat.slug         AS category_slug,
+       sub.slug         AS subcategory_slug,
+       sub.accessory_class
      FROM sale_items si
      LEFT JOIN inventory inv      ON inv.id = si.inventory_item_id
      LEFT JOIN product_catalog pc ON pc.id = inv.catalog_id
+     LEFT JOIN product_categories cat
+       ON cat.company_id = si.company_id
+      AND cat.is_active = TRUE
+      AND cat.deleted_at IS NULL
+      AND cat.slug = pc.category
+     LEFT JOIN product_subcategories sub
+       ON sub.company_id = si.company_id
+      AND sub.is_active = TRUE
+      AND sub.deleted_at IS NULL
+      AND sub.category_id = cat.id
+      AND sub.normalized_name = LOWER(inv.subcategory_name_snapshot)
      WHERE si.company_id = $1 AND si.sale_id = $2 AND si.active = TRUE
      ORDER BY si.sort_order ASC, si.created_at ASC`,
     [companyId, saleId]
@@ -668,15 +684,20 @@ export async function applySaleWarranties(
     } else {
       const decision = resolveDefaultWarranty({
         brand: item.pc_brand,
-        category: item.pc_category ?? item.inv_category,
+        categorySlug: item.category_slug,
+        subcategorySlug: item.subcategory_slug,
+        accessoryClass: item.accessory_class,
+        productType: item.inv_product_type ?? item.item_type,
         condition: getConditionFromGradeLocal(item.inv_grade),
-        productType: item.item_type,
         itemRole: item.item_role,
-        displayName: item.display_name,
         isGift: item.is_gift,
+        inventoryItemId: item.inventory_item_id,
       })
 
       if (decision.source === "none") {
+        if (decision.warning) {
+          console.warn(JSON.stringify({ ...decision.warning, saleItemId: item.id, ruleId: decision.ruleId }))
+        }
         skipped.push({ saleItemId: item.id, reason: decision.reason })
         continue
       }

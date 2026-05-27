@@ -1,125 +1,133 @@
-# Garantia automática por item — resolver central
+# Garantia automática por item — resolver central (estruturado)
 
-## Problema
+## Princípio
 
-Antes desta fase, a venda atribuía a policy default Nobretech (contratual 6m) para qualquer item principal `device`, ignorando:
+`resolveDefaultWarranty(ctx)` consome **exclusivamente** dados estruturados do catálogo:
 
-- **iPad/iPhone lacrado Apple** → deveria ser `Garantia Apple` 12 meses (manufacturer), não contratual da loja.
-- **Acessórios duráveis** (caneta stylus, fones, carregadores, cabos, powerbanks etc.) → deveriam receber contratual 3 meses, ficavam sem garantia.
-- **Acessórios não duráveis** (capa, película, suporte) → corretamente sem garantia.
+- `productType` ← `inventory.product_type` (enum: device/accessory/service/warranty/bundle)
+- `brand` ← `product_catalog.brand` (string canônica)
+- `categorySlug` ← `product_categories.slug` (JOIN via `product_catalog.category`)
+- `subcategorySlug` ← `product_subcategories.slug` (JOIN via `inventory.subcategory_name_snapshot` = `product_subcategories.normalized_name`)
+- `accessoryClass` ← `product_subcategories.accessory_class` (enum: `durable`/`non_durable`)
+- `condition` ← derivado de `inventory.grade` (Lacrado→sealed, A+/A/A-→seminovo, B+/B→used)
 
-## Solução
+**Não consome**: `product.name`, `displayName`, `title`, regex de texto, parsing de string livre.
 
-Resolver central puro em `src/lib/warranty/default-resolver.ts`:
+## Regras (ordem)
+
+| # | Condição | Decisão | Rule ID |
+|---|---|---|---|
+| 0 | `isGift = true` | none | `gift` |
+| 1 | Todos os campos estruturados NULL | none + warning estruturado | `missing_classification` |
+| 2 | device + sealed + Apple | manufacturer 12m | `apple_sealed_12m` |
+| 3 | device + (used/seminovo/open_box) + Apple | item contratual 6m | `apple_used_6m` |
+| 4 | device + (used/seminovo/open_box) + non-Apple | item contratual 6m | `device_used_6m` |
+| 5 | accessory + `accessory_class='non_durable'` | none | `non_durable_accessory` |
+| 6 | accessory + `accessory_class='durable'` | item contratual 3m | `durable_accessory_3m` |
+| 7 | accessory + `accessory_class IS NULL` | none + warning estruturado | `unclassified_accessory` |
+| 8 | resto | none | `fallback` |
+
+Detecção Apple: `brand` canonical lowercased === `'apple'` OR `categorySlug` ∈ `{iphone, ipad, macbook, applewatch, airpods}`. Comparação por string exata — nunca regex de free text.
+
+## Warning estruturado
+
+Quando o item não tem classificação suficiente (regras 1 e 7), o resolver retorna:
 
 ```ts
-resolveDefaultWarranty(ctx): WarrantyDecision
+{
+  source: "none",
+  ruleId: "missing_classification" | "unclassified_accessory",
+  warning: { event: "missing_product_classification", inventoryItemId },
+}
 ```
 
-Decide entre `manufacturer` / `item` (contratual) / `none` com base em:
+`applySaleWarranties` chama `console.warn(JSON.stringify({ ...warning, saleItemId, ruleId }))` para o stream de logs ingerir. Sem mascarar com fallback inferido por texto.
 
-- `brand` (de `product_catalog.brand`)
-- `category` (de `product_catalog.category` ou `inventory.category_name_snapshot`)
-- `condition` (derivado de `inventory.grade`: Lacrado→sealed, A+/A/A-→seminovo, B+/B→used)
-- `productType` (`sale_items.item_type`)
-- `displayName`
-- `isGift`
+## Migrações
 
-## Regras
+### `warranty_apple_accessory_policies.sql`
+- INSERT `Garantia Apple - Lacrado` (manufacturer, calendar_months, 12m, device/sealed, applies_to_sale=TRUE)
+- INSERT `Garantia Loja - Acessorios` (contractual, calendar_months, 3m, accessory, applies_to_sale=TRUE)
+- UPDATE `applies_to_sale=TRUE` em policies contratuais Nobretech existentes (3m + 6m)
 
-| Ordem | Condição | Decisão |
-|---|---|---|
-| 0 | `isGift = true` | `none` (rule `gift`) |
-| 1 | device + sealed + Apple | `manufacturer` 12m (`apple_sealed_12m`) |
-| 2 | device + (used/open_box/seminovo) + Apple | `item` 6m (`apple_used_6m`) |
-| 3 | device + (used/open_box/seminovo) + non-Apple | `item` 6m (`device_used_6m`) |
-| 4 | displayName/category casa "capa, película, suporte, case, stand, holder, bolsa, estojo, pochete" | `none` (`non_durable_accessory`) |
-| 5 | displayName/category casa "stylus, caneta, fone, carregador, cabo, powerbank, caixa de som, teclado, mouse, hub, dock, adaptador" | `item` 3m (`durable_accessory_3m`) |
-| 6 | resto | `none` (`fallback`) |
+### `warranty_accessory_classification.sql`
+- ALTER TABLE `product_subcategories` ADD COLUMN `accessory_class` TEXT
+- CHECK accessory_class ∈ {durable, non_durable}
+- INDEX parcial `(company_id, accessory_class) WHERE NOT NULL AND deleted_at IS NULL`
+- Backfill Nobretech: `Apple Pencil%` → durable; `Case %`/`Capa%`/`Película%`/`Suporte%` → non_durable
 
-Detecção Apple: brand regex `apple` (word boundary) **OU** category/displayName contém `iphone|ipad|macbook|apple watch|airpods`. Cobre item materializado de upsell sem brand setada.
-
-Verificação de não duráveis antes de duráveis evita falso positivo (e.g. "capa do fone" → não durável).
+Idempotente: `ADD COLUMN IF NOT EXISTS`, CHECK via `pg_constraint`, UPDATE `WHERE accessory_class IS NULL`.
 
 ## Integração
 
-`applySaleWarranties` em `src/lib/warranty/sale-item-warranties.ts`:
+`applySaleWarranties` em `sale-item-warranties.ts`:
 
-1. Query enriquecida com `JOIN inventory` + `JOIN product_catalog` retorna brand, category, grade por sale_item.
-2. Para cada item sem `warrantySelections` explícita:
-   - Constrói `WarrantyItemContext`.
-   - Chama `resolveDefaultWarranty(ctx)`.
-   - Se `source='none'`: skipa com `reason` do resolver.
-   - Caso contrário: busca policy via `findPolicyForDecision(warrantyNature, durationMonths)`.
-3. Cria `sale_item_warranties` com snapshot histórico imutável da policy + termos.
+```sql
+LEFT JOIN inventory inv           ON inv.id = si.inventory_item_id
+LEFT JOIN product_catalog pc      ON pc.id = inv.catalog_id
+LEFT JOIN product_categories cat
+  ON cat.company_id = si.company_id AND cat.is_active = TRUE
+ AND cat.deleted_at IS NULL AND cat.slug = pc.category
+LEFT JOIN product_subcategories sub
+  ON sub.company_id = si.company_id AND sub.is_active = TRUE
+ AND sub.deleted_at IS NULL AND sub.category_id = cat.id
+ AND sub.normalized_name = LOWER(inv.subcategory_name_snapshot)
+```
 
-`findPolicyForDecision` query: `warranty_policies WHERE company_id=$1 AND active AND applies_to_sale AND warranty_nature=$2 AND calculation_mode='calendar_months' AND default_months=$3 ORDER BY is_default DESC, priority ASC LIMIT 1`.
+Resultado: cada sale_item recebe `category_slug`, `subcategory_slug`, `accessory_class`, `brand`, `condition` estruturados. Resolver decide; `findPolicyForDecision(nature, months)` busca policy ativa por `warranty_nature + calculation_mode='calendar_months' + default_months`.
 
-## Migration
+## Smoke validado (estruturado)
 
-`migrations/warranty_apple_accessory_policies.sql` (idempotente):
+12/12 cenários puros:
 
-1. Insere `Garantia Apple - Lacrado` (manufacturer, calendar_months, 12m, device/sealed, `applies_to_sale=TRUE`).
-2. Insere `Garantia Loja - Acessorios` (contractual, calendar_months, 3m, accessory/NULL, `applies_to_sale=TRUE`).
-3. UPDATE `applies_to_sale=TRUE` nas policies contratuais Nobretech 3m e 6m existentes (Phase 2A seedou com FALSE).
+| Caso | Input estruturado | Esperado |
+|---|---|---|
+| iPhone (categorySlug=iphone) sealed Apple | brand=Apple, categorySlug=iphone, condition=sealed | manufacturer 12m ✅ |
+| iPad (categorySlug=ipad) sealed Apple | brand=Apple, categorySlug=ipad, condition=sealed | manufacturer 12m ✅ |
+| Stylus (accessory_class=durable) | productType=accessory, accessoryClass=durable | item 3m ✅ |
+| Capa (accessory_class=non_durable) | productType=accessory, accessoryClass=non_durable | none ✅ |
+| Apple Pencil (subcategory=apple-pencil, durable) | productType=accessory, brand=Apple, accessoryClass=durable | item 3m ✅ |
+| Mac Mini (categorySlug=macbook) sealed | categorySlug=macbook, condition=sealed | manufacturer 12m ✅ |
+| iPhone seminovo Apple | grade=A, brand=Apple | item 6m ✅ |
+| Apple Watch lacrado por categorySlug | brand=null, categorySlug=applewatch, condition=sealed | manufacturer 12m ✅ |
+| Accessory sem accessory_class | accessoryClass=null, productType=accessory | none + warning ✅ |
+| Brinde | isGift=true | none ✅ |
+| Tudo NULL | todos campos null | none + warning ✅ |
+| Device used non-Apple | brand=Samsung, productType=device, condition=used | item 6m ✅ |
 
-Idempotente: `WHERE NOT EXISTS` por nome no INSERT, `WHERE applies_to_sale = FALSE` no UPDATE.
-
-## Smoke validado
-
-`scripts/_smoke-warranty-resolver.ts` (puro, removido após validação): 16/16 cenários:
-
-- iPhone/iPad/Apple Watch lacrado → manufacturer 12m
-- iPad lacrado sem brand → manufacturer 12m (cobertura por category)
-- iPhone seminovo (A+/A/A-) → contratual 6m
-- iPhone usado (B+/B) → contratual 6m
-- Stylus, carregador, fone, cabo → contratual 3m
-- Capa, película, suporte → none
-- Brinde de qualquer tipo → none
-- Apple Watch lacrado → manufacturer 12m
-- Samsung usado → contratual 6m
-- Item desconhecido → none
-
-`scripts/_smoke-warranty-apply.ts` (integração, removido): venda real com 1 main device + 3 brindes → 1 garantia criada (contratual 6m para iPhone seminovo), 3 skip (brindes).
-
-## Portal
-
-`/compra-verificada/[token]` já consome `purchaseItems[*].warranty` (vindo de `sale_item_warranties`). Distingue:
-
-- `source='manufacturer'` → label "Garantia Apple" + período calendar_months
-- `source='contractual'` → label da loja
-- `source='none'` → "Sem garantia contratual da loja vinculada a este item."
-
-Nenhuma alteração no portal nesta fase. Sale_item_warranties novas vão refletir corretamente.
-
-## Restrições preservadas
-
-- Não hardcoda "Nobretech" no resolver (label "Garantia Apple" / "Garantia contratual da loja" — neutros).
-- Não altera financeiro, PIN/token/LGPD do portal, ORION, catálogo público, readiness.
-- Fallback para vendas antigas sem `sale_item_warranties` inalterado — portal usa `sales.warranty_*` legado quando vazio.
-- Resolver é função pura, testável isolado. Integração ROLLBACK em falha.
-
-## Próximos passos
-
-1. **UI editável per-item** no wizard de venda (Fonte: Fabricante/Loja/Sem; Meses: input). Hoje só item principal tem selector visual; adicionais usam resolver automático.
-2. **Tela admin** para editar `warranty_policies` (CRUD).
-3. **Backfill controlado** de vendas antigas (fora de escopo desta fase).
-4. **Audit log domain** para edições de warranty_policies.
+Integração apply local: venda real com iPhone 14 grade A → `Garantia Nobretech - Seminovo` contratual 6m (correto). Brinde skipado.
 
 ## Validações executadas
 
 ```
-psql -f migrations/warranty_apple_accessory_policies.sql     apply + idempotência OK
-git diff --check                                              limpo
-npx tsc --noEmit --pretty false                               clean
-npx eslint <2 arquivos lib>                                   clean
-rm -rf .next && npm run build                                 verde
-npm run test:stock-sale:local                                 PASSOU
-resolver smoke (16 casos)                                     16/16
-apply integration smoke                                       1 criada / 3 skip esperados
-grep hardcodes                                                apenas comment de migration
+psql -f migrations/warranty_apple_accessory_policies.sql    OK + idempotente
+psql -f migrations/warranty_accessory_classification.sql    OK + idempotente
+git diff --check                                            limpo
+npx tsc --noEmit --pretty false                             clean
+npx eslint <2 lib>                                          clean
+rm -rf .next && npm run build                               verde
+npm run test:stock-sale:local                               PASSOU
+resolver smoke (12 estruturados)                            12/12
+apply integration                                           OK
+grep displayName/regex/free-text parsing no resolver        zero
 ```
 
-## Pronto para deploy controlado?
+## Próximos passos
 
-Sim. Migration aditiva idempotente, resolver puro, fallback seguro, comportamento legado preservado.
+1. **UI admin** para definir `accessory_class` em `product_subcategories` (CRUD).
+2. **UI editável per-item** no wizard de venda (Fonte / Meses).
+3. **Backfill controlado** de subcategorias acessórias para outras empresas.
+4. **Audit log** para mudanças em `accessory_class`.
+
+## Restrições preservadas
+
+- Resolver puro 100% estruturado, sem text parsing.
+- Warning estruturado quando classificação ausente — sem fallback silencioso.
+- Nunca hardcoda "Nobretech" (labels neutros: "Garantia Apple" / "Garantia contratual da loja").
+- Migration aditiva idempotente.
+- `sales.warranty_*` legado preservado para fallback do portal em vendas antigas.
+- Não toca finance, PIN/token/LGPD, ORION, catálogo público, readiness.
+
+## Pronto para deploy?
+
+Sim. Spec atendida: resolver consome exclusivamente product_type/brand/categorySlug/subcategorySlug/accessoryClass/condition. Migrations aditivas. Smoke 12/12.
