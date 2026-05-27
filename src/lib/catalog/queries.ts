@@ -13,6 +13,11 @@ import {
 } from "@/lib/catalog/pricing"
 import { loadCatalogPaymentSettings } from "@/lib/catalog/payment-settings"
 import { getCatalogWarrantyLabel } from "@/lib/catalog/warranty"
+import {
+  getCatalogPublicationPolicies,
+  pickPolicyForCriteria,
+  type CatalogPublicationPolicy,
+} from "@/lib/catalog/policies"
 import { computeOverallScoreFromReview } from "@/lib/catalog/readiness"
 import { defaultMessageForProduct } from "@/lib/catalog/whatsapp"
 import type {
@@ -487,6 +492,7 @@ function mapRowToProduct(
   included: IncludedItemRow[],
   paymentSettings: CatalogPaymentSettings,
   brandShortName: string | null,
+  policies: CatalogPublicationPolicy[],
 ): PublicCatalogProduct | null {
   if (!row.publication_id || !row.is_published) return null
 
@@ -504,16 +510,25 @@ function mapRowToProduct(
   const subtitleParts = [storage, color].filter(Boolean) as string[]
   const subtitle = subtitleParts.length > 0 ? subtitleParts.join(" • ") : undefined
 
-  const price = priceToNumber(row.public_price)
-  if (price <= 0) return null
+  // Resolve the publication policy for this row (device + sealed/used). Falls
+  // back to the legacy hardcoded guardrails when no policy is configured.
+  const policy = pickPolicyForCriteria(policies, {
+    productType: "device",
+    condition: isSealed ? "sealed" : "used",
+  })
 
-  // Business rule guardrails — never publish seminovo without review + items + real photo.
+  const requiresPublicPrice = policy ? policy.requiresPublicPrice : true
+  const requiresRealPhoto = policy ? policy.requiresRealPhoto : !isSealed
+  const requiresReview = policy ? policy.requiresReview : !isSealed
+  const requiresIncludedItems = policy ? policy.requiresIncludedItems : !isSealed
+
+  const price = priceToNumber(row.public_price)
+  if (requiresPublicPrice && price <= 0) return null
+
   const hasRealPhotos = images.some((image) => image.source === "uploaded")
-  if (!isSealed) {
-    if (!hasRealPhotos) return null
-    if (!row.review_id) return null
-    if (included.length === 0) return null
-  }
+  if (requiresRealPhoto && !hasRealPhotos) return null
+  if (requiresReview && !row.review_id) return null
+  if (requiresIncludedItems && included.length === 0) return null
 
   const overall = isSealed ? null : recomputeOverallFromRow(row) ?? priceToNumberOrNull(row.overall_score)
   const score = isSealed ? 10 : overall
@@ -527,7 +542,7 @@ function mapRowToProduct(
   })
 
   const warrantyLabel = getCatalogWarrantyLabel(condition, brandShortName)
-  const availabilityLabel = "Pronta entrega"
+  const availabilityLabel = policy?.defaultAvailabilityLabel ?? "Pronta entrega"
 
   const finalImages: PublicCatalogImage[] =
     images.length > 0
@@ -619,22 +634,47 @@ export type PublicCatalogQueryOptions = {
   brandShortName?: string | null
 }
 
+// Defaults when no policy is configured for the company. Mirror the legacy
+// hardcoded behaviour so a missing policy never silently changes the public list.
+const LEGACY_PUBLIC_STATUSES = ["active", "in_stock"] as const
+const LEGACY_PUBLIC_LIMIT = 200
+
+function resolveCompanyDefaultPolicy(policies: CatalogPublicationPolicy[]): CatalogPublicationPolicy | null {
+  return policies.find((p) => p.productType === null && p.condition === null) ?? null
+}
+
+function resolveAllowedStatusesForList(policies: CatalogPublicationPolicy[]): string[] {
+  const defaultPolicy = resolveCompanyDefaultPolicy(policies)
+  if (defaultPolicy) return [...defaultPolicy.allowedInventoryStatuses]
+  return [...LEGACY_PUBLIC_STATUSES]
+}
+
+function resolveMaxProductsForList(policies: CatalogPublicationPolicy[]): number {
+  const defaultPolicy = resolveCompanyDefaultPolicy(policies)
+  if (defaultPolicy && defaultPolicy.maxProducts != null) return defaultPolicy.maxProducts
+  return LEGACY_PUBLIC_LIMIT
+}
+
 export async function listPublicCatalog(
   options: PublicCatalogQueryOptions = {}
 ): Promise<PublicCatalogProduct[]> {
   const companyId = await resolveCatalogCompanyId()
   if (!companyId) return []
 
+  const policies = await getCatalogPublicationPolicies(companyId)
+  const allowedStatuses = resolveAllowedStatusesForList(policies)
+  const maxProducts = resolveMaxProductsForList(policies)
+
   const rowsResult = await pool.query<InventoryRow>(
     `
       ${SELECT_INVENTORY_BASE}
       WHERE i.company_id = $1::uuid
         AND p.is_published = TRUE
-        AND i.status IN ('active', 'in_stock')
+        AND i.status = ANY($2::text[])
       ORDER BY p.published_at DESC NULLS LAST, p.updated_at DESC
-      LIMIT 200
+      LIMIT $3
     `,
-    [companyId],
+    [companyId, allowedStatuses, maxProducts],
   )
 
   const rows = rowsResult.rows
@@ -654,6 +694,7 @@ export async function listPublicCatalog(
       itemsByInv.get(row.id) || [],
       paymentSettings,
       brandShortName,
+      policies,
     )
     if (product) products.push(product)
   }
@@ -670,16 +711,19 @@ export async function getPublicProductBySlug(
   const companyId = await resolveCatalogCompanyId()
   if (!companyId) return null
 
+  const policies = await getCatalogPublicationPolicies(companyId)
+  const allowedStatuses = resolveAllowedStatusesForList(policies)
+
   const rowsResult = await pool.query<InventoryRow>(
     `
       ${SELECT_INVENTORY_BASE}
       WHERE i.company_id = $1::uuid
         AND p.is_published = TRUE
-        AND i.status IN ('active', 'in_stock')
-        AND REPLACE(i.id::text, '-', '') ILIKE $2 || '%'
+        AND i.status = ANY($2::text[])
+        AND REPLACE(i.id::text, '-', '') ILIKE $3 || '%'
       LIMIT 1
     `,
-    [companyId, parsed.idPrefix],
+    [companyId, allowedStatuses, parsed.idPrefix],
   )
 
   const row = rowsResult.rows[0]
@@ -696,5 +740,6 @@ export async function getPublicProductBySlug(
     itemsByInv.get(row.id) || [],
     paymentSettings,
     options.brandShortName ?? null,
+    policies,
   )
 }

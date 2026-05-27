@@ -1,6 +1,12 @@
 import { pool } from "@/lib/db"
 import { getCatalogPublicationReadiness } from "@/lib/catalog/readiness"
 import { getConditionFromGrade } from "@/lib/catalog/score"
+import {
+  conditionFromProductKind,
+  getCatalogPublicationPolicies,
+  getCatalogReadinessRulesForPolicies,
+  pickPolicyForCriteria,
+} from "@/lib/catalog/policies"
 import type {
   CatalogAdminItem,
   CatalogAdminSummary,
@@ -197,13 +203,16 @@ export async function loadAdminCatalog(companyId: string): Promise<{
   items: CatalogAdminItem[]
   summary: CatalogAdminSummary
 }> {
-  const [inventoryResult, publicationsResult, reviewsResult, itemsResult, imagesResult] = await Promise.all([
+  const [inventoryResult, publicationsResult, reviewsResult, itemsResult, imagesResult, policies] = await Promise.all([
     pool.query<InventoryRow>(INVENTORY_QUERY, [companyId]),
     pool.query(PUBLICATIONS_QUERY, [companyId]),
     pool.query(REVIEWS_QUERY, [companyId]),
     pool.query(ITEMS_QUERY, [companyId]),
     pool.query(IMAGES_QUERY, [companyId]),
+    getCatalogPublicationPolicies(companyId),
   ])
+
+  const rulesByPolicy = await getCatalogReadinessRulesForPolicies(policies.map((p) => p.id))
 
   const publicationsByInv = new Map<string, CatalogPublicationRecord>()
   for (const row of publicationsResult.rows) {
@@ -248,6 +257,12 @@ export async function loadAdminCatalog(companyId: string): Promise<{
     const category = row.category_db || row.category_snapshot
     const catLabel = categoryLabel(category, row.category_snapshot)
 
+    const policy = pickPolicyForCriteria(policies, {
+      productType: "device",
+      condition: conditionFromProductKind(condition),
+    })
+    const rules = policy ? rulesByPolicy.get(policy.id) ?? [] : []
+
     const readiness = getCatalogPublicationReadiness({
       productKind: condition,
       inventoryStatus: row.status,
@@ -256,6 +271,8 @@ export async function loadAdminCatalog(companyId: string): Promise<{
       includedItems,
       images,
       hasRealPhotos,
+      policy,
+      rules,
     })
 
     return {

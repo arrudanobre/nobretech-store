@@ -6,6 +6,11 @@ import type {
   CatalogIncludedItemRecord,
   CatalogImageRecord,
 } from "@/lib/catalog/admin-types"
+import type {
+  CatalogPublicationPolicy,
+  CatalogReadinessRule,
+} from "@/lib/catalog/policies"
+import { compareThreshold } from "@/lib/catalog/policies"
 
 type Input = {
   productKind: CatalogProductKind
@@ -15,20 +20,97 @@ type Input = {
   includedItems: CatalogIncludedItemRecord[]
   images: CatalogImageRecord[]
   hasRealPhotos: boolean
+  policy?: CatalogPublicationPolicy | null
+  rules?: CatalogReadinessRule[]
 }
 
-const OPERATIONAL_STATUSES = new Set(["active", "in_stock"])
+// Legacy fallback used only when no policy is resolvable (e.g. company without
+// configured policies). Mirrors the pre-2D.x behaviour so consumers without
+// policies stay safe.
+const LEGACY_ALLOWED_STATUSES = new Set(["active", "in_stock"])
+const LEGACY_DEFECT_THRESHOLD = 5
+
+function isSealed(kind: CatalogProductKind): boolean {
+  return kind === "sealed"
+}
+
+function allowedStatuses(policy: CatalogPublicationPolicy | null | undefined): Set<string> {
+  if (!policy) return LEGACY_ALLOWED_STATUSES
+  return new Set(policy.allowedInventoryStatuses)
+}
+
+function requiresPublicPrice(policy: CatalogPublicationPolicy | null | undefined): boolean {
+  return policy ? policy.requiresPublicPrice : true
+}
+
+function requiresRealPhoto(policy: CatalogPublicationPolicy | null | undefined, kind: CatalogProductKind): boolean {
+  if (policy) return policy.requiresRealPhoto
+  return !isSealed(kind)
+}
+
+function requiresReview(policy: CatalogPublicationPolicy | null | undefined, kind: CatalogProductKind): boolean {
+  if (policy) return policy.requiresReview
+  return !isSealed(kind)
+}
+
+function requiresIncludedItems(
+  policy: CatalogPublicationPolicy | null | undefined,
+  kind: CatalogProductKind
+): boolean {
+  if (policy) return policy.requiresIncludedItems
+  return !isSealed(kind)
+}
+
+function reviewDefectFails(
+  review: CatalogReviewRecord,
+  rules: CatalogReadinessRule[] | undefined
+): { failed: boolean; message: string } | null {
+  const scores: Array<number | null> = [
+    review.screen_score,
+    review.sides_score,
+    review.back_score,
+    review.cameras_score,
+    review.biometrics_score,
+    review.audio_score,
+    review.connectivity_score,
+    review.general_score,
+  ]
+
+  const defectRule = rules?.find((r) => r.ruleKey === "defect_score_max" && r.severity === "block")
+  if (defectRule) {
+    const failed = scores.some(
+      (score) => score != null && compareThreshold(defectRule.thresholdOperator, defectRule.thresholdValue, score)
+    )
+    return failed ? { failed: true, message: defectRule.message } : null
+  }
+
+  // Legacy fallback (no policy/rule): same threshold as before.
+  const failed = scores.some((score) => score != null && score <= LEGACY_DEFECT_THRESHOLD)
+  return failed ? { failed: true, message: "Há um defeito informado na avaliação comercial." } : null
+}
+
+function sealedRealPhotoWarning(
+  hasUploaded: boolean,
+  rules: CatalogReadinessRule[] | undefined
+): string | null {
+  if (hasUploaded) return null
+  const rule = rules?.find((r) => r.ruleKey === "real_photo_recommended" && r.severity === "warning")
+  if (rule) return rule.message
+  return "Produto lacrado usando imagem padrão. Recomenda-se revisar antes de divulgar."
+}
 
 export function getCatalogPublicationReadiness(input: Input): CatalogReadiness {
   const reasons: string[] = []
   const warnings: string[] = []
+  const policy = input.policy ?? null
+  const rules = input.rules
 
-  if (!OPERATIONAL_STATUSES.has(input.inventoryStatus)) {
+  if (!allowedStatuses(policy).has(input.inventoryStatus)) {
     reasons.push("Produto não está disponível no estoque.")
   }
 
   const price = input.publication?.public_price
-  if (price == null || price <= 0) {
+  if (requiresPublicPrice(policy) && (price == null || price <= 0)) {
     reasons.push("Defina o preço público.")
   }
 
@@ -36,36 +118,25 @@ export function getCatalogPublicationReadiness(input: Input): CatalogReadiness {
     reasons.push("Adicione pelo menos uma imagem.")
   }
 
-  if (input.productKind !== "sealed") {
-    if (!input.hasRealPhotos) {
+  if (!isSealed(input.productKind)) {
+    if (requiresRealPhoto(policy, input.productKind) && !input.hasRealPhotos) {
       reasons.push("Adicione pelo menos uma foto real do aparelho.")
     }
-    if (!input.review || input.review.overall_score == null) {
-      reasons.push("Faça a avaliação comercial do aparelho.")
-    }
-    if (input.review) {
-      const hasDefect = [
-        input.review.screen_score,
-        input.review.sides_score,
-        input.review.back_score,
-        input.review.cameras_score,
-        input.review.biometrics_score,
-        input.review.audio_score,
-        input.review.connectivity_score,
-        input.review.general_score,
-      ].some((score) => score != null && score <= 5)
-      if (hasDefect) {
-        reasons.push("Há um defeito informado na avaliação comercial.")
+    if (requiresReview(policy, input.productKind)) {
+      if (!input.review || input.review.overall_score == null) {
+        reasons.push("Faça a avaliação comercial do aparelho.")
+      } else {
+        const defect = reviewDefectFails(input.review, rules)
+        if (defect) reasons.push(defect.message)
       }
     }
-    if (input.includedItems.length === 0) {
+    if (requiresIncludedItems(policy, input.productKind) && input.includedItems.length === 0) {
       reasons.push("Defina os itens inclusos.")
     }
   } else {
     const hasUploaded = input.images.some((image) => image.source === "uploaded")
-    if (!hasUploaded) {
-      warnings.push("Produto lacrado usando imagem padrão. Recomenda-se revisar antes de divulgar.")
-    }
+    const warning = sealedRealPhotoWarning(hasUploaded, rules)
+    if (warning) warnings.push(warning)
   }
 
   if (input.publication?.is_published && reasons.length > 0) {
@@ -87,7 +158,7 @@ export function getCatalogPublicationReadiness(input: Input): CatalogReadiness {
 
   return {
     canPublish: false,
-    status: input.publication ? "draft" : "draft",
+    status: "draft",
     reasons,
     warnings,
   }
