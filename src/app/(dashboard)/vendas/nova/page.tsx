@@ -1000,7 +1000,7 @@ function NewSaleContent() {
         const { data: subcategoryRows } = await (supabase.from("product_subcategories") as any)
           .select("normalized_name, accessory_class")
           .eq("is_active", true)
-          .is("deleted_at", null)
+          .or("deleted_at.is.null")
           .catch(() => ({ data: [] }))
         const accessoryClassBySubcategory = new Map<string, "durable" | "non_durable" | null>(
           (subcategoryRows || []).map((row: any) => [normalizeSaleKindValue(row.normalized_name), normalizeAccessoryClassValue(row.accessory_class)])
@@ -1107,7 +1107,7 @@ function NewSaleContent() {
         const { data: subcategoryRows } = await (supabase.from("product_subcategories") as any)
           .select("normalized_name, accessory_class")
           .eq("is_active", true)
-          .is("deleted_at", null)
+          .or("deleted_at.is.null")
           .catch(() => ({ data: [] }))
         const accessoryClassBySubcategory = new Map<string, "durable" | "non_durable" | null>(
           (subcategoryRows || []).map((row: any) => [normalizeSaleKindValue(row.normalized_name), normalizeAccessoryClassValue(row.accessory_class)])
