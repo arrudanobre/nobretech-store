@@ -140,6 +140,7 @@ type PurchaseItem = {
   originalAmount?: number | null
   warrantyStart: string | null
   warrantyEnd: string | null
+  warranty: PurchaseItemWarranty
   issues: Array<{
     id: string
     statusLabel: string
@@ -149,6 +150,17 @@ type PurchaseItem = {
     publicNote: string | null
     timeline: Array<{ label: string; date: string | null; active: boolean }>
   }>
+}
+
+type PurchaseItemWarranty = {
+  source: "item" | "legacy" | "none"
+  name: string | null
+  label: string | null
+  nature: string | null
+  startsAt: string | null
+  endsAt: string | null
+  statusLabel: string
+  note: string | null
 }
 
 type WarrantyState = "active" | "expired" | "not_started" | "unknown"
@@ -265,6 +277,36 @@ function getWarrantyStatusCopy(status: WarrantyState) {
     },
   }
   return map[status]
+}
+
+function warrantyNatureLabel(nature?: string | null) {
+  const labels: Record<string, string> = {
+    contractual: "Garantia Nobretech",
+    manufacturer: "Garantia do fabricante",
+    legal: "Garantia legal",
+    operational_support: "Suporte operacional",
+    legacy: "Garantia geral da compra",
+  }
+  return nature ? labels[nature] || nature : null
+}
+
+function itemWarrantyTitle(warranty: PurchaseItemWarranty) {
+  if (warranty.source === "none") return warranty.label || "Sem Garantia Nobretech contratual vinculada a este item."
+  return warranty.label || warranty.name || warrantyNatureLabel(warranty.nature) || "Garantia vinculada"
+}
+
+function itemWarrantyPeriod(warranty: PurchaseItemWarranty) {
+  if (warranty.source === "none") return null
+  if (warranty.startsAt && warranty.endsAt) {
+    return `Válida de ${formatPublicDate(warranty.startsAt)} até ${formatPublicDate(warranty.endsAt)}`
+  }
+  if (warranty.startsAt) return `Início em ${formatPublicDate(warranty.startsAt)}`
+  if (warranty.nature === "manufacturer") return "Conforme cobertura informada"
+  return null
+}
+
+function hasItemWarrantyModel(purchase: Purchase) {
+  return purchase.purchaseItems?.some((item) => item.warranty?.source === "item") || false
 }
 
 function latestTimelineDate(timeline: Array<{ date: string | null }>) {
@@ -518,7 +560,10 @@ function ProductThumb({ src, name, color, size = 96 }: { src?: string | null; na
 }
 
 function VerifiedDeviceCard({ purchase }: { purchase: Purchase }) {
-  const status = getWarrantyStatus(purchase.sale.warrantyStart, purchase.sale.warrantyEnd)
+  const principalWarranty = purchase.purchaseItems?.find((item) => item.type === "principal")?.warranty
+  const status = principalWarranty?.source === "item"
+    ? getWarrantyStatus(principalWarranty.startsAt, principalWarranty.endsAt)
+    : getWarrantyStatus(purchase.sale.warrantyStart, purchase.sale.warrantyEnd)
   const statusCopy = getWarrantyStatusCopy(status)
 
   return (
@@ -754,10 +799,11 @@ function VerifiedPurchaseDocumentsCard({ purchase }: { purchase: Purchase }) {
 
 function VerifiedPurchaseSummaryCard({ purchase }: { purchase: Purchase }) {
   const hasTradeIn = purchase.sale.tradeInApplied
+  const itemWarrantyModel = hasItemWarrantyModel(purchase)
   const summaryRows = [
     { icon: Hash, label: "Número da compra", value: purchase.sale.number },
     { icon: CalendarDays, label: "Data da compra", value: formatPublicDate(purchase.sale.date) },
-    { icon: ShieldCheck, label: "Garantia até", value: formatPublicDate(purchase.sale.warrantyEnd) },
+    { icon: ShieldCheck, label: itemWarrantyModel ? "Garantia" : "Garantia até", value: itemWarrantyModel ? "Por item" : formatPublicDate(purchase.sale.warrantyEnd) },
     { icon: CheckCircle2, label: "Status", value: <StatusPill tone="green">{purchase.sale.status || notInformed}</StatusPill>, tone: "green" as const },
   ]
   const moneyRows = hasTradeIn
@@ -865,6 +911,16 @@ function VerifiedPurchaseItemsCard({ purchase }: { purchase: Purchase }) {
     originalAmount: purchase.device.originalAmount ?? null,
     warrantyStart: purchase.sale.warrantyStart,
     warrantyEnd: purchase.sale.warrantyEnd,
+    warranty: {
+      source: "legacy" as const,
+      name: "Garantia geral da compra",
+      label: null,
+      nature: "legacy",
+      startsAt: purchase.sale.warrantyStart,
+      endsAt: purchase.sale.warrantyEnd,
+      statusLabel: getWarrantyStatusCopy(getWarrantyStatus(purchase.sale.warrantyStart, purchase.sale.warrantyEnd)).label,
+      note: "Compatibilidade com vendas antigas sem garantia por item.",
+    },
     issues: [],
   }]
 
@@ -921,6 +977,59 @@ function VerifiedPurchaseItemsCard({ purchase }: { purchase: Purchase }) {
 }
 
 function VerifiedPurchaseWarrantyCard({ purchase }: { purchase: Purchase }) {
+  if (hasItemWarrantyModel(purchase)) {
+    const items = purchase.purchaseItems?.length ? purchase.purchaseItems : []
+    return (
+      <CollapsiblePortalCard
+        icon={ShieldCheck}
+        title="Garantia dos itens"
+        subtitle="Cobertura vinculada aos itens desta compra."
+        className="overflow-hidden"
+      >
+        <div className="space-y-3">
+          {items.map((item) => {
+            const warranty = item.warranty || {
+              source: "none" as const,
+              name: null,
+              label: "Sem Garantia Nobretech contratual vinculada a este item.",
+              nature: null,
+              startsAt: null,
+              endsAt: null,
+              statusLabel: "Sem garantia contratual vinculada",
+              note: "Danos por uso, queda, impacto, riscos, mau uso ou desgaste natural não são cobertos como garantia contratual.",
+            }
+            const period = itemWarrantyPeriod(warranty)
+            const isLinked = warranty.source === "item"
+
+            return (
+              <div key={item.id} className={`rounded-[1.2rem] border p-4 ${isLinked ? "border-emerald-100 bg-emerald-50/45" : "border-slate-200 bg-slate-50/70"}`}>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <StatusPill tone={itemTone(item.type) as "blue" | "green" | "neutral" | "amber"}>{item.label}</StatusPill>
+                      <StatusPill tone={isLinked ? "green" : "neutral"}>{warranty.statusLabel}</StatusPill>
+                    </div>
+                    <p className="mt-3 text-sm font-extrabold leading-5 text-navy-900">{fallback(item.model)}</p>
+                    {item.variationText && <p className="mt-0.5 text-xs font-semibold text-slate-500">{item.variationText}</p>}
+                  </div>
+                  {isLinked && warrantyNatureLabel(warranty.nature) && (
+                    <p className="text-xs font-black uppercase tracking-wide text-emerald-700">{warrantyNatureLabel(warranty.nature)}</p>
+                  )}
+                </div>
+
+                <div className="mt-3 rounded-2xl bg-white/85 p-3 ring-1 ring-slate-200/70">
+                  <p className={`text-sm font-extrabold leading-5 ${isLinked ? "text-navy-900" : "text-slate-700"}`}>{itemWarrantyTitle(warranty)}</p>
+                  {period && <p className="mt-1 text-sm font-semibold leading-5 text-slate-600">{period}</p>}
+                  {warranty.note && <p className="mt-2 text-xs font-semibold leading-5 text-slate-500">{warranty.note}</p>}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </CollapsiblePortalCard>
+    )
+  }
+
   const status = getWarrantyStatus(purchase.sale.warrantyStart, purchase.sale.warrantyEnd)
   const statusCopy = getWarrantyStatusCopy(status)
   const progress = getWarrantyProgress(purchase.sale.warrantyStart, purchase.sale.warrantyEnd)
@@ -929,8 +1038,8 @@ function VerifiedPurchaseWarrantyCard({ purchase }: { purchase: Purchase }) {
   return (
     <CollapsiblePortalCard
       icon={ShieldCheck}
-      title="Garantia"
-      subtitle="Acompanhamento do período de cobertura."
+      title="Garantia geral da compra"
+      subtitle="Compatibilidade com vendas antigas sem garantia por item."
       className="overflow-hidden"
       headerExtra={
         <span className={`mt-1 hidden shrink-0 items-center gap-2 rounded-full px-3 py-1 text-xs font-bold sm:inline-flex ${statusCopy.className}`}>

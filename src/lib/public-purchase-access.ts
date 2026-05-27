@@ -142,7 +142,19 @@ export type PublicPurchaseItem = {
   originalAmount: number | null
   warrantyStart: string | null
   warrantyEnd: string | null
+  warranty: PublicPurchaseItemWarranty
   issues: PublicPurchaseIssue[]
+}
+
+export type PublicPurchaseItemWarranty = {
+  source: "item" | "legacy" | "none"
+  name: string | null
+  label: string | null
+  nature: string | null
+  startsAt: string | null
+  endsAt: string | null
+  statusLabel: string
+  note: string | null
 }
 
 type SaleAccessRow = {
@@ -261,6 +273,22 @@ type PublicPaymentLine = {
   amount: number
 }
 
+type SaleItemWarrantyRow = {
+  sale_item_id: string
+  source_table: string
+  source_id: string | null
+  warranty_nature: string
+  warranty_name: string
+  warranty_label: string | null
+  calculation_mode: string
+  starts_at: string | Date | null
+  ends_at: string | Date | null
+  duration_months: number | null
+  duration_days: number | null
+  manufacturer_coverage_reference: string | null
+  manual_notes: string | null
+}
+
 function randomTokenSuffix(length = 32) {
   const bytes = randomBytes(length)
   let token = ""
@@ -342,6 +370,64 @@ function warrantyStatus(endDate?: string | null) {
   today.setHours(0, 0, 0, 0)
   const end = new Date(`${endDate}T00:00:00`)
   return end >= today ? "Dentro da garantia" : "Garantia expirada"
+}
+
+function itemWarrantyStatusLabel(startsAt?: string | null, endsAt?: string | null) {
+  if (!startsAt && !endsAt) return "Conforme cobertura informada"
+  if (!endsAt) return "Conforme cobertura informada"
+  return warrantyStatus(endsAt)
+}
+
+function itemWarrantyNote(warranty: Pick<SaleItemWarrantyRow, "warranty_nature" | "calculation_mode" | "ends_at" | "manufacturer_coverage_reference" | "manual_notes">) {
+  const manualNote = warranty.manual_notes?.trim()
+  if (manualNote) return manualNote
+  const manufacturerReference = warranty.manufacturer_coverage_reference?.trim()
+  if (manufacturerReference) return manufacturerReference
+  if (warranty.warranty_nature === "manufacturer" || (warranty.calculation_mode === "manual_dates" && !warranty.ends_at)) {
+    return "Conforme cobertura informada pelo fabricante."
+  }
+  return null
+}
+
+function noContractualWarranty(): PublicPurchaseItemWarranty {
+  return {
+    source: "none",
+    name: null,
+    label: "Sem Garantia Nobretech contratual vinculada a este item.",
+    nature: null,
+    startsAt: null,
+    endsAt: null,
+    statusLabel: "Sem garantia contratual vinculada",
+    note: "Danos por uso, queda, impacto, riscos, mau uso ou desgaste natural não são cobertos como garantia contratual.",
+  }
+}
+
+function legacyWarranty(start: string | null, end: string | null): PublicPurchaseItemWarranty {
+  return {
+    source: "legacy",
+    name: "Garantia geral da compra",
+    label: null,
+    nature: "legacy",
+    startsAt: start,
+    endsAt: end,
+    statusLabel: warrantyStatus(end),
+    note: "Compatibilidade com vendas antigas sem garantia por item.",
+  }
+}
+
+function publicItemWarranty(row: SaleItemWarrantyRow): PublicPurchaseItemWarranty {
+  const startsAt = dateOnly(row.starts_at)
+  const endsAt = dateOnly(row.ends_at)
+  return {
+    source: "item",
+    name: row.warranty_name,
+    label: row.warranty_label,
+    nature: row.warranty_nature,
+    startsAt,
+    endsAt,
+    statusLabel: itemWarrantyStatusLabel(startsAt, endsAt),
+    note: itemWarrantyNote(row),
+  }
 }
 
 function warrantyPeriodFromSale(row: Pick<SaleAccessRow, "sale_date" | "warranty_start" | "warranty_end" | "warranty_months">) {
@@ -625,6 +711,40 @@ async function getPublicPaymentsForSale(saleId: string) {
     paymentMethod: row.payment_method ? String(row.payment_method) : null,
     amount: Number(row.amount || 0),
   }))
+}
+
+async function getSaleItemWarrantiesForSale(saleId: string) {
+  const result = await pool.query<SaleItemWarrantyRow>(
+    `
+      SELECT
+        siw.sale_item_id,
+        si.source_table,
+        si.source_id,
+        siw.warranty_nature,
+        siw.warranty_name,
+        siw.warranty_label,
+        siw.calculation_mode,
+        siw.starts_at,
+        siw.ends_at,
+        siw.duration_months,
+        siw.duration_days,
+        siw.manufacturer_coverage_reference,
+        siw.manual_notes
+      FROM sale_item_warranties siw
+      JOIN sale_items si ON si.id = siw.sale_item_id
+      WHERE siw.sale_id = $1::uuid
+        AND siw.active = TRUE
+        AND si.active = TRUE
+      ORDER BY si.sort_order ASC, si.created_at ASC
+    `,
+    [saleId]
+  )
+
+  return new Map(
+    result.rows
+      .filter((row) => row.source_table && row.source_id)
+      .map((row) => [`${row.source_table}:${row.source_id}`, publicItemWarranty(row)])
+  )
 }
 
 async function getProblemsByInventoryId(saleId: string, inventoryIds: string[]) {
@@ -1033,6 +1153,8 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
   const additionalItems = await getAdditionalItemsForSale(row.id)
   const variantSelections = await getSaleVariantSelections(row.id)
   const publicPayments = await getPublicPaymentsForSale(row.id)
+  const itemWarrantiesBySource = await getSaleItemWarrantiesForSale(row.id)
+  const hasItemWarranties = itemWarrantiesBySource.size > 0
   const inventoryIds = [
     row.inventory_id,
     ...additionalItems.map((item) => item.product_id),
@@ -1100,6 +1222,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
     originalAmount: null,
     warrantyStart,
     warrantyEnd,
+    warranty: itemWarrantiesBySource.get(`sales:${row.id}`) || (hasItemWarranties ? noContractualWarranty() : legacyWarranty(warrantyStart, warrantyEnd)),
     issues: principalIssues,
   }
 
@@ -1138,6 +1261,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
         originalAmount: itemType === "free" ? originalAmount : null,
         warrantyStart: null,
         warrantyEnd: null,
+        warranty: itemWarrantiesBySource.get(`sales_additional_items:${item.id}`) || noContractualWarranty(),
         issues,
       }
     }),
