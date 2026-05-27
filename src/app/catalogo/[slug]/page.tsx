@@ -242,7 +242,11 @@ export default async function CatalogoProductPage({
               <ProductTrustRow
                 warrantyLabel={product.warrantyLabel}
                 availabilityLabel={product.availabilityLabel}
-                extraBadge={config.productBadges[0] ?? null}
+                extraBadge={
+                  config.productBadges.find(
+                    (b) => b.label !== product.warrantyLabel && b.label !== product.availabilityLabel
+                  ) ?? null
+                }
               />
             </div>
           </div>
