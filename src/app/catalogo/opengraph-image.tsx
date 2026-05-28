@@ -3,6 +3,9 @@ import { loadOgFonts } from "@/lib/og/fonts"
 import { getCatalogCompanyIdentity, buildCatalogLocationLabel } from "@/lib/catalog/company-identity"
 
 export const runtime = "nodejs"
+// Render sob demanda (CDN cacheia). Evita prerender em build, que dependia do
+// Railway e quebrava o build em ECONNRESET transiente.
+export const dynamic = "force-dynamic"
 export const alt = "Catálogo da loja"
 export const size = { width: 1200, height: 630 }
 export const contentType = "image/png"
