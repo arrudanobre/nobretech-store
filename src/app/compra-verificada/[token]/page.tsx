@@ -577,11 +577,11 @@ function ProductThumb({ src, name, color, size = 96 }: { src?: string | null; na
   return (
     <ProductAssetImage
       brand="Apple"
-      category="iphone"
       model={name}
       color={color}
       uploadedImageUrl={src || null}
       uploadedThumbnailUrl={size <= 96 ? src || null : null}
+      imageContext="customer_portal"
       size={size}
       className="rounded-[1.2rem] border-[#dce6f2] bg-[#f7f9fc] ring-1 ring-[#dce6f2]"
       imageClassName="p-2"

@@ -248,12 +248,6 @@ type PublicProblemRow = {
   resolved_date: string | Date | null
 }
 
-type PublicProductImageRow = {
-  product_id: string
-  image_url: string
-  thumbnail_url: string
-}
-
 type AdditionalSaleItemRow = {
   id: string
   product_id: string | null
@@ -491,10 +485,6 @@ function warrantyPeriodFromSale(row: Pick<SaleAccessRow, "sale_date" | "warranty
     warrantyStart: start,
     warrantyEnd: end,
   }
-}
-
-function firstPhoto(photos?: string[] | null) {
-  return photos?.find((photo) => typeof photo === "string" && photo.trim()) || null
 }
 
 function buildProvenance(row: SaleAccessRow, companyShortName?: string | null) {
@@ -824,26 +814,6 @@ async function getProblemsByInventoryId(saleId: string, inventoryIds: string[]) 
     byInventoryId.set(problem.inventory_id, list)
   }
   return byInventoryId
-}
-
-async function getPrimaryProductImagesByInventoryId(inventoryIds: string[]) {
-  if (inventoryIds.length === 0) return new Map<string, PublicProductImageRow>()
-
-  const result = await pool.query<PublicProductImageRow>(
-    `
-      SELECT DISTINCT ON (product_id)
-        product_id,
-        image_url,
-        thumbnail_url
-      FROM product_images
-      WHERE product_id = ANY($1::uuid[])
-        AND is_primary = true
-      ORDER BY product_id, created_at DESC
-    `,
-    [inventoryIds]
-  )
-
-  return new Map(result.rows.map((row) => [row.product_id, row]))
 }
 
 async function getSaleByToken(token: string) {
@@ -1302,7 +1272,6 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
     ...additionalItems.map((item) => item.product_id),
   ].filter((id): id is string => Boolean(id))
   const problemsByInventoryId = await getProblemsByInventoryId(row.id, inventoryIds)
-  const imagesByInventoryId = await getPrimaryProductImagesByInventoryId(inventoryIds)
   const deviceName = realInventoryDisplayName({
     model: row.model,
     variant: row.variant,
@@ -1342,7 +1311,6 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
     amount: payment.amount,
   }))
   const principalIssues = row.inventory_id ? problemsByInventoryId.get(row.inventory_id) || [] : []
-  const principalImage = row.inventory_id ? imagesByInventoryId.get(row.inventory_id) : null
   const additionalChargedTotal = additionalItems.reduce((sum, item) => {
     if (normalizePublicItemType(item.type) === "free") return sum
     return sum + Number(item.sale_price || 0)
@@ -1358,7 +1326,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
     grade: row.grade || null,
     batteryHealth: row.battery_health === null || row.battery_health === undefined ? null : Number(row.battery_health),
     boxType: packagingLabel(row.packaging_type, row.packaging_notes, company.shortName),
-    photoUrl: principalImage?.image_url || firstPhoto(row.inventory_photos),
+    photoUrl: null,
     imei: maskTrailing(row.imei),
     serial: maskTrailing(row.serial_number),
     variationText: consumeVariantSelection(variantSelections, "main", row.inventory_id),
@@ -1375,7 +1343,6 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
     ...additionalItems.map((item, index) => {
       const itemType = normalizePublicItemType(item.type)
       const issues = item.product_id ? problemsByInventoryId.get(item.product_id) || [] : []
-      const itemImage = item.product_id ? imagesByInventoryId.get(item.product_id) : null
       const itemName = realInventoryDisplayName({
         storedName: item.name,
         model: item.model,
@@ -1397,7 +1364,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
         grade: item.grade || null,
         batteryHealth: item.battery_health === null || item.battery_health === undefined ? null : Number(item.battery_health),
         boxType: packagingLabel(item.packaging_type, item.packaging_notes, company.shortName),
-        photoUrl: itemImage?.image_url || null,
+        photoUrl: null,
         imei: maskTrailing(item.imei),
         serial: maskTrailing(item.serial_number),
         variationText: consumeVariantSelection(variantSelections, "additional", item.product_id),

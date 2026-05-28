@@ -21,6 +21,8 @@ export type ProductAssetImageInfo = {
   colorSlug: string | null
 }
 
+export type ProductImageResolutionContext = "stock" | "customer_portal" | "public_listing"
+
 type ManifestEntry = {
   original: string
   model_slug: string
@@ -157,6 +159,7 @@ function isAppleProduct(input: ProductAssetInput) {
 
 function resolveCategoryKind(input: ProductAssetInput): ProductAssetImageInfo["kind"] {
   const text = `${getText(input).brand}-${getText(input).category}-${getText(input).model}`
+  if (/(^|-)(accessories|acessorios|acessorio|capa|case|pelicula|pencil|caneta|stylus|cabo|fonte|carregador)($|-)/.test(text)) return "generic-device"
   if (/(^|-)iphone($|-)/.test(text)) return "iphone"
   if (/(^|-)ipad($|-)/.test(text)) return "ipad"
   if (/(^|-)(macbook|mac)($|-)/.test(text)) return "macbook"
@@ -279,4 +282,33 @@ export function getProductAssetImageInfo(input: ProductAssetInput): ProductAsset
 
 export function getProductAssetImage(input: ProductAssetInput): string {
   return getProductAssetImageInfo(input).src
+}
+
+function stripPublicationMedia(input: ProductAssetInput): ProductAssetInput {
+  return {
+    ...input,
+    uploadedImageUrl: null,
+    uploadedThumbnailUrl: null,
+  }
+}
+
+export function resolveStockDisplayImage(input: ProductAssetInput): ProductAssetImageInfo {
+  return getProductAssetImageInfo(stripPublicationMedia(input))
+}
+
+export function resolveCustomerPortalImage(input: ProductAssetInput): ProductAssetImageInfo {
+  return getProductAssetImageInfo(stripPublicationMedia(input))
+}
+
+export function resolvePublicListingImage(input: ProductAssetInput): ProductAssetImageInfo {
+  return getProductAssetImageInfo(input)
+}
+
+export function resolveProductImageForContext(
+  input: ProductAssetInput,
+  context: ProductImageResolutionContext = "public_listing",
+): ProductAssetImageInfo {
+  if (context === "stock") return resolveStockDisplayImage(input)
+  if (context === "customer_portal") return resolveCustomerPortalImage(input)
+  return resolvePublicListingImage(input)
 }

@@ -27,7 +27,7 @@ import type {
   PublicCatalogProduct,
   PublicCatalogSpec,
 } from "@/lib/catalog/types"
-import { getProductAssetImageInfo } from "@/lib/product-assets"
+import { resolvePublicListingImage } from "@/lib/product-assets"
 
 type InventoryRow = {
   id: string
@@ -552,7 +552,7 @@ function mapRowToProduct(
           kind: !isSealed && image.source === "uploaded" ? "real_photo" : "official_asset",
         }))
       : [(() => {
-          const asset = getProductAssetImageInfo({
+          const asset = resolvePublicListingImage({
             brand: row.brand,
             model: modelLabel,
             color,

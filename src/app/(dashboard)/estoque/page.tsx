@@ -872,8 +872,7 @@ export default function InventoryPage() {
                             category={cat?.category}
                             model={cat?.model || product}
                             color={cat?.color}
-                            uploadedImageUrl={item.productImage?.image_url || null}
-                            uploadedThumbnailUrl={item.productImage?.thumbnail_url || null}
+                            imageContext="stock"
                             size={48}
                             className="rounded-xl bg-white"
                           />

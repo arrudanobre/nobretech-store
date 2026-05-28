@@ -2561,8 +2561,7 @@ function NewSaleContent() {
                       category={selectedProduct.category}
                       model={selectedProduct.model || selectedProduct.name}
                       color={selectedProduct.color}
-                      uploadedImageUrl={selectedProduct.productImage?.image_url || null}
-                      uploadedThumbnailUrl={selectedProduct.productImage?.thumbnail_url || null}
+                      imageContext="stock"
                       size={68}
                       className="bg-white shadow-sm"
                     />
@@ -2693,8 +2692,7 @@ function NewSaleContent() {
                           category={product.category}
                           model={product.model || product.name}
                           color={product.color}
-                          uploadedImageUrl={product.productImage?.image_url || null}
-                          uploadedThumbnailUrl={product.productImage?.thumbnail_url || null}
+                          imageContext="stock"
                           size={56}
                           className="bg-gray-50"
                         />
@@ -2874,8 +2872,7 @@ function NewSaleContent() {
                               category={item.category}
                               model={item.model || item.name}
                               color={item.color}
-                              uploadedImageUrl={item.productImage?.image_url || null}
-                              uploadedThumbnailUrl={item.productImage?.thumbnail_url || null}
+                              imageContext="stock"
                               size={48}
                               className="rounded-lg bg-gray-50"
                             />
@@ -3741,8 +3738,7 @@ function NewSaleContent() {
                                 category={item.category}
                                 model={item.model || item.name}
                                 color={item.color}
-                                uploadedImageUrl={item.productImage?.image_url || null}
-                                uploadedThumbnailUrl={item.productImage?.thumbnail_url || null}
+                                imageContext="stock"
                                 size={48}
                                 className="rounded-xl bg-gray-50"
                               />

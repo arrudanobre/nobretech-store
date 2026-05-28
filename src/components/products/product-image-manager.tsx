@@ -1,10 +1,11 @@
 "use client"
 
+import Image from "next/image"
 import { useMemo, useRef, useState } from "react"
 import { ImageIcon, Loader2, RotateCcw, Trash2, Upload } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useToast } from "@/components/ui/toaster"
-import { getProductAssetImageInfo, type ProductAssetInput } from "@/lib/product-assets"
+import { resolvePublicListingImage, resolveStockDisplayImage, type ProductAssetInput } from "@/lib/product-assets"
 import type { ProductImageRecord } from "@/lib/product-images"
 import { ProductAssetImage } from "@/components/products/product-asset-image"
 
@@ -39,11 +40,12 @@ export function ProductImageManager({
   const [uploading, setUploading] = useState(false)
   const [removing, setRemoving] = useState(false)
 
-  const imageInfo = useMemo(() => getProductAssetImageInfo({
+  const publicImageInfo = useMemo(() => resolvePublicListingImage({
     ...product,
     uploadedImageUrl: currentImage?.image_url || null,
     uploadedThumbnailUrl: currentImage?.thumbnail_url || null,
   }), [currentImage?.image_url, currentImage?.thumbnail_url, product])
+  const operationalImageInfo = useMemo(() => resolveStockDisplayImage(product), [product])
 
   const setImage = (nextImage: ProductImageRecord | null) => {
     setCurrentImage(nextImage)
@@ -122,44 +124,62 @@ export function ProductImageManager({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-base font-bold text-navy-900">Imagem do Produto</h3>
+            <h3 className="text-base font-bold text-navy-900">Mídia pública da vitrine</h3>
             <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ${
-              imageInfo.source === "uploaded"
+              publicImageInfo.source === "uploaded"
                 ? "bg-emerald-50 text-emerald-700"
-                : imageInfo.source === "static_asset"
+                : publicImageInfo.source === "static_asset"
                   ? "bg-royal-50 text-royal-700"
                   : "bg-gray-100 text-gray-600"
             }`}>
-              {imageInfo.badge}
+              {publicImageInfo.badge}
             </span>
           </div>
-          <p className="mt-1 text-sm text-gray-500">Foto real em R2, asset padrão ou placeholder seguro.</p>
+          <p className="mt-1 text-sm text-gray-500">Fotos reais ficam na publicação pública. O estoque continua usando o asset operacional padrão.</p>
         </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-[160px_minmax(0,1fr)] sm:items-center">
-        <div className="flex justify-center rounded-2xl border border-gray-100 bg-gray-50 p-4">
-          <ProductAssetImage
-            {...product}
-            uploadedImageUrl={currentImage?.image_url || null}
-            uploadedThumbnailUrl={currentImage?.thumbnail_url || null}
-            size={128}
-            className="rounded-2xl bg-white"
-            imageClassName="p-3"
-          />
+      <div className="grid gap-4 lg:grid-cols-[160px_160px_minmax(0,1fr)] lg:items-center">
+        <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+          <p className="mb-2 text-center text-[10px] font-bold uppercase tracking-wide text-gray-400">Operacional</p>
+          <div className="flex justify-center">
+            <ProductAssetImage
+              {...product}
+              imageContext="stock"
+              size={112}
+              className="rounded-2xl bg-white"
+              imageClassName="p-3"
+            />
+          </div>
+          <p className="mt-2 text-center text-[11px] font-semibold text-gray-500">{operationalImageInfo.badge}</p>
+        </div>
+
+        <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+          <p className="mb-2 text-center text-[10px] font-bold uppercase tracking-wide text-gray-400">Vitrine</p>
+          <div className="relative mx-auto h-28 w-28 overflow-hidden rounded-2xl border border-gray-100 bg-white">
+            <Image
+              src={publicImageInfo.src}
+              alt={publicImageInfo.alt}
+              fill
+              sizes="112px"
+              unoptimized={publicImageInfo.source === "uploaded"}
+              className="object-contain p-3"
+            />
+          </div>
+          <p className="mt-2 text-center text-[11px] font-semibold text-gray-500">{publicImageInfo.badge}</p>
         </div>
 
         <div className="space-y-3">
           <div className="rounded-2xl border border-gray-100 bg-gray-50 p-3">
-            <p className="text-xs font-bold uppercase tracking-wide text-gray-400">Origem atual</p>
+            <p className="text-xs font-bold uppercase tracking-wide text-gray-400">Origem da vitrine</p>
             <p className="mt-1 text-sm font-semibold text-navy-900">
-              {imageInfo.source === "uploaded"
+              {publicImageInfo.source === "uploaded"
                 ? "Foto real enviada e otimizada"
-                : imageInfo.source === "static_asset"
+                : publicImageInfo.source === "static_asset"
                   ? "Asset estático por modelo/cor"
                   : "Fallback visual da categoria"}
             </p>
-            <p className="mt-1 text-xs text-gray-500">JPG, PNG, WebP ou HEIC. Máximo 10MB.</p>
+            <p className="mt-1 text-xs text-gray-500">JPG, PNG, WebP ou HEIC. Máximo 10MB. Não altera estoque, portal ou documentos.</p>
           </div>
 
           <input

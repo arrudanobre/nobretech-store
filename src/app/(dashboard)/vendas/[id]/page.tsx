@@ -168,19 +168,16 @@ type AdditionalItemImageSource = {
 
 function getSaleItemImageInput(
   inventoryItem: SaleInventoryImageItem | null | undefined,
-  imagesByProductId: ProductImageMap,
+  _imagesByProductId: ProductImageMap,
   fallbackName?: string | null
 ): ProductAssetInput {
   const catalog = inventoryItem?.catalog || {}
-  const linkedImage = inventoryItem?.id ? imagesByProductId[inventoryItem.id] : null
 
   return {
     brand: catalog.brand || inventoryItem?.brand || null,
     model: catalog.model || fallbackName || null,
     color: catalog.color || null,
     category: catalog.category || inventoryItem?.type || fallbackName || null,
-    uploadedImageUrl: linkedImage?.image_url || null,
-    uploadedThumbnailUrl: linkedImage?.thumbnail_url || null,
   }
 }
 
@@ -1659,6 +1656,7 @@ export default function SaleDetailPage() {
                     <div className="flex min-w-[220px] items-center gap-3">
                       <ProductAssetImage
                         {...mainProductImage}
+                        imageContext="stock"
                         size={52}
                         className="rounded-lg bg-white"
                         imageClassName="p-1"
@@ -1699,6 +1697,7 @@ export default function SaleDetailPage() {
                         <div className="flex min-w-[220px] items-center gap-3">
                           <ProductAssetImage
                             {...itemImage}
+                            imageContext="stock"
                             size={48}
                             className="rounded-lg bg-white"
                             imageClassName="p-1"
@@ -1739,6 +1738,7 @@ export default function SaleDetailPage() {
               <div className="mb-1 flex items-center gap-3">
                 <ProductAssetImage
                   {...mainProductImage}
+                  imageContext="stock"
                   size={52}
                   className="rounded-lg bg-white"
                   imageClassName="p-1"
@@ -1769,6 +1769,7 @@ export default function SaleDetailPage() {
                   <div className="mb-1 flex items-center gap-3">
                     <ProductAssetImage
                       {...itemImage}
+                      imageContext="stock"
                       size={48}
                       className="rounded-lg bg-white"
                       imageClassName="p-1"

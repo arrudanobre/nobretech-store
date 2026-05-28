@@ -1,12 +1,13 @@
 import Image from "next/image"
-import { Smartphone } from "lucide-react"
-import { getProductAssetImageInfo, type ProductAssetInput } from "@/lib/product-assets"
+import { Package, Smartphone } from "lucide-react"
+import { resolveProductImageForContext, type ProductAssetInput, type ProductImageResolutionContext } from "@/lib/product-assets"
 
 type ProductAssetImageProps = ProductAssetInput & {
   size: number
   className?: string
   imageClassName?: string
   priority?: boolean
+  imageContext?: ProductImageResolutionContext
 }
 
 export function ProductAssetImage({
@@ -14,9 +15,11 @@ export function ProductAssetImage({
   className = "",
   imageClassName = "",
   priority = false,
+  imageContext = "public_listing",
   ...product
 }: ProductAssetImageProps) {
-  const image = getProductAssetImageInfo(product)
+  const image = resolveProductImageForContext(product, imageContext)
+  const FallbackIcon = image.kind === "iphone" ? Smartphone : Package
 
   return (
     <div
@@ -34,7 +37,7 @@ export function ProductAssetImage({
       />
       {image.isFallback && (
         <span className="pointer-events-none absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-white/85 text-gray-400 shadow-sm">
-          <Smartphone className="h-2.5 w-2.5" />
+          <FallbackIcon className="h-2.5 w-2.5" />
         </span>
       )}
     </div>
