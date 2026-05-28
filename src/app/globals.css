@@ -1,4 +1,13 @@
-@import "tailwindcss";
+/*
+ * Tailwind v4 scans the whole project for class names by default. The
+ * db-dumps/ directory contains Postgres binary dumps whose stray control
+ * bytes get matched as "class names" and emitted as broken CSS classes
+ * (e.g. .font-\[family-name:var(--\18 ?? \4 syne)\]) that fail PostCSS
+ * parsing. Disable auto-detect and pin Tailwind to scan only the source
+ * tree we author by hand.
+ */
+@import "tailwindcss" source(none);
+@source "../**/*.{ts,tsx,js,jsx,mdx}";
 
 @theme {
   --color-navy-950: #080F1A;
