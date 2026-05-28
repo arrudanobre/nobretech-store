@@ -12,11 +12,12 @@
 - Portal de compra verificada: usa `resolveCustomerPortalImage(...)`. A imagem principal é padronizada e premium.
 - Documentos, recibos, laudos e etiquetas: quando exibirem imagem, devem seguir a mesma regra operacional do portal/estoque.
 - Catálogo público e vitrine: usam `resolvePublicListingImage(...)` ou a lista de imagens da publicação pública.
-- Central de Divulgação: pode cadastrar/enviar mídia para a publicação pública, sem alterar a imagem operacional do estoque.
+- Central de Divulgação / Vitrine pública admin: pode cadastrar/enviar mídia para a publicação pública, sem alterar a imagem operacional do estoque. Na gestão, a origem deve ficar explícita: mídia da vitrine quando houver upload público; asset fallback quando a publicação usa o asset padrão.
 
 ## Lacrado
 
 Produto lacrado pode usar automaticamente o asset padrão do produto/modelo como mídia pública quando não houver mídia própria publicada.
+Essa ausência de upload público não deve bloquear a publicação/readiness por si só.
 
 ## Seminovo/usado
 

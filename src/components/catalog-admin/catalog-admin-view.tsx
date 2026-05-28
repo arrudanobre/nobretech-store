@@ -26,6 +26,7 @@ import type { CatalogAdminItem, CatalogAdminSummary } from "@/lib/catalog/admin-
 import type { CatalogPaymentSettings } from "@/lib/catalog/pricing"
 import { formatBRL } from "@/lib/helpers"
 import { formatScore10 } from "@/lib/catalog/score"
+import { resolvePublicListingImage } from "@/lib/product-assets"
 import { CatalogEditModal } from "@/components/catalog-admin/catalog-edit-modal"
 import { CatalogPhotosModal } from "@/components/catalog-admin/catalog-photos-modal"
 import { CatalogReviewModal } from "@/components/catalog-admin/catalog-review-modal"
@@ -432,21 +433,33 @@ function CatalogAdminRow({
   onOpenBlocked: () => void
 }) {
   const cover = item.images.find((image) => image.is_primary) || item.images[0] || null
+  const fallbackCover = cover
+    ? null
+    : resolvePublicListingImage({
+        model: item.title,
+        color: item.subtitle,
+        category: item.category || item.categoryLabel,
+      })
   const isSealed = item.productKind === "sealed"
   const statusBadge = statusBadgeFor(item)
   const inventoryBadge = inventoryBadgeFor(item.inventoryStatus)
   const publicPrice = item.publication?.public_price ?? item.suggestedPrice
   const overall = item.review?.overall_score ?? null
+  const mediaSourceLabel = cover
+    ? item.hasRealPhotos
+      ? "mídia da vitrine"
+      : "asset publicado"
+    : "asset fallback"
   return (
     <article className="grid grid-cols-1 gap-4 rounded-2xl border border-white/10 bg-white/[0.04] p-4 shadow-[0_18px_50px_rgba(0,0,0,0.18)] backdrop-blur transition hover:border-white/20 hover:bg-white/[0.06] sm:p-5 lg:grid-cols-[96px_minmax(0,1fr)_minmax(210px,auto)]">
       <div className="relative h-[96px] w-[96px] overflow-hidden rounded-2xl border border-white/10 bg-[#0F172A] shadow-inner">
-        {cover ? (
+        {cover || fallbackCover ? (
           <Image
-            src={cover.thumbnail_url || cover.image_url}
-            alt={cover.alt || item.title}
+            src={cover ? cover.thumbnail_url || cover.image_url : fallbackCover?.src || ""}
+            alt={cover ? cover.alt || item.title : fallbackCover?.alt || item.title}
             fill
             sizes="96px"
-            unoptimized={cover.source === "uploaded"}
+            unoptimized={cover?.source === "uploaded"}
             className="object-contain p-1.5"
           />
         ) : (
@@ -477,15 +490,13 @@ function CatalogAdminRow({
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[12px] sm:grid-cols-4">
           <Stat label="Preço" value={publicPrice != null ? formatBRL(publicPrice) : "—"} />
           <Stat
-            label="Fotos"
+            label="Mídia"
             value={
-              <span className="flex items-center gap-1">
-                <span className="font-semibold text-white">{item.images.length}</span>
-                {item.hasRealPhotos ? (
-                  <span className="text-emerald-300">reais</span>
-                ) : (
-                  <span className="text-slate-500">sem real</span>
-                )}
+              <span className="flex flex-col leading-tight">
+                <span className={item.hasRealPhotos ? "text-emerald-300" : "text-slate-300"}>{mediaSourceLabel}</span>
+                <span className="text-[11px] text-slate-500">
+                  {cover ? `${item.images.length} arquivo${item.images.length === 1 ? "" : "s"}` : "sem upload"}
+                </span>
               </span>
             }
           />

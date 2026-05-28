@@ -115,10 +115,6 @@ export function getCatalogPublicationReadiness(input: Input): CatalogReadiness {
     reasons.push("Defina o preço público.")
   }
 
-  if (input.images.length === 0) {
-    reasons.push("Adicione pelo menos uma imagem.")
-  }
-
   if (!isSealed(input.productKind)) {
     if (requiresRealPhoto(policy, input.productKind) && !input.hasRealPhotos) {
       reasons.push("Adicione pelo menos uma foto real do aparelho.")

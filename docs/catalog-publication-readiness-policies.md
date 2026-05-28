@@ -28,7 +28,7 @@ Três políticas inseridas idempotentemente (`WHERE NOT EXISTS`):
 Resultado:
 - seminovo continua sendo bloqueado se sem foto real, sem avaliação ou sem itens inclusos.
 - defeito ≤ 5 continua bloqueando.
-- lacrado continua emitindo warning quando usa imagem padrão.
+- lacrado sem upload público usa o asset padrão como mídia pública, sem bloquear a publicação, e emite warning para revisão visual.
 - status públicos seguem `active`/`in_stock`.
 - limite público segue 200.
 
@@ -74,7 +74,7 @@ Server-only. Nenhuma chamada client-side.
 | Seminovo sem avaliação | bloqueado | bloqueado (via policy) |
 | Seminovo sem itens inclusos | bloqueado | bloqueado (via policy) |
 | Seminovo com defeito ≤ 5 | bloqueado | bloqueado (via readiness rule) |
-| Lacrado com imagem padrão | warning | warning (via readiness rule) |
+| Lacrado com imagem padrão | warning | publicado sem blocker; warning via readiness rule |
 | Status fora de `active`/`in_stock` | filtrado | filtrado (via `allowed_inventory_statuses`) |
 | LIMIT 200 listagem | preservado | preservado (via `max_products`) |
 | Listagem admin abrangente | preservado | preservado (admin SQL não foi alterado) |
