@@ -1,4 +1,4 @@
-import { pool } from "@/lib/db"
+import { readQueryWithRetry } from "@/lib/db"
 import { buildCatalogSlug, parseCatalogSlug } from "@/lib/catalog/slug"
 import {
   getConditionFromGrade,
@@ -149,7 +149,7 @@ const SELECT_INVENTORY_BASE = `
 async function resolveCatalogCompanyId(): Promise<string | null> {
   const explicit = process.env.NOBRETECH_PUBLIC_COMPANY_ID
   if (explicit) return explicit
-  const result = await pool.query<{ id: string }>(
+  const result = await readQueryWithRetry<{ id: string }>(
     "SELECT id FROM companies ORDER BY created_at ASC LIMIT 1"
   )
   return result.rows[0]?.id || null
@@ -160,7 +160,7 @@ async function fetchImagesForProducts(
   productIds: string[],
 ): Promise<Map<string, InventoryImageRow[]>> {
   if (productIds.length === 0) return new Map()
-  const result = await pool.query<InventoryImageRow>(
+  const result = await readQueryWithRetry<InventoryImageRow>(
     `
       SELECT product_id, id, image_url, is_primary, sort_order, alt, source
       FROM product_images
@@ -184,7 +184,7 @@ async function fetchIncludedItems(
   inventoryIds: string[],
 ): Promise<Map<string, IncludedItemRow[]>> {
   if (inventoryIds.length === 0) return new Map()
-  const result = await pool.query<IncludedItemRow>(
+  const result = await readQueryWithRetry<IncludedItemRow>(
     `
       SELECT inventory_item_id, label, is_included, sort_order
       FROM catalog_included_items
@@ -665,7 +665,7 @@ export async function listPublicCatalog(
   const allowedStatuses = resolveAllowedStatusesForList(policies)
   const maxProducts = resolveMaxProductsForList(policies)
 
-  const rowsResult = await pool.query<InventoryRow>(
+  const rowsResult = await readQueryWithRetry<InventoryRow>(
     `
       ${SELECT_INVENTORY_BASE}
       WHERE i.company_id = $1::uuid
@@ -714,7 +714,7 @@ export async function getPublicProductBySlug(
   const policies = await getCatalogPublicationPolicies(companyId)
   const allowedStatuses = resolveAllowedStatusesForList(policies)
 
-  const rowsResult = await pool.query<InventoryRow>(
+  const rowsResult = await readQueryWithRetry<InventoryRow>(
     `
       ${SELECT_INVENTORY_BASE}
       WHERE i.company_id = $1::uuid

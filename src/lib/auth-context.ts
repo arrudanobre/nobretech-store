@@ -1,7 +1,7 @@
 import { auth, currentUser } from "@clerk/nextjs/server"
 import { redirect } from "next/navigation"
 import { NextResponse } from "next/server"
-import { pool } from "@/lib/db"
+import { readQueryWithRetry } from "@/lib/db"
 import {
   canAccess,
   canDeleteSensitiveRecords,
@@ -56,8 +56,7 @@ let usersStatusColumnPromise: Promise<boolean> | null = null
 
 function hasUsersStatusColumn() {
   if (!usersStatusColumnPromise) {
-    usersStatusColumnPromise = pool
-      .query<{ exists: boolean }>(
+    usersStatusColumnPromise = readQueryWithRetry<{ exists: boolean }>(
         `
           SELECT EXISTS (
             SELECT 1
@@ -116,7 +115,7 @@ export async function getCurrentAuthContext(): Promise<AuthContext> {
   const hasStatus = await hasUsersStatusColumn()
   const statusSelect = hasStatus ? "u.status AS user_status" : "'active' AS user_status"
 
-  const result = await pool.query<UserRow>(
+  const result = await readQueryWithRetry<UserRow>(
     `
       SELECT
         u.id AS app_user_id,

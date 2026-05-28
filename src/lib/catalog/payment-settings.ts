@@ -1,5 +1,5 @@
 import { SIDEPAY_FEE_PCTS } from "@/lib/constants"
-import { pool } from "@/lib/db"
+import { readQueryWithRetry } from "@/lib/db"
 import { normalizePaymentFeePct } from "@/lib/helpers"
 import type { CatalogPaymentSettings } from "@/lib/catalog/pricing"
 
@@ -11,7 +11,7 @@ export function defaultCatalogPaymentSettings(): CatalogPaymentSettings {
 
 export async function loadCatalogPaymentSettings(companyId: string): Promise<CatalogPaymentSettings> {
   const defaults = defaultCatalogPaymentSettings()
-  const result = await pool.query<Record<string, string | number | null>>(
+  const result = await readQueryWithRetry<Record<string, string | number | null>>(
     "SELECT * FROM financial_settings WHERE company_id = $1::uuid LIMIT 1",
     [companyId],
   )

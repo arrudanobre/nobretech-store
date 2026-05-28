@@ -1,6 +1,6 @@
 import "server-only"
 
-import { pool } from "@/lib/db"
+import { readQueryWithRetry } from "@/lib/db"
 import type { CatalogProductKind } from "@/lib/catalog/admin-types"
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -116,7 +116,7 @@ export async function getCatalogPublicationPolicies(
   companyId: string
 ): Promise<CatalogPublicationPolicy[]> {
   if (!UUID_RE.test(companyId)) return []
-  const result = await pool.query<PolicyRow>(
+  const result = await readQueryWithRetry<PolicyRow>(
     `SELECT * FROM catalog_publication_policies
      WHERE company_id = $1
        AND active = TRUE
@@ -157,7 +157,7 @@ export async function getCatalogReadinessRules(
   policyId: string
 ): Promise<CatalogReadinessRule[]> {
   if (!UUID_RE.test(policyId)) return []
-  const result = await pool.query<RuleRow>(
+  const result = await readQueryWithRetry<RuleRow>(
     `SELECT * FROM catalog_readiness_rules
      WHERE catalog_publication_policy_id = $1 AND active = TRUE
      ORDER BY created_at ASC`,
@@ -172,7 +172,7 @@ export async function getCatalogReadinessRulesForPolicies(
   const map = new Map<string, CatalogReadinessRule[]>()
   const validIds = policyIds.filter((id) => UUID_RE.test(id))
   if (validIds.length === 0) return map
-  const result = await pool.query<RuleRow>(
+  const result = await readQueryWithRetry<RuleRow>(
     `SELECT * FROM catalog_readiness_rules
      WHERE catalog_publication_policy_id = ANY($1::uuid[]) AND active = TRUE
      ORDER BY created_at ASC`,

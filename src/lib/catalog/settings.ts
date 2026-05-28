@@ -1,6 +1,6 @@
 import "server-only"
 
-import { pool } from "@/lib/db"
+import { pool, readQueryWithRetry } from "@/lib/db"
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -91,7 +91,7 @@ function mapBadge(row: BadgeRow): CatalogTrustBadge {
 
 export async function getCatalogSettings(companyId: string): Promise<CatalogPublicSettings> {
   if (!UUID_RE.test(companyId)) return DEFAULT_SETTINGS
-  const result = await pool.query<SettingsRow>(
+  const result = await readQueryWithRetry<SettingsRow>(
     `SELECT hero_tagline, empty_state_title, empty_state_description,
             no_results_title, no_results_description, grid_heading, grid_subheading
      FROM catalog_settings WHERE company_id = $1 LIMIT 1`,
@@ -102,7 +102,7 @@ export async function getCatalogSettings(companyId: string): Promise<CatalogPubl
 
 export async function getCatalogTrustBadges(companyId: string): Promise<CatalogTrustBadge[]> {
   if (!UUID_RE.test(companyId)) return []
-  const result = await pool.query<BadgeRow>(
+  const result = await readQueryWithRetry<BadgeRow>(
     `SELECT id, icon_key, label, description, sort_order, show_on_catalog, show_on_product
      FROM catalog_trust_badges
      WHERE company_id = $1 AND active = TRUE

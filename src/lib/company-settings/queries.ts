@@ -1,6 +1,6 @@
 import "server-only"
 
-import { pool } from "@/lib/db"
+import { readQueryWithRetry } from "@/lib/db"
 import type {
   CompanyBrandProfile,
   CompanyContactChannel,
@@ -178,7 +178,7 @@ function mapDocumentProfile(row: DocumentProfileRow): CompanyDocumentProfile {
 async function getCompany(companyId: string): Promise<CompanyRow | null> {
   if (!isValidCompanyId(companyId)) return null
 
-  const result = await pool.query<CompanyRow>(
+  const result = await readQueryWithRetry<CompanyRow>(
     `
       SELECT id, name
       FROM companies
@@ -194,7 +194,7 @@ async function getCompany(companyId: string): Promise<CompanyRow | null> {
 export async function getCompanyBrandProfile(companyId: string): Promise<CompanyBrandProfile | null> {
   if (!isValidCompanyId(companyId)) return null
 
-  const result = await pool.query<BrandProfileRow>(
+  const result = await readQueryWithRetry<BrandProfileRow>(
     `
       SELECT
         id,
@@ -237,7 +237,7 @@ export async function getCompanyContactChannels(
 ): Promise<CompanyContactChannel[]> {
   if (!isValidCompanyId(companyId)) return []
 
-  const result = await pool.query<ContactChannelRow>(
+  const result = await readQueryWithRetry<ContactChannelRow>(
     `
       SELECT
         id,
@@ -269,7 +269,7 @@ export async function getPrimaryCompanyContactChannel(
 ): Promise<CompanyContactChannel | null> {
   if (!isValidCompanyId(companyId)) return null
 
-  const result = await pool.query<ContactChannelRow>(
+  const result = await readQueryWithRetry<ContactChannelRow>(
     `
       SELECT
         id,
@@ -301,7 +301,7 @@ export async function getPrimaryCompanyContactChannel(
 export async function getCompanyDocumentProfile(companyId: string): Promise<CompanyDocumentProfile | null> {
   if (!isValidCompanyId(companyId)) return null
 
-  const result = await pool.query<DocumentProfileRow>(
+  const result = await readQueryWithRetry<DocumentProfileRow>(
     `
       SELECT
         id,
@@ -381,7 +381,7 @@ export async function getCompanySettingsAuditLogs(
 ): Promise<CompanySettingsAuditLog[]> {
   if (!isValidCompanyId(companyId)) return []
 
-  const result = await pool.query<{
+  const result = await readQueryWithRetry<{
     id: string
     company_id: string
     actor_user_id: string | null

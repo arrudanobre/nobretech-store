@@ -1,4 +1,4 @@
-import { Pool } from "pg"
+import { Pool, type QueryResult, type QueryResultRow } from "pg"
 
 const connectionString = process.env.DATABASE_URL
 
@@ -94,6 +94,54 @@ if (!globalThis.nobretechPool) {
 
 export const DEFAULT_USER_ID = process.env.SEED_USER_ID || "00000000-0000-0000-0000-000000000001"
 export const DEFAULT_USER_EMAIL = process.env.SEED_USER_EMAIL || ""
+
+const TRANSIENT_DB_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "EPIPE",
+  "08003",
+  "08006",
+  "53300",
+  "57P01",
+  "57P02",
+  "57P03",
+])
+
+function getDbErrorCode(error: unknown): string | null {
+  if (!error || typeof error !== "object") return null
+  const code = (error as { code?: unknown }).code
+  return typeof code === "string" ? code : null
+}
+
+function isTransientDbError(error: unknown): boolean {
+  const code = getDbErrorCode(error)
+  if (code && TRANSIENT_DB_ERROR_CODES.has(code)) return true
+  const message = error instanceof Error ? error.message : ""
+  return /connection terminated unexpectedly|read ECONNRESET/i.test(message)
+}
+
+export async function readQueryWithRetry<T extends QueryResultRow = QueryResultRow>(
+  text: string,
+  values?: unknown[],
+  retries = 1
+): Promise<QueryResult<T>> {
+  let lastError: unknown
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await pool.query<T>(text, values)
+    } catch (error) {
+      lastError = error
+      if (attempt >= retries || !isTransientDbError(error)) {
+        throw error
+      }
+      await new Promise((resolve) => setTimeout(resolve, 75 * (attempt + 1)))
+    }
+  }
+
+  throw lastError
+}
 
 export async function ensureDefaultCompanyAndUser() {
   if (process.env.NODE_ENV === "production") {

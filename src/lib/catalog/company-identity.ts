@@ -1,6 +1,6 @@
 import "server-only"
 
-import { pool } from "@/lib/db"
+import { readQueryWithRetry } from "@/lib/db"
 import { resolveCompanyIdentity } from "@/lib/company-settings/queries"
 import type { CompanyContactChannel, CompanyContactChannelType } from "@/lib/company-settings/types"
 
@@ -31,7 +31,7 @@ export type CatalogCompanyIdentity = {
 async function resolvePublicCompanyId(): Promise<string | null> {
   const explicit = process.env.NOBRETECH_PUBLIC_COMPANY_ID
   if (explicit) return explicit
-  const result = await pool.query<{ id: string }>(
+  const result = await readQueryWithRetry<{ id: string }>(
     "SELECT id FROM companies ORDER BY created_at ASC LIMIT 1"
   )
   return result.rows[0]?.id ?? null
