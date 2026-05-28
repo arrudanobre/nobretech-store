@@ -18,6 +18,7 @@
 /.next-cache/
 /.next-old/
 /.next-cache-old/
+/.next-stale*/
 /out/
 
 # production
