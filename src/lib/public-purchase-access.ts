@@ -161,6 +161,8 @@ export type PublicPurchaseItemWarranty = {
   nature: string | null
   startsAt: string | null
   endsAt: string | null
+  durationMonths?: number | null
+  durationDays?: number | null
   statusLabel: string
   note: string | null
 }
@@ -418,19 +420,19 @@ function storeWarrantyLabel(companyShortName?: string | null) {
 }
 
 function noContractualWarranty(companyShortName?: string | null): PublicPurchaseItemWarranty {
-  const label = companyShortName
-    ? `Sem Garantia ${companyShortName} contratual vinculada a este item.`
-    : "Sem garantia contratual da loja vinculada a este item."
-
   return {
     source: "none",
     name: null,
-    label,
+    label: "Sem garantia contratual",
     nature: null,
     startsAt: null,
     endsAt: null,
+    durationMonths: null,
+    durationDays: null,
     statusLabel: "Sem garantia contratual vinculada",
-    note: "Danos por uso, queda, impacto, riscos, mau uso ou desgaste natural não são cobertos como garantia contratual.",
+    note: companyShortName
+      ? `Sem Garantia ${companyShortName} contratual vinculada a este item. Danos por uso, queda, impacto, riscos, mau uso ou desgaste natural não são cobertos como garantia contratual.`
+      : "Sem garantia contratual da loja vinculada a este item. Danos por uso, queda, impacto, riscos, mau uso ou desgaste natural não são cobertos como garantia contratual.",
   }
 }
 
@@ -442,6 +444,8 @@ function legacyWarranty(start: string | null, end: string | null): PublicPurchas
     nature: "legacy",
     startsAt: start,
     endsAt: end,
+    durationMonths: null,
+    durationDays: null,
     statusLabel: warrantyStatus(end),
     note: "Compatibilidade com vendas antigas sem garantia por item.",
   }
@@ -466,6 +470,8 @@ function publicItemWarranty(row: SaleItemWarrantyRow, companyShortName?: string 
     nature: row.warranty_nature,
     startsAt,
     endsAt,
+    durationMonths: row.duration_months,
+    durationDays: row.duration_days,
     statusLabel: itemWarrantyStatusLabel(startsAt, endsAt),
     note: itemWarrantyNote(row),
   }
