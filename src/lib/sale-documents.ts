@@ -314,7 +314,10 @@ async function savePdfDocument(doc: jsPDF, filename: string) {
 
   if (file && canShareFile && isTouchDevice && nav?.share) {
     try {
-      await nav.share({ files: [file], title: filename })
+      // Share only the PDF file. Passing `title` (or `text`) alongside `files`
+      // causes some mobile share targets (notably WhatsApp on iOS) to attach
+      // the string as a separate .txt — generating two files instead of one.
+      await nav.share({ files: [file] })
       return
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return
