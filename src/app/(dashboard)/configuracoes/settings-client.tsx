@@ -1638,14 +1638,28 @@ export function ConfiguracoesClient({ currentUser }: { currentUser: CurrentUser 
 
           {catalogPanelTab === "general" && (
             <CatalogPanelCard title="Geral" description="Informações de uso do catálogo configurável.">
-              <div className="flex items-start gap-4 rounded-2xl border border-blue-100 bg-blue-50 p-5">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white text-blue-600 shadow-sm">
-                  <Grid2X2 className="h-5 w-5" />
+              <div className="space-y-4">
+                <div className="flex items-start gap-4 rounded-2xl border border-blue-100 bg-blue-50 p-5">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white text-blue-600 shadow-sm">
+                    <Grid2X2 className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-slate-950">Use o catálogo para organizar categorias, atributos, cores e variações usadas no cadastro de produtos.</p>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">Novas configurações gerais podem entrar aqui sem poluir as listas operacionais.</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-sm font-semibold text-slate-950">Use o catálogo para organizar categorias, atributos, cores e variações usadas no cadastro de produtos.</p>
-                  <p className="mt-2 text-sm leading-6 text-slate-600">Novas configurações gerais podem entrar aqui sem poluir as listas operacionais.</p>
-                </div>
+
+                {canAccess(currentUser.role, "settings.view") && (
+                  <div className="flex items-center justify-between rounded-2xl border border-slate-200 p-5">
+                    <div>
+                      <h4 className="text-sm font-medium text-slate-900">Catálogo Público e Selos</h4>
+                      <p className="mt-1 text-sm text-slate-500">Administre os textos do catálogo e selos de confiança exibidos para clientes.</p>
+                    </div>
+                    <Link href="/configuracoes/catalogo" className="flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800">
+                      Configurar
+                    </Link>
+                  </div>
+                )}
               </div>
             </CatalogPanelCard>
           )}

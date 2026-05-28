@@ -132,3 +132,126 @@ export async function resolveCatalogPublicConfig(
     productBadges: badges.filter((b) => b.showOnProduct),
   }
 }
+
+export async function upsertCatalogSettings(
+  companyId: string,
+  settings: Partial<CatalogPublicSettings>
+): Promise<void> {
+  if (!UUID_RE.test(companyId)) throw new Error("Invalid company ID")
+
+  const current = await getCatalogSettings(companyId)
+  const next = { ...current, ...settings }
+
+  await pool.query(
+    `INSERT INTO catalog_settings (
+      company_id, hero_tagline, empty_state_title, empty_state_description,
+      no_results_title, no_results_description, grid_heading, grid_subheading
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    ON CONFLICT (company_id) DO UPDATE SET
+      hero_tagline = EXCLUDED.hero_tagline,
+      empty_state_title = EXCLUDED.empty_state_title,
+      empty_state_description = EXCLUDED.empty_state_description,
+      no_results_title = EXCLUDED.no_results_title,
+      no_results_description = EXCLUDED.no_results_description,
+      grid_heading = EXCLUDED.grid_heading,
+      grid_subheading = EXCLUDED.grid_subheading,
+      updated_at = NOW()`,
+    [
+      companyId,
+      next.heroTagline,
+      next.emptyStateTitle,
+      next.emptyStateDescription,
+      next.noResultsTitle,
+      next.noResultsDescription,
+      next.gridHeading,
+      next.gridSubheading,
+    ]
+  )
+}
+
+export async function createCatalogTrustBadge(
+  companyId: string,
+  badge: Omit<CatalogTrustBadge, "id">
+): Promise<string> {
+  if (!UUID_RE.test(companyId)) throw new Error("Invalid company ID")
+
+  const result = await pool.query<{ id: string }>(
+    `INSERT INTO catalog_trust_badges (
+      company_id, icon_key, label, description, sort_order, show_on_catalog, show_on_product, active
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE)
+    RETURNING id`,
+    [
+      companyId,
+      badge.iconKey,
+      badge.label,
+      badge.description,
+      badge.sortOrder,
+      badge.showOnCatalog,
+      badge.showOnProduct,
+    ]
+  )
+  return result.rows[0].id
+}
+
+export async function updateCatalogTrustBadge(
+  companyId: string,
+  badgeId: string,
+  badge: Partial<Omit<CatalogTrustBadge, "id"> & { active: boolean }>
+): Promise<void> {
+  if (!UUID_RE.test(companyId) || !UUID_RE.test(badgeId)) throw new Error("Invalid IDs")
+
+  const updates: string[] = []
+  const values: unknown[] = [companyId, badgeId]
+  let idx = 3
+
+  if (badge.iconKey !== undefined) {
+    updates.push(`icon_key = $${idx++}`)
+    values.push(badge.iconKey)
+  }
+  if (badge.label !== undefined) {
+    updates.push(`label = $${idx++}`)
+    values.push(badge.label)
+  }
+  if (badge.description !== undefined) {
+    updates.push(`description = $${idx++}`)
+    values.push(badge.description)
+  }
+  if (badge.sortOrder !== undefined) {
+    updates.push(`sort_order = $${idx++}`)
+    values.push(badge.sortOrder)
+  }
+  if (badge.showOnCatalog !== undefined) {
+    updates.push(`show_on_catalog = $${idx++}`)
+    values.push(badge.showOnCatalog)
+  }
+  if (badge.showOnProduct !== undefined) {
+    updates.push(`show_on_product = $${idx++}`)
+    values.push(badge.showOnProduct)
+  }
+  if (badge.active !== undefined) {
+    updates.push(`active = $${idx++}`)
+    values.push(badge.active)
+  }
+
+  if (updates.length === 0) return
+
+  updates.push(`updated_at = NOW()`)
+
+  await pool.query(
+    `UPDATE catalog_trust_badges
+     SET ${updates.join(", ")}
+     WHERE company_id = $1 AND id = $2`,
+    values
+  )
+}
+
+export async function deleteCatalogTrustBadge(companyId: string, badgeId: string): Promise<void> {
+  if (!UUID_RE.test(companyId) || !UUID_RE.test(badgeId)) throw new Error("Invalid IDs")
+
+  // Logical delete as preferred for auditability and safety
+  await pool.query(
+    `UPDATE catalog_trust_badges SET active = FALSE, updated_at = NOW() WHERE company_id = $1 AND id = $2`,
+    [companyId, badgeId]
+  )
+}
