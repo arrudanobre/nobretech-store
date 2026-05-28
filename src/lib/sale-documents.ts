@@ -165,6 +165,7 @@ function noContractualWarrantyLabel(company?: SaleDocumentCompany | null) {
 
 const NO_CONTRACTUAL_WARRANTY_TABLE_LABEL = "Sem garantia contratual"
 const NO_CONTRACTUAL_WARRANTY_NOTE = "Brindes, capas, películas e acessórios simples não herdam a garantia contratual do aparelho principal. Danos por uso, queda, impacto, riscos, mau uso ou desgaste natural não são cobertos como garantia contratual."
+const WARRANTY_TERMS_SECTION_HEIGHT = 238
 
 function hasItemWithoutContractualWarranty(items: Array<{ warranty?: DocumentItemWarranty }>) {
   return items.some((item) => item.warranty?.source === "none")
@@ -180,6 +181,16 @@ function itemWarrantyLabel(
   if (warranty.source === "none") return options.compactNone ? NO_CONTRACTUAL_WARRANTY_TABLE_LABEL : warranty.label || noContractualWarrantyLabel(company)
   if (warranty.source === "legacy") return warranty.label || warrantyLabel(fallbackMonths)
   if (warranty.nature === "manufacturer" && !warranty.endsAt) return "Conforme cobertura do fabricante."
+
+  if (options.compactNone) {
+    const duration = warranty.durationMonths
+      ? `${warranty.durationMonths} meses`
+      : warranty.durationDays
+        ? `${warranty.durationDays} dias`
+        : null
+    if (warranty.nature === "manufacturer") return duration ? `Apple ${duration}` : "Fabricante"
+    if (warranty.nature === "contractual") return duration ? `Loja ${duration}` : "Loja"
+  }
 
   const baseLabel = warranty.nature === "contractual"
     ? warranty.label || storeWarrantyLabel(company)
@@ -257,6 +268,73 @@ function drawWarrantyText(doc: jsPDF, x: number, y: number, maxWidth: number, li
     y += 1.2
   }
   return y
+}
+
+function drawWarrantyTermsBox(doc: jsPDF, y: number) {
+  doc.setDrawColor(0, 0, 0)
+  doc.rect(17, y, 176, WARRANTY_TERMS_SECTION_HEIGHT)
+  doc.line(17, y + 4, 193, y + 4)
+  setFont(doc, 8.6, "bold")
+  text(doc, "DADOS ADICIONAIS", 19.5, y + 3)
+}
+
+function drawReceiptWarrantyTerms(doc: jsPDF, y: number) {
+  let cursorY = ensurePageSpace(doc, y, WARRANTY_TERMS_SECTION_HEIGHT)
+  drawWarrantyTermsBox(doc, cursorY)
+  cursorY += 8
+
+  for (const item of WARRANTY_TERMS) {
+    setFont(doc, 8.2, item.bold ? "bold" : "normal", TEXT_GRAY)
+    const lines = doc.splitTextToSize(item.text, 171)
+    for (const line of lines) {
+      if (cursorY + 4.05 > PAGE_BOTTOM - 16) {
+        doc.addPage()
+        cursorY = PAGE_TOP
+        drawWarrantyTermsBox(doc, cursorY)
+        cursorY += 8
+      }
+      text(doc, line, 19.5, cursorY)
+      cursorY += 4.05
+    }
+    cursorY += 1.2
+  }
+
+  return cursorY
+}
+
+async function savePdfDocument(doc: jsPDF, filename: string) {
+  const nav = globalThis.navigator as (Navigator & {
+    canShare?: (data?: ShareData) => boolean
+    share?: (data: ShareData) => Promise<void>
+  }) | undefined
+  const blob = doc.output("blob")
+  const file = typeof File !== "undefined" ? new File([blob], filename, { type: "application/pdf" }) : null
+  const canShareFile = Boolean(file && nav?.canShare?.({ files: [file] }))
+  const isTouchDevice = typeof nav?.maxTouchPoints === "number" && nav.maxTouchPoints > 0
+
+  if (file && canShareFile && isTouchDevice && nav?.share) {
+    try {
+      await nav.share({ files: [file], title: filename })
+      return
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return
+    }
+  }
+
+  if (typeof document !== "undefined" && typeof URL !== "undefined") {
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement("a")
+    link.href = url
+    link.download = filename
+    link.rel = "noopener"
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    return
+  }
+
+  doc.save(filename)
 }
 
 export async function generateReceiptPDF(data: SaleDocumentData) {
@@ -495,16 +573,11 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
   text(doc, observationLines, 19, obsY + 5.5)
 
   // ── Warranty terms ──
-  const termsY = ensurePageSpace(doc, obsY + observationBoxHeight + 5, 120)
-  doc.rect(17, termsY, 176, Math.min(109, 297 - termsY - 30))
-  doc.line(17, termsY + 4, 193, termsY + 4)
-  setFont(doc, 8.6, "bold")
-  text(doc, "DADOS ADICIONAIS", 19.5, termsY + 3)
-  const termsEndY = drawWarrantyText(doc, 19.5, termsY + 8, 171, 4.05)
+  const termsEndY = drawReceiptWarrantyTerms(doc, obsY + observationBoxHeight + 5)
   const signatureY = ensurePageSpace(doc, termsEndY + 12, 14)
   drawSignature(doc, signatureY, data.customerName, companyName)
 
-  doc.save(`Recibo-${safeFileName(data.customerName)}-${receiptNumber(data.saleId)}.pdf`)
+  await savePdfDocument(doc, `Recibo-${safeFileName(data.customerName)}-${receiptNumber(data.saleId)}.pdf`)
 }
 
 export async function generateWarrantyPDF(data: SaleDocumentData) {
@@ -590,5 +663,5 @@ export async function generateWarrantyPDF(data: SaleDocumentData) {
   const signatureY = ensurePageSpace(doc, Math.max(termsEndY + 12, 249), 14)
   drawSignature(doc, signatureY, data.customerName, companyName)
 
-  doc.save(`${safeFileName(data.item.name)} - Garantia.pdf`)
+  await savePdfDocument(doc, `${safeFileName(data.item.name)} - Garantia.pdf`)
 }

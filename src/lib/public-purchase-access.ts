@@ -106,6 +106,7 @@ export type PublicPurchaseDetails = {
 export type PublicPurchaseCompany = {
   displayName: string | null
   shortName: string | null
+  sellerName?: string | null
 }
 
 export type PublicPurchaseIssue = {
@@ -201,6 +202,7 @@ type SaleAccessRow = {
   company_name: string | null
   company_display_name: string | null
   company_short_name: string | null
+  company_default_seller_name: string | null
   company_whatsapp_value: string | null
   company_whatsapp_url: string | null
   company_settings: Record<string, unknown> | string | null
@@ -401,12 +403,13 @@ function itemWarrantyNote(warranty: Pick<SaleItemWarrantyRow, "warranty_nature" 
   return null
 }
 
-function publicCompanyBrand(row: Pick<SaleAccessRow, "company_name" | "company_display_name" | "company_short_name">): PublicPurchaseCompany {
+function publicCompanyBrand(row: Pick<SaleAccessRow, "company_name" | "company_display_name" | "company_short_name" | "company_default_seller_name">): PublicPurchaseCompany {
   const displayName = cleanDisplayText(row.company_display_name) || cleanDisplayText(row.company_name)
   const shortName = cleanDisplayText(row.company_short_name) || displayName
   return {
     displayName,
     shortName,
+    sellerName: cleanDisplayText(row.company_default_seller_name),
   }
 }
 
@@ -453,13 +456,12 @@ function publicItemWarranty(row: SaleItemWarrantyRow, companyShortName?: string 
       ? ` — ${row.duration_days} dias`
       : ""
   const isContractual = row.warranty_nature === "contractual"
-  const label = isContractual
-    ? `${storeWarrantyLabel(companyShortName)}${durationLabel}`
-    : row.warranty_label
+  const baseLabel = row.warranty_label || (isContractual ? storeWarrantyLabel(companyShortName) : row.warranty_name)
+  const label = baseLabel ? `${baseLabel}${durationLabel}` : null
 
   return {
     source: "item",
-    name: isContractual ? label : row.warranty_name,
+    name: row.warranty_name,
     label,
     nature: row.warranty_nature,
     startsAt,
@@ -864,6 +866,7 @@ async function getSaleByToken(token: string) {
         co.name AS company_name,
         cbp.display_name AS company_display_name,
         cbp.short_name AS company_short_name,
+        cdp.default_seller_name AS company_default_seller_name,
         ccc.value AS company_whatsapp_value,
         ccc.url AS company_whatsapp_url,
         s.inventory_id,
@@ -940,6 +943,14 @@ async function getSaleByToken(token: string) {
         ORDER BY updated_at DESC
         LIMIT 1
       ) cbp ON true
+      LEFT JOIN LATERAL (
+        SELECT default_seller_name
+        FROM company_document_profile
+        WHERE company_id = s.company_id
+          AND active = TRUE
+        ORDER BY effective_from DESC, updated_at DESC
+        LIMIT 1
+      ) cdp ON true
       LEFT JOIN LATERAL (
         SELECT value, url
         FROM company_contact_channels
@@ -1199,6 +1210,7 @@ function buildSaleDocuments(input: {
       displayName: input.company.displayName,
       shortName: input.company.shortName,
       phone: input.supportPhoneLabel,
+      sellerName: input.company.sellerName,
     },
     paymentMethod,
     payments: input.paymentLines,
