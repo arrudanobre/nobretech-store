@@ -1,12 +1,12 @@
 import { requirePermission, canAccess } from "@/lib/auth-context"
 import { resolveCatalogPublicConfig } from "@/lib/catalog/settings"
-import { CatalogSettingsClient } from "./catalog-settings-client"
+import { VitrinePublicaClient } from "./vitrine-publica-client"
 
 export const metadata = {
-  title: "Configurações do Catálogo Público",
+  title: "Vitrine pública",
 }
 
-export default async function CatalogSettingsPage() {
+export default async function VitrinePublicaPage() {
   const context = await requirePermission("settings.view")
   const canEditSettings = canAccess(context.role, "settings.edit")
 
@@ -16,11 +16,11 @@ export default async function CatalogSettingsPage() {
   try {
     config = await resolveCatalogPublicConfig(context.companyId)
   } catch (error) {
-    loadError = error instanceof Error ? error.message : "Erro ao carregar configurações do catálogo público."
+    loadError = error instanceof Error ? error.message : "Erro ao carregar configurações da vitrine pública."
   }
 
   return (
-    <CatalogSettingsClient
+    <VitrinePublicaClient
       canEditSettings={canEditSettings}
       initialSettings={config?.settings || null}
       initialCatalogBadges={config?.catalogBadges || []}

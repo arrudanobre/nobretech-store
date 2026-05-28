@@ -11,9 +11,9 @@ import {
   type CatalogTrustBadge,
 } from "@/lib/catalog/settings"
 
-const CATALOG_SETTINGS_PATH = "/configuracoes/catalogo"
+const VITRINE_SETTINGS_PATH = "/configuracoes/vitrine-publica"
 
-export type ActionResponse<T = void> = 
+export type ActionResponse<T = void> =
   | { ok: true; data: T }
   | { ok: false; error: { message: string } }
 
@@ -23,7 +23,7 @@ export async function saveCatalogSettingsAction(
   try {
     const context = await requirePermission("settings.edit")
     await upsertCatalogSettings(context.companyId, settings)
-    revalidatePath(CATALOG_SETTINGS_PATH)
+    revalidatePath(VITRINE_SETTINGS_PATH)
     return { ok: true, data: undefined }
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to save settings"
@@ -37,7 +37,7 @@ export async function createCatalogTrustBadgeAction(
   try {
     const context = await requirePermission("settings.edit")
     const id = await createCatalogTrustBadge(context.companyId, badge)
-    revalidatePath(CATALOG_SETTINGS_PATH)
+    revalidatePath(VITRINE_SETTINGS_PATH)
     return { ok: true, data: { id } }
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to create badge"
@@ -52,7 +52,7 @@ export async function updateCatalogTrustBadgeAction(
   try {
     const context = await requirePermission("settings.edit")
     await updateCatalogTrustBadge(context.companyId, badgeId, badge)
-    revalidatePath(CATALOG_SETTINGS_PATH)
+    revalidatePath(VITRINE_SETTINGS_PATH)
     return { ok: true, data: undefined }
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to update badge"
@@ -66,7 +66,7 @@ export async function deactivateCatalogTrustBadgeAction(
   try {
     const context = await requirePermission("settings.edit")
     await deleteCatalogTrustBadge(context.companyId, badgeId)
-    revalidatePath(CATALOG_SETTINGS_PATH)
+    revalidatePath(VITRINE_SETTINGS_PATH)
     return { ok: true, data: undefined }
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to delete badge"

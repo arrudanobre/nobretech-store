@@ -30,6 +30,7 @@ import {
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
+  Store,
   type LucideIcon,
   UserPlus,
   Users,
@@ -1279,6 +1280,25 @@ export function ConfiguracoesClient({ currentUser }: { currentUser: CurrentUser 
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             Salvar empresa
           </Button>
+
+          <div className="flex flex-col gap-4 rounded-2xl border border-royal-100 bg-royal-100/30 p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-royal-100 text-royal-600">
+                <Store className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-navy-900">Vitrine pública</h3>
+                <p className="mt-1 text-sm text-gray-500">Textos, selos e mensagens que aparecem no catálogo acessado pelos clientes.</p>
+              </div>
+            </div>
+            <Link
+              href="/configuracoes/vitrine-publica"
+              className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-navy-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-navy-800"
+            >
+              Configurar vitrine pública
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+          </div>
         </section>
       )}
 
@@ -1650,13 +1670,17 @@ export function ConfiguracoesClient({ currentUser }: { currentUser: CurrentUser 
                 </div>
 
                 {canAccess(currentUser.role, "settings.view") && (
-                  <div className="flex items-center justify-between rounded-2xl border border-slate-200 p-5">
-                    <div>
-                      <h4 className="text-sm font-medium text-slate-900">Catálogo Público e Selos</h4>
-                      <p className="mt-1 text-sm text-slate-500">Administre os textos do catálogo e selos de confiança exibidos para clientes.</p>
-                    </div>
-                    <Link href="/configuracoes/catalogo" className="flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800">
-                      Configurar
+                  <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 p-5 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-sm text-slate-500">
+                      Os textos e selos exibidos para clientes ficam em{" "}
+                      <span className="font-medium text-slate-900">Vitrine pública</span> (aba Empresa).
+                    </p>
+                    <Link
+                      href="/configuracoes/vitrine-publica"
+                      className="inline-flex shrink-0 items-center gap-2 text-sm font-semibold text-royal-600 transition hover:text-royal-500"
+                    >
+                      Abrir vitrine pública
+                      <ArrowRight className="h-3.5 w-3.5" />
                     </Link>
                   </div>
                 )}

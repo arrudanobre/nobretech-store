@@ -4,13 +4,9 @@ import { pool } from "@/lib/db"
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-export type CatalogTrustBadgeIcon =
-  | "camera"
-  | "shield_check"
-  | "seal_check"
-  | "chat_circle"
-  | "truck"
-  | "storefront"
+// Chave Iconify do ícone do selo (ex: "mdi:whatsapp"). Aceita também chaves
+// legadas ("shield_check", ...) resolvidas em @/lib/catalog/badge-icons.
+export type CatalogTrustBadgeIcon = string
 
 export type CatalogTrustBadge = {
   id: string

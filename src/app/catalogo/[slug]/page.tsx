@@ -28,8 +28,9 @@ import {
   getCatalogCompanyIdentity,
 } from "@/lib/catalog/company-identity"
 import { resolveCatalogPublicConfig } from "@/lib/catalog/settings"
-import { Camera, ChatCircle as ChatCircleIcon, SealCheck as SealCheckIcon, ShieldCheck as ShieldCheckIcon, Storefront, Truck as TruckIcon } from "@phosphor-icons/react/dist/ssr"
 import type { CatalogTrustBadgeIcon } from "@/lib/catalog/settings"
+import { BadgeIcon } from "@/components/catalog/badge-icon"
+import { resolveBadgeIconKey } from "@/lib/catalog/badge-icons"
 
 export const dynamic = "force-dynamic"
 
@@ -245,8 +246,7 @@ export default async function CatalogoProductPage({
                 extraBadge={
                   config.productBadges.find(
                     (b) =>
-                      b.iconKey !== "shield_check" &&
-                      b.iconKey !== "truck" &&
+                      !FIXED_TRUST_ICON_KEYS.has(resolveBadgeIconKey(b.iconKey)) &&
                       b.label !== product.warrantyLabel &&
                       b.label !== product.availabilityLabel
                   ) ?? null
@@ -394,14 +394,12 @@ function TrustItem({ icon, label }: { icon: React.ReactNode; label: string }) {
   )
 }
 
-const PRODUCT_TRUST_ICONS: Record<CatalogTrustBadgeIcon, typeof Storefront> = {
-  camera: Camera,
-  shield_check: ShieldCheckIcon,
-  seal_check: SealCheckIcon,
-  chat_circle: ChatCircleIcon,
-  truck: TruckIcon,
-  storefront: Storefront,
-}
+// Ícones já cobertos pelos itens fixos (garantia = escudo, disponibilidade = entrega).
+// Usado para não repetir esses selos como "extra".
+const FIXED_TRUST_ICON_KEYS = new Set([
+  resolveBadgeIconKey("shield_check"),
+  resolveBadgeIconKey("truck"),
+])
 
 function ProductTrustRow({
   warrantyLabel,
@@ -412,15 +410,14 @@ function ProductTrustRow({
   availabilityLabel: string
   extraBadge: { iconKey: CatalogTrustBadgeIcon; label: string } | null
 }) {
-  const ExtraIcon = extraBadge ? PRODUCT_TRUST_ICONS[extraBadge.iconKey] ?? Storefront : null
   const cols = extraBadge ? "grid-cols-3" : "grid-cols-2"
 
   return (
     <ul className={`grid min-w-0 ${cols} gap-2`}>
       <TrustItem icon={<ShieldCheck className="h-4 w-4" weight="duotone" />} label={warrantyLabel} />
       <TrustItem icon={<Truck className="h-4 w-4" weight="duotone" />} label={availabilityLabel} />
-      {extraBadge && ExtraIcon ? (
-        <TrustItem icon={<ExtraIcon className="h-4 w-4" weight="duotone" />} label={extraBadge.label} />
+      {extraBadge ? (
+        <TrustItem icon={<BadgeIcon iconKey={extraBadge.iconKey} className="h-4 w-4" />} label={extraBadge.label} />
       ) : null}
     </ul>
   )

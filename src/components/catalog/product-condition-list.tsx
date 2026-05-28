@@ -1,22 +1,19 @@
 import {
   BatteryCharging,
   Camera,
-  ChatCircle,
   CheckCircle,
   Cpu,
   DeviceMobile,
   Fingerprint,
   Package,
   SealCheck,
-  ShieldCheck,
   SpeakerHigh,
-  Storefront,
-  Truck,
   WifiHigh,
 } from "@phosphor-icons/react/dist/ssr"
 import type { PublicCatalogConditionItem } from "@/lib/catalog/types"
 import { formatScore10, getScoreTone } from "@/lib/catalog/score"
-import type { CatalogTrustBadge, CatalogTrustBadgeIcon } from "@/lib/catalog/settings"
+import type { CatalogTrustBadge } from "@/lib/catalog/settings"
+import { BadgeIcon } from "@/components/catalog/badge-icon"
 
 const ICON_MAP: Record<string, typeof DeviceMobile> = {
   screen: DeviceMobile,
@@ -29,15 +26,6 @@ const ICON_MAP: Record<string, typeof DeviceMobile> = {
   audio: SpeakerHigh,
   connectivity: WifiHigh,
   functions: Cpu,
-}
-
-const BADGE_ICON_MAP: Record<CatalogTrustBadgeIcon, typeof DeviceMobile> = {
-  camera: Camera,
-  shield_check: ShieldCheck,
-  seal_check: SealCheck,
-  chat_circle: ChatCircle,
-  truck: Truck,
-  storefront: Storefront,
 }
 
 const TONE_TEXT: Record<ReturnType<typeof getScoreTone>, string> = {
@@ -138,14 +126,13 @@ export function ProductConditionList({
               </li>
             ) : null}
             {productBadges.map((badge) => {
-              const Icon = BADGE_ICON_MAP[badge.iconKey] ?? CheckCircle
               return (
                 <li
                   key={badge.id}
                   className="flex items-start gap-2.5 rounded-2xl border border-white/10 bg-black/20 px-3 py-3"
                 >
                   <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#D6A84F]/12 text-[#F2D88A] ring-1 ring-[#D6A84F]/20">
-                    <Icon className="h-4 w-4" weight="duotone" />
+                    <BadgeIcon iconKey={badge.iconKey} className="h-4 w-4" />
                   </span>
                   <span className="min-w-0">
                     <span className="block text-[12.5px] font-semibold leading-tight text-zinc-100">{badge.label}</span>
