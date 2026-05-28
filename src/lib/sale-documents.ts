@@ -409,7 +409,7 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
 
   // ── Products table ──
   const ROW_H = 13
-  const colX = { desc: 40, guar: 128, qty: 142, unit: 151, total: 173 }
+  const colX = { desc: 40, guar: 118, qty: 145, unit: 154, total: 174 }
 
   function drawProductsHeader(y: number) {
     setFont(doc, 9, "bold")
@@ -424,11 +424,11 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
     doc.rect(17, y, 176, 5, "F")
     setFont(doc, 8.2, "bold")
     text(doc, "Tipo", 28.5, y + 3.5, { align: "center" })
-    text(doc, "Descrição", 84, y + 3.5, { align: "center" })
-    text(doc, "Garantia", 135, y + 3.5, { align: "center" })
-    text(doc, "Qtd", 146.5, y + 3.5, { align: "center" })
-    text(doc, "Valor Unit.", 162, y + 3.5, { align: "center" })
-    text(doc, "Total", 183, y + 3.5, { align: "center" })
+    text(doc, "Descrição", 79, y + 3.5, { align: "center" })
+    text(doc, "Garantia", 131.5, y + 3.5, { align: "center" })
+    text(doc, "Qtd", 149.5, y + 3.5, { align: "center" })
+    text(doc, "Valor Unit.", 164, y + 3.5, { align: "center" })
+    text(doc, "Total", 183.5, y + 3.5, { align: "center" })
     return y + 5
   }
 
@@ -440,7 +440,7 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
       line.imei ? `IMEI: ${line.imei}` : null,
       line.imei2 ? `IMEI 2: ${line.imei2}` : null,
     ].filter(Boolean).join(" — ")
-    const descLines = doc.splitTextToSize(descLine, 84).slice(0, 2)
+    const descLines = doc.splitTextToSize(descLine, 74).slice(0, 2)
     doc.rect(17, rowY, 176, ROW_H)
     doc.line(colX.desc, rowY, colX.desc, rowY + ROW_H)
     doc.line(colX.guar, rowY, colX.guar, rowY + ROW_H)
@@ -451,10 +451,10 @@ export async function generateReceiptPDF(data: SaleDocumentData) {
     text(doc, typeLabel, 28.5, rowY + 7, { align: "center" })
     text(doc, descLines, 41, rowY + 4.6)
     const warrantyText = itemWarrantyLabel(line.warranty, line.warrantyMonths, data.company, { compactNone: true })
-    text(doc, doc.splitTextToSize(warrantyText, 24).slice(0, 2), 135, rowY + 5, { align: "center" })
-    text(doc, String(line.quantity), 146.5, rowY + 7, { align: "center" })
-    text(doc, isFree ? "—" : money(line.unitPrice), 162, rowY + 7, { align: "center" })
-    text(doc, isFree ? "Brinde" : money(line.totalPrice), 183, rowY + 7, { align: "center" })
+    text(doc, doc.splitTextToSize(warrantyText, 25).slice(0, 2), 131.5, rowY + 5, { align: "center" })
+    text(doc, String(line.quantity), 149.5, rowY + 7, { align: "center" })
+    text(doc, isFree ? "—" : money(line.unitPrice), 164, rowY + 7, { align: "center" })
+    text(doc, isFree ? "Brinde" : money(line.totalPrice), 183.5, rowY + 7, { align: "center" })
   }
 
   let tableY = drawProductsHeader(75)
