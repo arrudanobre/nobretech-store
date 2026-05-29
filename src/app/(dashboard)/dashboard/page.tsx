@@ -10,7 +10,7 @@ import { daysBetween, formatBRL, getProductName } from "@/lib/helpers"
 import { cn } from "@/lib/utils"
 import { calcSaleTotals, parseQtyFromNotes } from "@/lib/sale-totals"
 import { getInventoryCapitalValue, getInventoryQuantity, getInventoryUnitCost } from "@/lib/inventory/costing"
-import { isValidCommercialSale } from "@/lib/finance/finance-source-of-truth"
+import { isValidCommercialSale, isCommercialSale } from "@/lib/finance/finance-source-of-truth"
 import {
   DollarSign,
   Package,
@@ -1330,7 +1330,10 @@ export default function DashboardPage() {
       }
       setTurnoverSummary(nextTurnoverSummary)
 
-      const getSaleProfit = (s: any) => {
+      // Lucro comercial por venda (own e supplier). calcSaleTotals usa
+      // supplierCost quando presente (venda intermediada: sale_price - supplier_cost),
+      // senão o custo do estoque próprio (purchase_price). Sem double-count.
+      const getCommercialSaleProfit = (s: any) => {
         const cost = (s.inventory as any)?.purchase_price ?? 0
         const revenue = s.sale_price ?? s.net_amount ?? 0
         const qty = parseQtyFromNotes(s.notes)
@@ -1345,12 +1348,12 @@ export default function DashboardPage() {
       }
 
       const salesPeriod = ((salesPeriodRes.data as any[]) ?? []).filter(
-        (s) => (s.source_type || "own") === "own" && isCompletedSale(s)
+        (s) => isCommercialSale(s)
       )
       const totalSales = salesPeriod.reduce((acc, s) => acc + (s.sale_price ?? 0), 0)
       setPeriodSales(totalSales)
 
-      const profits = salesPeriod.map(getSaleProfit)
+      const profits = salesPeriod.map(getCommercialSaleProfit)
       const totalProfit = profits.reduce((a, b) => a + b, 0)
       setPeriodProfit(totalProfit)
 
@@ -1358,10 +1361,10 @@ export default function DashboardPage() {
       setPeriodAvgMargin(nextPeriodAvgMargin)
 
       const salesMonth = ((salesMonthRes.data as any[]) ?? []).filter(
-        (s) => (s.source_type || "own") === "own" && isCompletedSale(s)
+        (s) => isCommercialSale(s)
       )
       const salesLast6 = ((salesLast6Res.data as any[]) ?? []).filter(
-        (s) => (s.source_type || "own") === "own" && isCompletedSale(s)
+        (s) => isCommercialSale(s)
       )
       const monthMap: Record<string, number> = {}
       for (let i = 5; i >= 0; i--) {
@@ -1389,7 +1392,7 @@ export default function DashboardPage() {
         const day = saleDateDayLabel(s.sale_date, s.created_at)
         if (!dayMap[day]) dayMap[day] = { label: day, gross: 0, net: 0 }
         dayMap[day].gross += Number(s.sale_price || 0)
-        dayMap[day].net += getSaleProfit(s)
+        dayMap[day].net += getCommercialSaleProfit(s)
       })
       const nextDailyComparison = Object.values(dayMap)
         .filter((point) => point.gross > 0 || point.net > 0)
@@ -1408,7 +1411,7 @@ export default function DashboardPage() {
         const key = s.sale_date.slice(0, 7)
         if (!monthComparisonMap[key]) return
         monthComparisonMap[key].gross += Number(s.sale_price || 0)
-        monthComparisonMap[key].net += getSaleProfit(s)
+        monthComparisonMap[key].net += getCommercialSaleProfit(s)
       })
 
       const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
@@ -1418,13 +1421,13 @@ export default function DashboardPage() {
         monthComparisonMap[currentMonthKey].gross === 0
       ) {
         monthComparisonMap[currentMonthKey].gross = salesMonth.reduce((acc, sale) => acc + Number(sale.sale_price || 0), 0)
-        monthComparisonMap[currentMonthKey].net = salesMonth.reduce((acc, sale) => acc + getSaleProfit(sale), 0)
+        monthComparisonMap[currentMonthKey].net = salesMonth.reduce((acc, sale) => acc + getCommercialSaleProfit(sale), 0)
       }
       const nextMonthlyComparison = Object.values(monthComparisonMap)
       setMonthlySalesComparison(nextMonthlyComparison)
 
       const salesPrevMonth: RhythmSaleRow[] = ((salesPrevMonthRes.data as RhythmSaleRow[] | null) ?? []).filter(
-        (s) => (s.source_type || "own") === "own" && isCompletedSale(s)
+        (s) => isCommercialSale(s)
       )
       const salesMonthForRhythm: RhythmSaleRow[] = salesMonth as RhythmSaleRow[]
       const currentMonthDayNow = now.getDate()
@@ -1442,7 +1445,7 @@ export default function DashboardPage() {
         const day = Number(dayLabel)
         if (!day || day < 1 || day > rhythmMaxDays) return
         currentDailyMap[day].revenue += Number(s.sale_price || 0)
-        currentDailyMap[day].profit += getSaleProfit(s)
+        currentDailyMap[day].profit += getCommercialSaleProfit(s)
       })
       salesPrevMonth.forEach((s: RhythmSaleRow) => {
         const raw = String(s.sale_date || "").slice(0, 10)
@@ -1450,7 +1453,7 @@ export default function DashboardPage() {
         const day = Number(dayStr)
         if (!day || day < 1 || day > rhythmMaxDays) return
         previousDailyMap[day].revenue += Number(s.sale_price || 0)
-        previousDailyMap[day].profit += getSaleProfit(s)
+        previousDailyMap[day].profit += getCommercialSaleProfit(s)
       })
       const rhythmPoints: MonthRhythmPoint[] = []
       let runCurrentRevenue = 0
@@ -1502,7 +1505,7 @@ export default function DashboardPage() {
       setMonthRhythm(nextMonthRhythm)
 
       const catRaw = ((salesCategoryRes.data as any[]) ?? []).filter(
-        (s) => (s.source_type || "own") === "own" && isCompletedSale(s)
+        (s) => isCommercialSale(s)
       )
       const catCount: Record<string, number> = {}
       

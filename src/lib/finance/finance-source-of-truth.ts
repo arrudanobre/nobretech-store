@@ -99,6 +99,8 @@ export type LedgerMovementLike = LedgerMovementInput
 export type SaleLike = {
   sale_status?: string | null
   status?: string | null
+  source_type?: string | null
+  sourceType?: string | null
 }
 
 const RECONCILED_STATUSES = new Set(["reconciled", "paid", "received"])
@@ -184,6 +186,23 @@ export function isSalePaymentTransaction(transaction: TransactionLike) {
 export function isValidCommercialSale(sale: SaleLike) {
   const status = normalize(sale.sale_status ?? sale.status)
   return VALID_COMMERCIAL_SALE_STATUSES.has(status)
+}
+
+// Origens de venda que contam como evento comercial no dashboard.
+// "own" = estoque próprio; "supplier" = venda intermediada (item de fornecedor,
+// custo via supplier_cost, margem da Nobretech). Ambas são vendas comerciais.
+export const COMMERCIAL_SALE_SOURCE_TYPES = new Set(["own", "supplier"])
+
+export function isCommercialSaleSource(sourceType?: string | null) {
+  return COMMERCIAL_SALE_SOURCE_TYPES.has(normalize(sourceType) || "own")
+}
+
+// Reconhecimento comercial unificado: origem comercial + status concluído.
+// Conta a venda como evento único (independe de split/conciliação financeira).
+export function isCommercialSale(sale: SaleLike) {
+  const status = normalize(sale.sale_status ?? sale.status) || "completed"
+  return isCommercialSaleSource(sale.source_type ?? sale.sourceType)
+    && VALID_COMMERCIAL_SALE_STATUSES.has(status)
 }
 
 export function isInventoryAssetTransaction(transaction: TransactionLike) {
