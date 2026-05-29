@@ -7,6 +7,8 @@ export type ProductAssetInput = {
   category?: string | null
   uploadedImageUrl?: string | null
   uploadedThumbnailUrl?: string | null
+  operationalImageUrl?: string | null
+  operationalThumbnailUrl?: string | null
 }
 
 export type ProductAssetImageInfo = {
@@ -287,8 +289,8 @@ export function getProductAssetImage(input: ProductAssetInput): string {
 function stripPublicationMedia(input: ProductAssetInput): ProductAssetInput {
   return {
     ...input,
-    uploadedImageUrl: null,
-    uploadedThumbnailUrl: null,
+    uploadedImageUrl: input.operationalImageUrl || null,
+    uploadedThumbnailUrl: input.operationalThumbnailUrl || null,
   }
 }
 

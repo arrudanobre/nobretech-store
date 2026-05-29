@@ -17,6 +17,15 @@ export type ProductImageRecord = {
 
 export type ProductImageMap = Record<string, ProductImageRecord | null>
 
+export type OperationalProductImageRecord = {
+  product_id: string
+  image_url: string
+  thumbnail_url: string
+  storage_key: string
+  thumbnail_storage_key: string | null
+  updated_at: string | null
+}
+
 export async function fetchProductImageMap(productIds: string[]): Promise<ProductImageMap> {
   const ids = Array.from(new Set(productIds.filter(Boolean)))
   if (ids.length === 0) return {}

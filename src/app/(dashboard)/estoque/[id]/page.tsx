@@ -11,7 +11,7 @@ import { ProductImageManager } from "@/components/products/product-image-manager
 import { InventoryStockLabel, LabelPreviewModal } from "@/components/labels/label-preview-modal"
 import { useDashboardCompanyIdentity } from "@/components/layout/sidebar"
 import { formatBRL, daysBetween, buildPriceTable, getInventoryStatusMeta, getComputedInventoryStatus, getProductName, getTradeInOriginLabel, isPendingInventoryStatus } from "@/lib/helpers"
-import { fetchProductImageMap, type ProductImageRecord } from "@/lib/product-images"
+import { fetchProductImageMap, type OperationalProductImageRecord, type ProductImageRecord } from "@/lib/product-images"
 import { buildInventoryStockCode, inventoryLabelText, type InventoryStockLabelData } from "@/lib/label-utils"
 import { CATEGORIES, GRADES, CHECKLIST_TEMPLATES, SIDEPAY_FEE_PCTS } from "@/lib/constants"
 import { calculateSaleEconomics, estimateRiskReserve } from "@/lib/sale-economics"
@@ -51,6 +51,21 @@ interface ChecklistItem {
   label: string
   status: string
   note?: string
+}
+
+function operationalImageFromInventory(product: any): OperationalProductImageRecord | null {
+  if (!product?.operational_image_url || !product?.operational_thumbnail_url || !product?.operational_image_storage_key) {
+    return null
+  }
+
+  return {
+    product_id: product.id,
+    image_url: product.operational_image_url,
+    thumbnail_url: product.operational_thumbnail_url,
+    storage_key: product.operational_image_storage_key,
+    thumbnail_storage_key: product.operational_thumbnail_storage_key || null,
+    updated_at: product.updated_at || null,
+  }
 }
 
 
@@ -93,6 +108,7 @@ export default function ProductDetailPage() {
       p.photos = []
       const imageMap: Record<string, ProductImageRecord | null> = await fetchProductImageMap([p.id]).catch(() => ({}))
       p.productImage = imageMap[p.id] || null
+      p.operationalImage = operationalImageFromInventory(p)
       setProduct(p)
 
       if (!p.imei && !p.serial_number && p.product_type !== "device") {
@@ -396,11 +412,13 @@ export default function ProductDetailPage() {
       <ProductImageManager
         productId={productId}
         image={product.productImage || null}
+        operationalImage={product.operationalImage || null}
         brand={product.catalog?.brand || "Apple"}
         category={product.catalog?.category || catalogCategory}
         model={product.catalog?.model || catalogName}
         color={product.catalog?.color || null}
         onImageChange={(image) => setProduct((current: any) => current ? { ...current, productImage: image } : current)}
+        onOperationalImageChange={(image) => setProduct((current: any) => current ? { ...current, operationalImage: image } : current)}
       />
 
       {/* Strategic overview */}

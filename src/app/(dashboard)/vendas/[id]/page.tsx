@@ -153,6 +153,8 @@ type SaleInventoryImageItem = {
   id?: string | null
   brand?: string | null
   type?: string | null
+  operational_image_url?: string | null
+  operational_thumbnail_url?: string | null
   catalog?: {
     brand?: string | null
     model?: string | null
@@ -178,6 +180,8 @@ function getSaleItemImageInput(
     model: catalog.model || fallbackName || null,
     color: catalog.color || null,
     category: catalog.category || inventoryItem?.type || fallbackName || null,
+    operationalImageUrl: inventoryItem?.operational_image_url || null,
+    operationalThumbnailUrl: inventoryItem?.operational_thumbnail_url || null,
   }
 }
 
@@ -317,7 +321,7 @@ export default function SaleDetailPage() {
         if (id) {
           const { data: addItems } = await (supabase
             .from("sales_additional_items") as any)
-            .select("*, inventory:product_id(id, imei, imei2, serial_number, grade, catalog:catalog_id(*))")
+                .select("*, inventory:product_id(id, imei, imei2, serial_number, grade, operational_image_url, operational_thumbnail_url, catalog:catalog_id(*))")
             .eq("sale_id", id)
           if (addItems) {
             fetchedAdditionalItems = addItems as AdditionalItemImageSource[]
@@ -340,7 +344,7 @@ export default function SaleDetailPage() {
 
           const { data: inv } = await (supabase
             .from("inventory") as any)
-            .select("id, imei, imei2, serial_number, condition_notes, notes, purchase_price, suggested_price, type, supplier_name, status, catalog:catalog_id(*)")
+            .select("id, imei, imei2, serial_number, condition_notes, notes, purchase_price, suggested_price, type, supplier_name, status, operational_image_url, operational_thumbnail_url, catalog:catalog_id(*)")
             .in("status", ["active", "in_stock"])
           if (inv) setInventoryItems(inv)
 
@@ -1101,7 +1105,7 @@ export default function SaleDetailPage() {
         name: finalName,
         cost_price: cost,
         sale_price: chargedPrice
-      }).select("*, inventory:product_id(id, imei, imei2, serial_number, grade, catalog:catalog_id(*))").single()
+      }).select("*, inventory:product_id(id, imei, imei2, serial_number, grade, operational_image_url, operational_thumbnail_url, catalog:catalog_id(*))").single()
 
       if (error) throw error
 

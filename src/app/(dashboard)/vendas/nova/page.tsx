@@ -57,6 +57,8 @@ type InventoryProduct = {
   storage?: string | null
   color?: string | null
   productImage?: ProductImageRecord | null
+  operational_image_url?: string | null
+  operational_thumbnail_url?: string | null
   imei: string
   imei2?: string
   serial_number?: string
@@ -141,6 +143,8 @@ type AdditionalSaleItem = {
   model?: string | null
   color?: string | null
   productImage?: ProductImageRecord | null
+  operational_image_url?: string | null
+  operational_thumbnail_url?: string | null
   cost: number
   suggested: number
   type: "upsell" | "free"
@@ -1049,7 +1053,7 @@ function NewSaleContent() {
       try {
         const { data, error } = await supabase
           .from("inventory")
-          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, grade, status, quantity, condition_notes, notes, type, supplier_name, product_type, category_name_snapshot, subcategory_name_snapshot, catalog:catalog_id(model, variant, storage, color, brand, category)")
+          .select("id, imei, imei2, serial_number, purchase_price, suggested_price, battery_health, grade, status, quantity, condition_notes, notes, type, supplier_name, product_type, category_name_snapshot, subcategory_name_snapshot, operational_image_url, operational_thumbnail_url, catalog:catalog_id(model, variant, storage, color, brand, category)")
           .in("status", ["active", "in_stock"] as any)
           .order("created_at", { ascending: false })
 
@@ -1077,6 +1081,8 @@ function NewSaleContent() {
             storage: item.catalog?.storage || null,
             color: item.catalog?.color || null,
             productImage: imageMap[item.id] || null,
+            operational_image_url: item.operational_image_url || null,
+            operational_thumbnail_url: item.operational_thumbnail_url || null,
             imei: item.imei || "",
             imei2: item.imei2 || "",
             serial_number: item.serial_number || "",
@@ -1424,6 +1430,8 @@ function NewSaleContent() {
           model: item.model || null,
           color: item.color || null,
           productImage: item.productImage || null,
+          operational_image_url: item.operational_image_url || null,
+          operational_thumbnail_url: item.operational_thumbnail_url || null,
           cost: effectiveCost,
           suggested: effectiveSuggested,
           type: "upsell",
@@ -2298,6 +2306,8 @@ function NewSaleContent() {
       model?: string | null
       color?: string | null
       productImage?: ProductImageRecord | null
+      operational_image_url?: string | null
+      operational_thumbnail_url?: string | null
       identity: string
       type: "Principal" | "Upsell" | "Brinde" | "Acessório"
       quantity: number
@@ -2320,6 +2330,8 @@ function NewSaleContent() {
         model: selectedProduct.model,
         color: selectedProduct.color,
         productImage: selectedProduct.productImage,
+        operational_image_url: selectedProduct.operational_image_url,
+        operational_thumbnail_url: selectedProduct.operational_thumbnail_url,
         identity: [productIdentity || null, selectedMainVariant ? `Variação ${selectedMainVariant.colorName}` : null]
           .filter(Boolean)
           .join(" · ") || "Sem IMEI/serial informado",
@@ -2355,6 +2367,8 @@ function NewSaleContent() {
         model: additionalItem.model,
         color: additionalItem.color,
         productImage: additionalItem.productImage,
+        operational_image_url: additionalItem.operational_image_url,
+        operational_thumbnail_url: additionalItem.operational_thumbnail_url,
         identity: [additionalItem.imei ? `IMEI ${additionalItem.imei}` : null, additionalItem.serialNumber ? `Serial ${additionalItem.serialNumber}` : null]
           .filter(Boolean)
           .join(" · ") || "Item vinculado à venda",
@@ -2561,6 +2575,8 @@ function NewSaleContent() {
                       category={selectedProduct.category}
                       model={selectedProduct.model || selectedProduct.name}
                       color={selectedProduct.color}
+                      operationalImageUrl={selectedProduct.operational_image_url || null}
+                      operationalThumbnailUrl={selectedProduct.operational_thumbnail_url || null}
                       imageContext="stock"
                       size={68}
                       className="bg-white shadow-sm"
@@ -2692,6 +2708,8 @@ function NewSaleContent() {
                           category={product.category}
                           model={product.model || product.name}
                           color={product.color}
+                          operationalImageUrl={product.operational_image_url || null}
+                          operationalThumbnailUrl={product.operational_thumbnail_url || null}
                           imageContext="stock"
                           size={56}
                           className="bg-gray-50"
@@ -2872,6 +2890,8 @@ function NewSaleContent() {
                               category={item.category}
                               model={item.model || item.name}
                               color={item.color}
+                              operationalImageUrl={item.operational_image_url || null}
+                              operationalThumbnailUrl={item.operational_thumbnail_url || null}
                               imageContext="stock"
                               size={48}
                               className="rounded-lg bg-gray-50"
@@ -3738,6 +3758,8 @@ function NewSaleContent() {
                                 category={item.category}
                                 model={item.model || item.name}
                                 color={item.color}
+                                operationalImageUrl={item.operational_image_url || null}
+                                operationalThumbnailUrl={item.operational_thumbnail_url || null}
                                 imageContext="stock"
                                 size={48}
                                 className="rounded-xl bg-gray-50"

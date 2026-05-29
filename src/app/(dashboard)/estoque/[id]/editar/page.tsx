@@ -1,5 +1,7 @@
 "use client"
 
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
+
 import { useState, useEffect, useCallback, useMemo, useRef, type ComponentType, type ReactNode } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -23,7 +25,7 @@ import {
   type CatalogColor,
   type CatalogConfig,
 } from "@/lib/catalog-config"
-import { fetchProductImageMap, type ProductImageRecord } from "@/lib/product-images"
+import { fetchProductImageMap, type OperationalProductImageRecord, type ProductImageRecord } from "@/lib/product-images"
 import { SupplierCombobox } from "@/components/products/supplier-combobox"
 import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 import {
@@ -163,6 +165,7 @@ export default function EditProductPage() {
   const [linkedSale, setLinkedSale] = useState<LinkedSaleInfo | null>(null)
   const [linkedPurchase, setLinkedPurchase] = useState<LinkedPurchaseInfo | null>(null)
   const [productImage, setProductImage] = useState<ProductImageRecord | null>(null)
+  const [operationalImage, setOperationalImage] = useState<OperationalProductImageRecord | null>(null)
   const [itemOrigin, setItemOrigin] = useState("purchase")
   const [sourceSale, setSourceSale] = useState<SourceSaleInfo | null>(null)
   const [saleDate, setSaleDate] = useState("")
@@ -281,6 +284,16 @@ export default function EditProductPage() {
       const activeCatalogConfig = catalogConfigRef.current
       const imageMap: Record<string, ProductImageRecord | null> = await fetchProductImageMap([item.id]).catch(() => ({}))
       setProductImage(imageMap[item.id] || null)
+      setOperationalImage(item.operational_image_url && item.operational_thumbnail_url && item.operational_image_storage_key
+        ? {
+            product_id: item.id,
+            image_url: item.operational_image_url,
+            thumbnail_url: item.operational_thumbnail_url,
+            storage_key: item.operational_image_storage_key,
+            thumbnail_storage_key: item.operational_thumbnail_storage_key || null,
+            updated_at: item.updated_at || null,
+          }
+        : null)
 
       setCatalogId(item.catalog_id || null)
       setNotes(item.notes || "")
@@ -1535,11 +1548,13 @@ export default function EditProductPage() {
           <ProductImageManager
             productId={productId}
             image={productImage}
+            operationalImage={operationalImage}
             brand={["iphone", "ipad", "applewatch", "airpods", "macbook"].includes(category) ? "Apple" : category}
             category={category}
             model={selectedModel?.name || generatedCatalogName || catalogName}
             color={formData.color || null}
             onImageChange={setProductImage}
+            onOperationalImageChange={setOperationalImage}
           />
 
           <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">

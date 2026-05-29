@@ -6,6 +6,7 @@ import {
 } from "./product-assets"
 
 const publicPhoto = "https://pub-example.r2.dev/catalog/real-photo.webp"
+const operationalPhoto = "https://pub-example.r2.dev/stock/operational-photo.webp"
 
 const usedIphone = {
   brand: "Apple",
@@ -27,6 +28,19 @@ assert.equal(stockImage.src, "/product-assets/apple/iphone/iphone-16/iphone-16-u
 const portalImage = resolveCustomerPortalImage(usedIphone)
 assert.notEqual(portalImage.src, publicPhoto)
 assert.equal(portalImage.source, "static_asset")
+
+const operationalStockImage = resolveStockDisplayImage({
+  ...usedIphone,
+  operationalImageUrl: operationalPhoto,
+  operationalThumbnailUrl: operationalPhoto,
+})
+assert.equal(operationalStockImage.src, operationalPhoto)
+assert.equal(operationalStockImage.source, "uploaded")
+assert.equal(resolvePublicListingImage({
+  ...usedIphone,
+  operationalImageUrl: operationalPhoto,
+  operationalThumbnailUrl: operationalPhoto,
+}).src, publicPhoto)
 
 const accessoryImage = resolveStockDisplayImage({
   brand: "Apple",

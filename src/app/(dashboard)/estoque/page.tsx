@@ -139,6 +139,8 @@ interface InventoryItem {
   catalog?: CatalogRow | null
   product_catalog?: CatalogRow | null
   productImage?: ProductImageRecord | null
+  operational_image_url?: string | null
+  operational_thumbnail_url?: string | null
   purchase?: PurchaseLink | null
   created_at: string
 }
@@ -872,6 +874,8 @@ export default function InventoryPage() {
                             category={cat?.category}
                             model={cat?.model || product}
                             color={cat?.color}
+                            operationalImageUrl={item.operational_image_url || null}
+                            operationalThumbnailUrl={item.operational_thumbnail_url || null}
                             imageContext="stock"
                             size={48}
                             className="rounded-xl bg-white"

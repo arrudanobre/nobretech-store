@@ -215,6 +215,8 @@ type SaleAccessRow = {
   inventory_supplier_name: string | null
   inventory_photos: string[] | null
   inventory_notes: string | null
+  operational_thumbnail_url: string | null
+  operational_image_url: string | null
   previous_sale_date: string | Date | null
   previous_owner_name: string | null
   previous_owner_cpf: string | null
@@ -268,6 +270,8 @@ type AdditionalSaleItemRow = {
   imei: string | null
   imei2: string | null
   serial_number: string | null
+  operational_thumbnail_url: string | null
+  operational_image_url: string | null
 }
 
 type SaleVariantSelectionRow = {
@@ -718,6 +722,8 @@ async function getAdditionalItemsForSale(saleId: string) {
         sai.packaging_notes,
         i.notes AS inventory_notes,
         i.condition_notes,
+        i.operational_thumbnail_url,
+        i.operational_image_url,
         pc.model,
         pc.variant,
         pc.storage,
@@ -726,7 +732,9 @@ async function getAdditionalItemsForSale(saleId: string) {
         i.battery_health,
         i.imei,
         i.imei2,
-        i.serial_number
+        i.serial_number,
+        i.operational_thumbnail_url,
+        i.operational_image_url
       FROM sales_additional_items sai
       LEFT JOIN inventory i ON i.id = sai.product_id
       LEFT JOIN product_catalog pc ON pc.id = i.catalog_id
@@ -1326,7 +1334,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
     grade: row.grade || null,
     batteryHealth: row.battery_health === null || row.battery_health === undefined ? null : Number(row.battery_health),
     boxType: packagingLabel(row.packaging_type, row.packaging_notes, company.shortName),
-    photoUrl: null,
+    photoUrl: row.operational_thumbnail_url || row.operational_image_url || null,
     imei: maskTrailing(row.imei),
     serial: maskTrailing(row.serial_number),
     variationText: consumeVariantSelection(variantSelections, "main", row.inventory_id),
@@ -1364,7 +1372,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
         grade: item.grade || null,
         batteryHealth: item.battery_health === null || item.battery_health === undefined ? null : Number(item.battery_health),
         boxType: packagingLabel(item.packaging_type, item.packaging_notes, company.shortName),
-        photoUrl: null,
+        photoUrl: item.operational_thumbnail_url || item.operational_image_url || null,
         imei: maskTrailing(item.imei),
         serial: maskTrailing(item.serial_number),
         variationText: consumeVariantSelection(variantSelections, "additional", item.product_id),
