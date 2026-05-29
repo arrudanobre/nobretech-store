@@ -335,6 +335,8 @@ export default function InventoryPage() {
           battery_health,
           condition_notes,
           notes,
+          operational_image_url,
+          operational_thumbnail_url,
           created_at
         `)
         .order("created_at", { ascending: false })
