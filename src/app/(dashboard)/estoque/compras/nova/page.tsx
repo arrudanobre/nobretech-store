@@ -1,5 +1,7 @@
 "use client"
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -15,6 +17,7 @@ import { supabase } from "@/lib/supabase"
 import { GRADES } from "@/lib/constants"
 import { formatBRL, getComputedInventoryStatus, mapLifecycleToLegacyCompatibleStatus } from "@/lib/helpers"
 import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
+import { maskCurrencyInput } from "@/lib/currency-input"
 import {
   accessoryUsuallyHasSerial,
   buildLegacyCatalogConfig,
@@ -273,19 +276,19 @@ function shouldCreateOneInventoryRowPerUnit(line: PurchaseLine, imeis: string[],
   return line.mode === "catalog" && ["iphone", "ipad", "applewatch", "airpods", "macbook"].includes(line.category)
 }
 
-async function uploadProductImage(productId: string, file: File) {
+async function uploadOperationalImage(productId: string, file: File) {
   const formData = new FormData()
   formData.set("productId", productId)
   formData.set("file", file)
 
-  const response = await fetch("/api/product-images", {
+  const response = await fetch("/api/product-operational-image", {
     method: "POST",
     body: formData,
   })
 
   const payload = await response.json().catch(() => null)
-  if (!response.ok) {
-    throw new Error(payload?.error?.message || "Erro ao enviar imagem")
+  if (!response.ok || payload?.error) {
+    throw new Error(payload?.error?.message || "Erro ao enviar imagem operacional")
   }
 }
 
@@ -318,9 +321,10 @@ export default function NewInventoryPurchasePage() {
   const imagePreviewUrlsRef = useRef(new Set<string>())
 
   useEffect(() => {
+    const previewUrls = imagePreviewUrlsRef.current
     return () => {
-      imagePreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
-      imagePreviewUrlsRef.current.clear()
+      previewUrls.forEach((url) => URL.revokeObjectURL(url))
+      previewUrls.clear()
     }
   }, [])
 
@@ -432,8 +436,12 @@ export default function NewInventoryPurchasePage() {
       }
       if (field === "suggestedPrice") {
         const landedCost = toNumber(next.unitCost) + totals.freightPerUnit + totals.otherPerUnit
-        const price = toNumber(String(value))
+        const price = toNumber(maskCurrencyInput(String(value)))
+        next.suggestedPrice = maskCurrencyInput(String(value))
         if (landedCost > 0 && price > 0) next.marginPct = Math.max(0, (price / landedCost - 1) * 100).toFixed(2)
+      }
+      if (field === "unitCost") {
+        next.unitCost = maskCurrencyInput(String(value))
       }
       return next
     }))
@@ -845,7 +853,7 @@ export default function NewInventoryPurchasePage() {
       const imageUploadErrors: string[] = []
       for (const target of uploadTargets) {
         try {
-          await uploadProductImage(target.inventoryId, target.line.imageFile as File)
+          await uploadOperationalImage(target.inventoryId, target.line.imageFile as File)
         } catch (error) {
           imageUploadErrors.push(error instanceof Error ? error.message : "Erro ao enviar imagem")
         }
@@ -1276,7 +1284,7 @@ export default function NewInventoryPurchasePage() {
                                                   l.id !== line.id ? l : {
                                                     ...l,
                                                     variants: l.variants.map((item) =>
-                                                      item.id === v.id ? { ...item, unitCost: e.target.value } : item
+                                                      item.id === v.id ? { ...item, unitCost: maskCurrencyInput(e.target.value) } : item
                                                     ),
                                                   }
                                                 ))
@@ -1296,7 +1304,7 @@ export default function NewInventoryPurchasePage() {
                                                   l.id !== line.id ? l : {
                                                     ...l,
                                                     variants: l.variants.map((item) =>
-                                                      item.id === v.id ? { ...item, suggestedPrice: e.target.value } : item
+                                                      item.id === v.id ? { ...item, suggestedPrice: maskCurrencyInput(e.target.value) } : item
                                                     ),
                                                   }
                                                 ))
@@ -1482,9 +1490,9 @@ export default function NewInventoryPurchasePage() {
                               ) : (
                                 <Input label="Quantidade" type="number" min="1" value={line.quantity} onChange={(event) => updateLine(line.id, "quantity", event.target.value)} />
                               )}
-                              <Input label="Custo unitário" inputMode="decimal" value={line.unitCost} onChange={(event) => updateLine(line.id, "unitCost", event.target.value)} placeholder="0,00" />
+                              <Input label="Custo unitário" inputMode="decimal" value={line.unitCost} onChange={(event) => updateLine(line.id, "unitCost", event.target.value)} placeholder="R$ 0,00" />
                               <Input label="Margem %" inputMode="decimal" value={line.marginPct} onChange={(event) => updateLine(line.id, "marginPct", event.target.value)} />
-                              <Input label="Preço sugerido" inputMode="decimal" value={line.suggestedPrice} onChange={(event) => updateLine(line.id, "suggestedPrice", event.target.value)} placeholder={String(suggested || "")} />
+                              <Input label="Preço sugerido" inputMode="decimal" value={line.suggestedPrice} onChange={(event) => updateLine(line.id, "suggestedPrice", event.target.value)} placeholder={suggested ? formatBRL(suggested) : "R$ 0,00"} />
                               {canShowBattery ? (
                                 <Input label="Bateria %" type="number" min="0" max="100" disabled={line.grade === "Lacrado"} value={batteryValue} onChange={(event) => updateLine(line.id, "batteryHealth", event.target.value)} />
                               ) : null}

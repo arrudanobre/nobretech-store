@@ -1,8 +1,8 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
-import { ArrowLeft, ArrowRight, Check, Package, Save } from "lucide-react"
+import { ArrowLeft, ArrowRight, Check, ImageIcon, Package, Save, Upload, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
@@ -14,6 +14,7 @@ import { supabase } from "@/lib/supabase"
 import { formatBRL, getComputedInventoryStatus, mapLifecycleToLegacyCompatibleStatus } from "@/lib/helpers"
 import { CHECKLIST_TEMPLATES, GRADES } from "@/lib/constants"
 import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
+import { currencyInputToNumber, maskCurrencyInput } from "@/lib/currency-input"
 import {
   accessoryUsuallyHasSerial,
   buildLegacyCatalogConfig,
@@ -58,6 +59,34 @@ const ACCESSORY_SUGGESTIONS = [
   "Película para iPhone",
 ]
 
+const ACCEPTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"])
+const ACCEPTED_IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp", "heic", "heif"])
+const MAX_OPERATIONAL_IMAGE_BYTES = 10 * 1024 * 1024
+
+function validateOperationalImageFile(file: File) {
+  const extension = file.name.toLowerCase().split(".").pop() || ""
+  if ((file.type && !ACCEPTED_IMAGE_TYPES.has(file.type)) || !ACCEPTED_IMAGE_EXTENSIONS.has(extension)) {
+    return "Envie uma imagem em JPG, PNG, WebP ou HEIC."
+  }
+  if (file.size > MAX_OPERATIONAL_IMAGE_BYTES) return "Use uma imagem com até 10MB."
+  return null
+}
+
+async function uploadOperationalImage(productId: string, file: File) {
+  const formData = new FormData()
+  formData.set("productId", productId)
+  formData.set("file", file)
+
+  const response = await fetch("/api/product-operational-image", {
+    method: "POST",
+    body: formData,
+  })
+  const payload = await response.json().catch(() => null)
+  if (!response.ok || payload?.error) {
+    throw new Error(payload?.error?.message || "Erro ao enviar imagem operacional")
+  }
+}
+
 export default function AddProductPage() {
   const router = useRouter()
   const { toast } = useToast()
@@ -70,6 +99,9 @@ export default function AddProductPage() {
   const [financeAccounts, setFinanceAccounts] = useState<FinanceAccountOption[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([])
+  const [operationalImageFile, setOperationalImageFile] = useState<File | null>(null)
+  const [operationalImagePreviewUrl, setOperationalImagePreviewUrl] = useState("")
+  const operationalImageInputRef = useRef<HTMLInputElement | null>(null)
   const [formData, setFormData] = useState({
     manual_name: "",
     storage: "",
@@ -124,9 +156,9 @@ export default function AddProductPage() {
   }, [isManual, formData.manual_name, formData.storage, formData.color, selectedModel?.name])
 
   const suggestedPrice = useMemo(() => {
-    const manual = Number(formData.suggested_price || 0)
+    const manual = currencyInputToNumber(formData.suggested_price)
     if (manual > 0) return manual
-    const cost = Number(formData.purchase_price || 0)
+    const cost = currencyInputToNumber(formData.purchase_price)
     const margin = Number(formData.margin || 0)
     return cost > 0 ? Math.ceil(cost * (1 + margin / 100)) : 0
   }, [formData.purchase_price, formData.suggested_price, formData.margin])
@@ -148,7 +180,7 @@ export default function AddProductPage() {
       return Boolean(category && selectedModel && (isAccessory || formData.storage || !(selectedModel.storage || selectedModel.sizes)) && colorOk)
     }
     if (step === 2) {
-      const hasValues = Number(formData.purchase_price || 0) > 0 && Boolean(formData.purchase_date) && Number(formData.quantity || 0) > 0
+      const hasValues = currencyInputToNumber(formData.purchase_price) > 0 && Boolean(formData.purchase_date) && Number(formData.quantity || 0) > 0
       const financeOk =
         formData.purchase_finance_mode === "none" ||
         (formData.purchase_finance_mode === "payable" && Boolean(formData.purchase_due_date)) ||
@@ -182,6 +214,12 @@ export default function AddProductPage() {
   }, [])
 
   useEffect(() => {
+    return () => {
+      if (operationalImagePreviewUrl) URL.revokeObjectURL(operationalImagePreviewUrl)
+    }
+  }, [operationalImagePreviewUrl])
+
+  useEffect(() => {
     if (!requiresChecklist) {
       setChecklistItems([])
       return
@@ -201,44 +239,62 @@ export default function AddProductPage() {
 
   const updatePurchasePrice = (value: string) => {
     setFormData((prev) => {
-      const cost = Number(value || 0)
+      const maskedValue = maskCurrencyInput(value)
+      const cost = currencyInputToNumber(maskedValue)
       const margin = Number(prev.margin || 0)
       return {
         ...prev,
-        purchase_price: value,
-        suggested_price: cost > 0 ? Math.ceil(cost * (1 + margin / 100)).toString() : "",
+        purchase_price: maskedValue,
+        suggested_price: cost > 0 ? maskCurrencyInput(String(Math.ceil(cost * (1 + margin / 100)) * 100)) : "",
       }
     })
   }
 
   const updateMargin = (value: string) => {
     setFormData((prev) => {
-      const cost = Number(prev.purchase_price || 0)
+      const cost = currencyInputToNumber(prev.purchase_price)
       const margin = Number(value || 0)
       return {
         ...prev,
         margin: value,
-        suggested_price: cost > 0 ? Math.ceil(cost * (1 + margin / 100)).toString() : prev.suggested_price,
+        suggested_price: cost > 0 ? maskCurrencyInput(String(Math.ceil(cost * (1 + margin / 100)) * 100)) : prev.suggested_price,
       }
     })
   }
 
   const updateSuggestedPrice = (value: string) => {
     setFormData((prev) => {
-      const cost = Number(prev.purchase_price || 0)
-      const price = Number(value || 0)
+      const maskedValue = maskCurrencyInput(value)
+      const cost = currencyInputToNumber(prev.purchase_price)
+      const price = currencyInputToNumber(maskedValue)
       return {
         ...prev,
-        suggested_price: value,
+        suggested_price: maskedValue,
         margin: cost > 0 && price > 0 ? Math.max(0, ((price / cost) - 1) * 100).toFixed(2) : prev.margin,
       }
     })
   }
 
   const totalPurchaseCost = () => {
-    const unitCost = Number(formData.purchase_price || 0)
+    const unitCost = currencyInputToNumber(formData.purchase_price)
     const quantity = formData.type === "own" ? Math.max(1, Number(formData.quantity || 1)) : 1
     return Math.round(unitCost * quantity * 100) / 100
+  }
+
+  const updateOperationalImageFile = (file: File | null) => {
+    if (file) {
+      const validationError = validateOperationalImageFile(file)
+      if (validationError) {
+        toast({ title: "Imagem inválida", description: validationError, type: "error" })
+        return
+      }
+    }
+    setOperationalImagePreviewUrl((previousUrl) => {
+      if (previousUrl) URL.revokeObjectURL(previousUrl)
+      return file ? URL.createObjectURL(file) : ""
+    })
+    setOperationalImageFile(file)
+    if (operationalImageInputRef.current) operationalImageInputRef.current.value = ""
   }
 
   const createPurchaseFinanceTransaction = async (input: {
@@ -410,7 +466,7 @@ export default function AddProductPage() {
       const notes = manualName || formData.condition_notes || null
       const lifecycleStatus = getComputedInventoryStatus({
         status: "active",
-        purchase_price: Number(formData.purchase_price || 0),
+        purchase_price: currencyInputToNumber(formData.purchase_price),
         purchase_date: formData.purchase_date,
         grade: formData.grade || null,
         imei: isAccessory ? null : formData.imei || null,
@@ -428,7 +484,7 @@ export default function AddProductPage() {
         serial_number: isAccessory && !formData.accessory_has_serial ? null : formData.serial_number || null,
         grade: formData.grade || (isManual ? "Lacrado" : null),
         condition_notes: formData.condition_notes || manualName || null,
-        purchase_price: Number(formData.purchase_price),
+        purchase_price: currencyInputToNumber(formData.purchase_price),
         purchase_date: formData.purchase_date,
         supplier_id: formData.type === "supplier" && formData.supplier_id ? formData.supplier_id : null,
         type: formData.type,
@@ -452,6 +508,17 @@ export default function AddProductPage() {
 
       if (error) throw error
       if (createdInventory?.id) {
+        if (operationalImageFile) {
+          try {
+            await uploadOperationalImage(String(createdInventory.id), operationalImageFile)
+          } catch (imageError) {
+            await rollbackCreatedInventory({
+              inventoryId: String(createdInventory.id),
+              checklistId,
+            })
+            throw imageError
+          }
+        }
         try {
           await createPurchaseFinanceTransaction({
             inventoryId: String(createdInventory.id),
@@ -605,8 +672,8 @@ export default function AddProductPage() {
             ) : (
               <Input label="Quantidade" type="number" min="1" value={formData.quantity} onChange={(e) => updateField("quantity", Math.max(1, Number(e.target.value || 1)).toString())} />
             )}
-            <Input label="Preço de custo (R$)" type="number" min="0" value={formData.purchase_price} onChange={(e) => updatePurchasePrice(e.target.value)} />
-            <Input label="Preço sugerido (R$)" type="number" min="0" placeholder={suggestedPrice ? suggestedPrice.toString() : "Opcional"} value={formData.suggested_price} onChange={(e) => updateSuggestedPrice(e.target.value)} />
+            <Input label="Preço de custo (R$)" type="text" inputMode="decimal" value={formData.purchase_price} onChange={(e) => updatePurchasePrice(e.target.value)} placeholder="R$ 0,00" />
+            <Input label="Preço sugerido (R$)" type="text" inputMode="decimal" placeholder={suggestedPrice ? formatBRL(suggestedPrice) : "Opcional"} value={formData.suggested_price} onChange={(e) => updateSuggestedPrice(e.target.value)} />
             <Input label="Margem padrão (%)" type="number" min="0" value={formData.margin} onChange={(e) => updateMargin(e.target.value)} />
             <Input label="Data da compra" type="date" value={formData.purchase_date} onChange={(e) => updateField("purchase_date", e.target.value)} />
             {showBatteryField && <Input label="Saúde da bateria (%)" type="number" min="0" max="100" value={formData.battery_health} onChange={(e) => updateField("battery_health", e.target.value)} />}
@@ -662,6 +729,55 @@ export default function AddProductPage() {
 
           <Textarea label="Observações" placeholder="Estado físico, riscos, marcas de uso, detalhes do item..." value={formData.condition_notes} onChange={(e) => updateField("condition_notes", e.target.value)} />
 
+          <div className="rounded-2xl border border-gray-100 bg-surface/60 p-4">
+            <div className="flex items-start gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-royal-500/10 text-royal-600">
+                <ImageIcon className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold text-navy-900">Imagem operacional</p>
+                <p className="mt-1 text-xs leading-5 text-gray-500">
+                  Opcional. Será salva no item criado e usada no estoque, venda, portal do cliente e documentos.
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-4 sm:grid-cols-[112px_minmax(0,1fr)] sm:items-center">
+              <div className="flex h-28 w-28 items-center justify-center overflow-hidden rounded-2xl border border-gray-100 bg-white">
+                {operationalImagePreviewUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={operationalImagePreviewUrl} alt="Prévia da imagem operacional" className="h-full w-full object-contain p-2" />
+                ) : (
+                  <ImageIcon className="h-8 w-8 text-gray-300" />
+                )}
+              </div>
+              <div className="space-y-3">
+                <div className="rounded-2xl border border-royal-100 bg-royal-50/70 p-3 text-xs font-medium leading-5 text-royal-800">
+                  Isso não altera catálogo público, vitrine pública ou central de divulgação.
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="outline" size="sm" onClick={() => operationalImageInputRef.current?.click()}>
+                    <Upload className="h-4 w-4" />
+                    Selecionar imagem operacional
+                  </Button>
+                  {operationalImageFile ? (
+                    <Button type="button" variant="ghost" size="sm" onClick={() => updateOperationalImageFile(null)}>
+                      <X className="h-4 w-4" />
+                      Remover imagem
+                    </Button>
+                  ) : null}
+                </div>
+                <p className="text-xs text-gray-500">{operationalImageFile ? operationalImageFile.name : "JPG, PNG, WebP ou HEIC. Máximo 10MB."}</p>
+              </div>
+            </div>
+            <input
+              ref={operationalImageInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif"
+              className="hidden"
+              onChange={(event) => updateOperationalImageFile(event.target.files?.[0] || null)}
+            />
+          </div>
+
           {suggestedPrice > 0 && (
             <div className="rounded-xl bg-surface p-3 flex items-center justify-between">
               <span className="text-sm text-gray-500">Preço sugerido calculado</span>
@@ -716,7 +832,7 @@ export default function AddProductPage() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="rounded-xl border border-gray-100 p-3">
               <p className="text-xs text-gray-500">Custo</p>
-              <p className="font-bold text-navy-900">{formatBRL(Number(formData.purchase_price || 0))}</p>
+              <p className="font-bold text-navy-900">{formatBRL(currencyInputToNumber(formData.purchase_price))}</p>
             </div>
             <div className="rounded-xl border border-gray-100 p-3">
               <p className="text-xs text-gray-500">Sugerido</p>
