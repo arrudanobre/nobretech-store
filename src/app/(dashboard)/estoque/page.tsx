@@ -28,7 +28,6 @@ import { useToast } from "@/components/ui/toaster"
 import { useBadgeCount } from "@/components/layout/sidebar"
 import { cn } from "@/lib/utils"
 import { formatBRL, formatDate, getProductName } from "@/lib/helpers"
-import { fetchProductImageMap, type ProductImageRecord } from "@/lib/product-images"
 import {
   buildInventoryBatchReceiptUpdate,
   getInventoryArrivalAlerts,
@@ -138,7 +137,6 @@ interface InventoryItem {
   notes?: string | null
   catalog?: CatalogRow | null
   product_catalog?: CatalogRow | null
-  productImage?: ProductImageRecord | null
   operational_image_url?: string | null
   operational_thumbnail_url?: string | null
   purchase?: PurchaseLink | null
@@ -401,13 +399,7 @@ export default function InventoryPage() {
         }
       })
 
-      const imageMap: Record<string, ProductImageRecord | null> = await fetchProductImageMap(hydrated.map((item) => item.id)).catch(() => ({}))
-      const hydratedWithImages = hydrated.map((item) => ({
-        ...item,
-        productImage: imageMap[item.id] || null,
-      }))
-
-      const pageInventoryIds = hydratedWithImages.map((item) => item.id)
+      const pageInventoryIds = hydrated.map((item) => item.id)
       fetch("/api/inventory/batch-variants", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -424,15 +416,15 @@ export default function InventoryPage() {
         .catch(() => null)
 
       if (loadMore) {
-        setItems((prev) => [...prev, ...hydratedWithImages])
+        setItems((prev) => [...prev, ...hydrated])
         pageRef.current = currentPage
       } else {
-        setItems(hydratedWithImages)
+        setItems(hydrated)
         pageRef.current = 1
         await fetchOngoingBatches()
       }
 
-      setHasMore(hydratedWithImages.length === itemsPerPage)
+      setHasMore(hydrated.length === itemsPerPage)
     } catch (err: unknown) {
       console.error("Erro ao carregar estoque:", err instanceof Error ? err.message : err)
       toast({
@@ -634,11 +626,6 @@ export default function InventoryPage() {
           <Link href="/estoque/compras">
             <Button variant="outline" size="sm">
               <Truck className="w-4 h-4" /> Compras de Estoque
-            </Button>
-          </Link>
-          <Link href="/estoque/compras/nova">
-            <Button variant="outline" size="sm">
-              <Package className="w-4 h-4" /> Compra em lote
             </Button>
           </Link>
           <Link href="/estoque/novo">

@@ -102,6 +102,21 @@ type CatalogQuery<T> = PromiseLike<DbResult<T>> & {
   order(column: string, options?: { ascending?: boolean }): CatalogQuery<T>
 }
 
+type CatalogSingleResult<T> = {
+  data?: T | null
+  error?: { message?: string } | null
+}
+
+type CatalogWriteQuery<T> = PromiseLike<DbResult<T>> & {
+  select(value?: string): CatalogWriteQuery<T>
+  eq(column: string, value: unknown): CatalogWriteQuery<T>
+  is(column: string, value: unknown): CatalogWriteQuery<T>
+  limit(count: number): CatalogWriteQuery<T>
+  update(values: Record<string, unknown>): CatalogWriteQuery<T>
+  insert(values: Record<string, unknown>): CatalogWriteQuery<T>
+  single(): PromiseLike<CatalogSingleResult<T>>
+}
+
 export const DEFAULT_COLOR_SUGGESTIONS: CatalogColor[] = [
   { name: "Preto", hex: "#1D1D1F" },
   { name: "Branco", hex: "#F5F5F5" },
@@ -139,6 +154,46 @@ export function normalizeCatalogName(value: string) {
   return value.trim().toLowerCase()
 }
 
+const NATURAL_MODEL_COLLATOR = new Intl.Collator("pt-BR", {
+  numeric: true,
+  sensitivity: "base",
+})
+
+const IPHONE_MODEL_RE = /^iphone\s+(\d+)(e)?(?:\s+(mini|plus|pro(?:\s+max)?))?$/i
+const IPHONE_VARIANT_ORDER: Record<string, number> = {
+  base: 0,
+  e: 1,
+  mini: 2,
+  plus: 3,
+  pro: 4,
+  "pro max": 5,
+}
+
+function parseIphoneModel(name?: string | null) {
+  const match = String(name || "").trim().match(IPHONE_MODEL_RE)
+  if (!match) return null
+
+  const variant = match[2] ? "e" : (match[3] || "base").toLowerCase().replace(/\s+/g, " ")
+  return {
+    generation: Number(match[1]),
+    variantOrder: IPHONE_VARIANT_ORDER[variant] ?? IPHONE_VARIANT_ORDER.base,
+  }
+}
+
+export function sortCatalogModelsCommercially<T extends { name?: string | null }>(models: readonly T[] | null | undefined): T[] {
+  return [...(models || [])].sort((a, b) => {
+    const iphoneA = parseIphoneModel(a.name)
+    const iphoneB = parseIphoneModel(b.name)
+
+    if (iphoneA && iphoneB) {
+      if (iphoneA.generation !== iphoneB.generation) return iphoneA.generation - iphoneB.generation
+      if (iphoneA.variantOrder !== iphoneB.variantOrder) return iphoneA.variantOrder - iphoneB.variantOrder
+    }
+
+    return NATURAL_MODEL_COLLATOR.compare(String(a.name || ""), String(b.name || ""))
+  })
+}
+
 function uniqueValues(values: Array<string | null | undefined>) {
   return Array.from(new Set(values.map((value) => String(value || "").trim()).filter(Boolean)))
 }
@@ -158,12 +213,12 @@ export function buildLegacyCatalogConfig(): CatalogConfig {
       label: group.label || legacyCategoryLabel(value),
       productType: legacyProductType(value, group.label),
       colors: mergeColorOptions(...(group.models || []).map((model) => model.colors ? [...model.colors] : [])),
-      models: (group.models || []).map((model) => ({
+      models: sortCatalogModelsCommercially((group.models || []).map((model) => ({
         name: model.name,
         storage: model.storage ? [...model.storage] : undefined,
         sizes: model.sizes ? [...model.sizes] : undefined,
         colors: model.colors ? [...model.colors] : [],
-      })),
+      }))),
     })),
   }
 }
@@ -209,6 +264,10 @@ function catalogTable<T>(table: string) {
   return supabase.from(table) as unknown as CatalogQuery<T>
 }
 
+function catalogWriteTable<T>(table: string) {
+  return supabase.from(table) as unknown as CatalogWriteQuery<T>
+}
+
 async function fetchCatalogConfig(): Promise<CatalogConfig> {
   const fallback = buildLegacyCatalogConfig()
 
@@ -251,7 +310,7 @@ async function fetchCatalogConfig(): Promise<CatalogConfig> {
         .filter((color) => !color.category_id || color.category_id === category.id)
         .map((color) => ({ id: color.id, name: color.name, hex: color.hex }))
 
-      const dynamicModels = subcategoryRows
+      const dynamicModels = sortCatalogModelsCommercially(subcategoryRows
         .filter((subcategory) => subcategory.category_id === category.id)
         .map((subcategory) => {
           const legacy = fallback.categories
@@ -272,7 +331,7 @@ async function fetchCatalogConfig(): Promise<CatalogConfig> {
             sizes: sizes.length ? sizes : legacy?.sizes,
             colors: mergeColorOptions(linkedColors),
           }
-        })
+        }))
 
       return {
         id: category.id,
@@ -280,7 +339,7 @@ async function fetchCatalogConfig(): Promise<CatalogConfig> {
         label: category.name,
         productType,
         colors: mergeColorOptions(categoryColors, globalColors),
-        models: dynamicModels.length ? dynamicModels : fallback.categories.find((item) => item.value === value)?.models || [],
+        models: dynamicModels.length ? dynamicModels : sortCatalogModelsCommercially(fallback.categories.find((item) => item.value === value)?.models || []),
       }
     })
 
@@ -324,7 +383,7 @@ export async function createOrLinkModelColor(input: {
   let resolvedColor = input.existingColors?.find((color) => normalizeCatalogName(color.name) === normalizeCatalogName(nextName))
 
   if (!resolvedColor?.id && input.categoryId) {
-    const { data: categoryColors, error: findError } = await (supabase.from("product_colors") as any)
+    const { data: categoryColors, error: findError } = await catalogWriteTable<CatalogColorRow>("product_colors")
       .select("*")
       .eq("category_id", input.categoryId)
       .limit(200)
@@ -332,7 +391,7 @@ export async function createOrLinkModelColor(input: {
     if (findError) throw findError
     const match = (categoryColors || []).find((color: CatalogColorRow) => normalizeCatalogName(color.name) === normalizeCatalogName(nextName))
     if (match?.id && (match.is_active === false || match.deleted_at)) {
-      const { error } = await (supabase.from("product_colors") as any)
+      const { error } = await catalogWriteTable<CatalogColorRow>("product_colors")
         .update({ is_active: true, deleted_at: null })
         .eq("id", match.id)
       if (error) throw error
@@ -341,7 +400,7 @@ export async function createOrLinkModelColor(input: {
   }
 
   if (!resolvedColor?.id && input.categoryId) {
-    const { data: created, error } = await (supabase.from("product_colors") as any)
+    const { data: created, error } = await catalogWriteTable<CatalogColorRow>("product_colors")
       .insert({
         category_id: input.categoryId,
         name: nextName,
@@ -358,7 +417,7 @@ export async function createOrLinkModelColor(input: {
   const outputColor = resolvedColor || { name: nextName, hex: nextHex }
 
   if (input.subcategoryId && outputColor.id) {
-    const { data: existingLinks, error: linkFindError } = await (supabase.from("product_subcategory_colors") as any)
+    const { data: existingLinks, error: linkFindError } = await catalogWriteTable<CatalogSubcategoryColorRow>("product_subcategory_colors")
       .select("*")
       .eq("subcategory_id", input.subcategoryId)
       .eq("color_id", outputColor.id)
@@ -369,13 +428,13 @@ export async function createOrLinkModelColor(input: {
     const existingLink = existingLinks?.[0]
     if (existingLink?.id) {
       if (existingLink.is_active === false) {
-        const { error } = await (supabase.from("product_subcategory_colors") as any)
+        const { error } = await catalogWriteTable<CatalogSubcategoryColorRow>("product_subcategory_colors")
           .update({ is_active: true })
           .eq("id", existingLink.id)
         if (error) throw error
       }
     } else {
-      const { error } = await (supabase.from("product_subcategory_colors") as any)
+      const { error } = await catalogWriteTable<CatalogSubcategoryColorRow>("product_subcategory_colors")
         .insert({
           subcategory_id: input.subcategoryId,
           color_id: outputColor.id,
@@ -400,7 +459,7 @@ export async function createOrReuseCatalogColor(input: {
 
   let resolvedColor = input.existingColors?.find((color) => normalizeCatalogName(color.name) === normalizeCatalogName(nextName))
 
-  const query = (supabase.from("product_colors") as any)
+  const query = catalogWriteTable<CatalogColorRow>("product_colors")
     .select("*")
     .limit(200)
 
@@ -416,7 +475,7 @@ export async function createOrReuseCatalogColor(input: {
   const match = (scopedColors || []).find((color: CatalogColorRow) => normalizeCatalogName(color.name) === normalizeCatalogName(nextName))
   if (match?.id) {
     if (match.is_active === false || match.deleted_at || match.hex !== nextHex) {
-      const { error } = await (supabase.from("product_colors") as any)
+      const { error } = await catalogWriteTable<CatalogColorRow>("product_colors")
         .update({ is_active: true, deleted_at: null, hex: nextHex, normalized_name: normalizeCatalogName(nextName) })
         .eq("id", match.id)
       if (error) throw error
@@ -425,7 +484,7 @@ export async function createOrReuseCatalogColor(input: {
   }
 
   if (!resolvedColor?.id) {
-    const { data: created, error } = await (supabase.from("product_colors") as any)
+    const { data: created, error } = await catalogWriteTable<CatalogColorRow>("product_colors")
       .insert({
         category_id: input.categoryId || null,
         name: nextName,

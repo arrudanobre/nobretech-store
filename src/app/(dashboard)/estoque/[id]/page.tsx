@@ -11,7 +11,7 @@ import { ProductImageManager } from "@/components/products/product-image-manager
 import { InventoryStockLabel, LabelPreviewModal } from "@/components/labels/label-preview-modal"
 import { useDashboardCompanyIdentity } from "@/components/layout/sidebar"
 import { formatBRL, daysBetween, buildPriceTable, getInventoryStatusMeta, getComputedInventoryStatus, getProductName, getTradeInOriginLabel, isPendingInventoryStatus } from "@/lib/helpers"
-import { fetchProductImageMap, type OperationalProductImageRecord, type ProductImageRecord } from "@/lib/product-images"
+import type { OperationalProductImageRecord } from "@/lib/product-images"
 import { buildInventoryStockCode, inventoryLabelText, type InventoryStockLabelData } from "@/lib/label-utils"
 import { CATEGORIES, GRADES, CHECKLIST_TEMPLATES, SIDEPAY_FEE_PCTS } from "@/lib/constants"
 import { calculateSaleEconomics, estimateRiskReserve } from "@/lib/sale-economics"
@@ -106,8 +106,6 @@ export default function ProductDetailPage() {
 
       const p = items[0] as any
       p.photos = []
-      const imageMap: Record<string, ProductImageRecord | null> = await fetchProductImageMap([p.id]).catch(() => ({}))
-      p.productImage = imageMap[p.id] || null
       p.operationalImage = operationalImageFromInventory(p)
       setProduct(p)
 
@@ -411,13 +409,11 @@ export default function ProductDetailPage() {
 
       <ProductImageManager
         productId={productId}
-        image={product.productImage || null}
         operationalImage={product.operationalImage || null}
         brand={product.catalog?.brand || "Apple"}
         category={product.catalog?.category || catalogCategory}
         model={product.catalog?.model || catalogName}
         color={product.catalog?.color || null}
-        onImageChange={(image) => setProduct((current: any) => current ? { ...current, productImage: image } : current)}
         onOperationalImageChange={(image) => setProduct((current: any) => current ? { ...current, operationalImage: image } : current)}
       />
 

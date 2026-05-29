@@ -2,17 +2,15 @@
 
 import Image from "next/image"
 import { useMemo, useRef, useState } from "react"
-import { ImageIcon, Loader2, RotateCcw, Trash2, Upload } from "lucide-react"
+import { ImageIcon, Loader2, RotateCcw, Upload } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useToast } from "@/components/ui/toaster"
-import { resolvePublicListingImage, resolveStockDisplayImage, type ProductAssetInput } from "@/lib/product-assets"
-import type { OperationalProductImageRecord, ProductImageRecord } from "@/lib/product-images"
+import { resolveStockDisplayImage, type ProductAssetInput } from "@/lib/product-assets"
+import type { OperationalProductImageRecord } from "@/lib/product-images"
 
 type ProductImageManagerProps = ProductAssetInput & {
   productId: string
-  image?: ProductImageRecord | null
   operationalImage?: OperationalProductImageRecord | null
-  onImageChange?: (image: ProductImageRecord | null) => void
   onOperationalImageChange?: (image: OperationalProductImageRecord | null) => void
 }
 
@@ -31,37 +29,21 @@ function validateClientFile(file: File) {
 
 export function ProductImageManager({
   productId,
-  image,
   operationalImage,
-  onImageChange,
   onOperationalImageChange,
   ...product
 }: ProductImageManagerProps) {
-  const publicInputRef = useRef<HTMLInputElement | null>(null)
   const operationalInputRef = useRef<HTMLInputElement | null>(null)
   const { toast } = useToast()
-  const [publicImage, setPublicImage] = useState<ProductImageRecord | null>(image || null)
   const [currentOperationalImage, setCurrentOperationalImage] = useState<OperationalProductImageRecord | null>(operationalImage || null)
-  const [uploadingPublic, setUploadingPublic] = useState(false)
   const [uploadingOperational, setUploadingOperational] = useState(false)
-  const [removingPublic, setRemovingPublic] = useState(false)
   const [removingOperational, setRemovingOperational] = useState(false)
 
-  const publicImageInfo = useMemo(() => resolvePublicListingImage({
-    ...product,
-    uploadedImageUrl: publicImage?.image_url || null,
-    uploadedThumbnailUrl: publicImage?.thumbnail_url || null,
-  }), [publicImage?.image_url, publicImage?.thumbnail_url, product])
   const operationalImageInfo = useMemo(() => resolveStockDisplayImage({
     ...product,
     operationalImageUrl: currentOperationalImage?.image_url || null,
     operationalThumbnailUrl: currentOperationalImage?.thumbnail_url || null,
   }), [currentOperationalImage?.image_url, currentOperationalImage?.thumbnail_url, product])
-
-  const setPublicListingImage = (nextImage: ProductImageRecord | null) => {
-    setPublicImage(nextImage)
-    onImageChange?.(nextImage)
-  }
 
   const setOperationalImage = (nextImage: OperationalProductImageRecord | null) => {
     setCurrentOperationalImage(nextImage)
@@ -108,42 +90,6 @@ export function ProductImageManager({
     }
   }
 
-  const handlePublicUpload = async (file?: File) => {
-    if (!file) return
-    const validationError = validateClientFile(file)
-    if (validationError) {
-      toast({ title: "Imagem inválida", description: validationError, type: "error" })
-      return
-    }
-
-    const formData = new FormData()
-    formData.set("productId", productId)
-    formData.set("file", file)
-
-    setUploadingPublic(true)
-    try {
-      const response = await fetch("/api/product-images", {
-        method: "POST",
-        body: formData,
-      })
-      const result = await response.json()
-      if (!response.ok || result.error) {
-        throw new Error(result.error?.message || "Falha ao enviar foto para vitrine")
-      }
-      setPublicListingImage(result.data.image)
-      toast({ title: "Foto da vitrine atualizada", description: "Isso altera somente catálogo público e divulgações.", type: "success" })
-    } catch (error) {
-      toast({
-        title: "Erro no upload da vitrine",
-        description: error instanceof Error ? error.message : "Não foi possível enviar a foto para vitrine.",
-        type: "error",
-      })
-    } finally {
-      setUploadingPublic(false)
-      if (publicInputRef.current) publicInputRef.current.value = ""
-    }
-  }
-
   const handleResetOperational = async () => {
     if (!currentOperationalImage) return
     setRemovingOperational(true)
@@ -170,37 +116,10 @@ export function ProductImageManager({
     }
   }
 
-  const handleRemovePublic = async () => {
-    if (!publicImage) return
-    setRemovingPublic(true)
-    try {
-      const response = await fetch("/api/product-images", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productId }),
-      })
-      const result = await response.json()
-      if (!response.ok || result.error) {
-        throw new Error(result.error?.message || "Falha ao remover foto da vitrine")
-      }
-      setPublicListingImage(null)
-      toast({ title: "Vitrine voltou ao asset padrão", description: "Estoque, venda e portal não foram alterados.", type: "success" })
-    } catch (error) {
-      toast({
-        title: "Erro ao remover foto da vitrine",
-        description: error instanceof Error ? error.message : "Não foi possível remover a foto da vitrine.",
-        type: "error",
-      })
-    } finally {
-      setRemovingPublic(false)
-    }
-  }
-
   const isOperationalBusy = uploadingOperational || removingOperational
-  const isPublicBusy = uploadingPublic || removingPublic
 
   return (
-    <section className="grid gap-4 lg:grid-cols-2">
+    <section>
       <article className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5">
         <div className="mb-4 flex items-start gap-3">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-royal-500/10 text-royal-600">
@@ -233,60 +152,12 @@ export function ProductImageManager({
             {uploadingOperational ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
             Alterar imagem operacional
           </Button>
-          <Button type="button" variant="outline" size="sm" disabled={isOperationalBusy || !currentOperationalImage} onClick={handleResetOperational}>
-            {removingOperational ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-            Voltar para asset padrão
-          </Button>
-        </div>
-      </article>
-
-      <article className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5">
-        <div className="mb-4 flex items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-700">
-            <ImageIcon className="h-5 w-5" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-base font-bold text-navy-900">Fotos da vitrine pública</h3>
-              <ImageBadge source={publicImageInfo.source} label={publicImageInfo.badge} />
-            </div>
-            <p className="mt-1 text-sm text-gray-500">Usadas apenas no catálogo público e nas divulgações.</p>
-          </div>
-        </div>
-
-        <ImagePreview image={publicImageInfo} label="Origem da vitrine" />
-        <p className="mt-3 rounded-2xl border border-emerald-100 bg-emerald-50/70 p-3 text-xs font-medium leading-5 text-emerald-800">
-          Isso altera somente o catálogo público e divulgações. Não altera estoque, venda, portal ou documentos.
-        </p>
-
-        <input
-          ref={publicInputRef}
-          type="file"
-          accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif"
-          className="hidden"
-          onChange={(event) => handlePublicUpload(event.target.files?.[0])}
-        />
-
-        <div className="mt-4 flex flex-wrap gap-2">
-          <Button type="button" variant="primary" size="sm" disabled={isPublicBusy} onClick={() => publicInputRef.current?.click()}>
-            {uploadingPublic ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-            Enviar foto para vitrine
-          </Button>
-          <Button type="button" variant="outline" size="sm" disabled={isPublicBusy || !publicImage} onClick={handleRemovePublic}>
-            {removingPublic ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-            Usar asset padrão na vitrine
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={isPublicBusy || !publicImage}
-            onClick={handleRemovePublic}
-            className="text-danger-500 hover:bg-danger-100 hover:text-danger-500"
-          >
-            <Trash2 className="h-4 w-4" />
-            Remover foto da vitrine
-          </Button>
+          {currentOperationalImage ? (
+            <Button type="button" variant="outline" size="sm" disabled={isOperationalBusy} onClick={handleResetOperational}>
+              {removingOperational ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+              Voltar para asset padrão
+            </Button>
+          ) : null}
         </div>
       </article>
     </section>
