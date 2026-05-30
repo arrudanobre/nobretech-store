@@ -9,6 +9,8 @@ import {
   ArrowLeft,
   Building2,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Clock,
   FileText,
   Globe2,
@@ -17,15 +19,26 @@ import {
   Mail,
   MessageCircle,
   Palette,
+  Pencil,
   Plus,
   Save,
   ShieldAlert,
   SlidersHorizontal,
+  Trash2,
   XCircle,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
+import {
+  digitsOnly,
+  isValidEmail,
+  isValidUrl,
+  maskCpfCnpj,
+  maskPhoneBr,
+} from "@/lib/masks"
+import { UploadField } from "@/components/company-settings/UploadField"
+import { ColorField } from "@/components/company-settings/ColorField"
 import type {
   BrandProfileInput,
   CompanyBrandProfile,
@@ -34,10 +47,9 @@ import type {
   CompanyDocumentProfile,
   CompanyIdentity,
   CompanySettingsAuditLog,
-  DocumentProfileInput,
-  ContactChannelInput,
   CompanySettingsMutationResult,
-  CompanyThemeMode,
+  ContactChannelInput,
+  DocumentProfileInput,
 } from "@/lib/company-settings"
 import {
   deactivateContactChannelAction,
@@ -84,12 +96,6 @@ const contactTypeLabels: Record<CompanyContactChannelType, string> = {
   website: "Site",
   address: "Endereço",
   other: "Outro",
-}
-
-const themeLabels: Record<CompanyThemeMode, string> = {
-  dark: "Dark",
-  light: "Light",
-  system: "Sistema",
 }
 
 const auditActionLabels: Record<CompanySettingsAuditLog["action"], string> = {
@@ -171,7 +177,7 @@ function brandToForm(profile: CompanyBrandProfile | null, companyName: string): 
   }
 }
 
-function emptyContactForm(): ContactChannelInput {
+function emptyContactForm(nextSortOrder: number): ContactChannelInput {
   return {
     id: null,
     channelType: "whatsapp",
@@ -179,8 +185,8 @@ function emptyContactForm(): ContactChannelInput {
     value: "",
     url: "",
     isPrimary: false,
-    isPublic: false,
-    sortOrder: 50,
+    isPublic: true,
+    sortOrder: nextSortOrder,
     active: true,
   }
 }
@@ -228,11 +234,12 @@ function resultMessage(result: CompanySettingsMutationResult) {
   return result.ok ? null : result.message
 }
 
-function Field({ label, children, error }: { label: string; children: ReactNode; error?: string }) {
+function Field({ label, hint, children, error }: { label: string; hint?: string; children: ReactNode; error?: string }) {
   return (
     <label className="block min-w-0">
       <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</span>
       {children}
+      {hint ? <span className="mt-1 block text-xs text-slate-500">{hint}</span> : null}
       {error ? <span className="mt-1 block text-xs font-semibold text-red-300">{error}</span> : null}
     </label>
   )
@@ -258,23 +265,28 @@ function SectionCard({
   icon: Icon,
   title,
   description,
+  action,
   children,
 }: {
   icon: ElementType
   title: string
   description: string
+  action?: ReactNode
   children: ReactNode
 }) {
   return (
     <section className="rounded-2xl border border-white/10 bg-slate-900/70 p-5 shadow-2xl shadow-black/20">
-      <div className="mb-5 flex items-start gap-3">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-blue-400/20 bg-blue-400/10 text-blue-200">
-          <Icon className="h-5 w-5" />
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-blue-400/20 bg-blue-400/10 text-blue-200">
+            <Icon className="h-5 w-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold text-white">{title}</h2>
+            <p className="mt-1 text-sm text-slate-400">{description}</p>
+          </div>
         </div>
-        <div>
-          <h2 className="text-lg font-bold text-white">{title}</h2>
-          <p className="mt-1 text-sm text-slate-400">{description}</p>
-        </div>
+        {action}
       </div>
       {children}
     </section>
@@ -293,6 +305,36 @@ function StatusPill({ ok, label }: { ok: boolean; label: string }) {
   )
 }
 
+function Toggle({
+  label,
+  description,
+  checked,
+  onChange,
+  disabled,
+}: {
+  label: string
+  description?: string
+  checked: boolean
+  onChange: (next: boolean) => void
+  disabled?: boolean
+}) {
+  return (
+    <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-white/10 bg-slate-950/60 p-3">
+      <input
+        type="checkbox"
+        className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-900 text-blue-500 focus:ring-blue-400"
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold text-white">{label}</span>
+        {description ? <span className="block text-xs text-slate-400">{description}</span> : null}
+      </span>
+    </label>
+  )
+}
+
 export function CompanySettingsClient({
   company,
   canEditSettings,
@@ -307,16 +349,24 @@ export function CompanySettingsClient({
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const [brandForm, setBrandForm] = useState(() => brandToForm(brandProfile, company.name))
-  const [contactForm, setContactForm] = useState<ContactChannelInput>(() => emptyContactForm())
+  const nextSortOrder = useMemo(() => {
+    const max = contactChannels.reduce((acc, c) => Math.max(acc, c.sortOrder || 0), 0)
+    return max + 1
+  }, [contactChannels])
+  const [contactForm, setContactForm] = useState<ContactChannelInput>(() => emptyContactForm(nextSortOrder))
   const [documentForm, setDocumentForm] = useState<DocumentProfileInput>(() => documentToForm(documentProfile))
   const [brandErrors, setBrandErrors] = useState<FieldErrors>({})
   const [contactErrors, setContactErrors] = useState<FieldErrors>({})
   const [documentErrors, setDocumentErrors] = useState<FieldErrors>({})
 
+  const sortedContacts = useMemo(
+    () => [...contactChannels].sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0)),
+    [contactChannels]
+  )
   const activeContacts = useMemo(() => contactChannels.filter((contact) => contact.active), [contactChannels])
   const missingFields = useMemo(() => {
     const missing: string[] = []
-    if (!brandProfile) missing.push("Perfil de marca")
+    if (!brandProfile) missing.push("Identidade pública")
     if (!primaryWhatsapp) missing.push("WhatsApp principal")
     if (!documentProfile) missing.push("Perfil documental")
     return missing
@@ -330,23 +380,31 @@ export function CompanySettingsClient({
       return
     }
     setErrors(result.fieldErrors || {})
-    toast.error(resultMessage(result) || "Nao foi possivel salvar.")
+    toast.error(resultMessage(result) || "Não foi possível salvar.")
   }
 
-  function saveBrand() {
-    if (!canEditSettings) return toast.error("Seu perfil nao pode editar configuracoes.")
+  function saveBrand(successMessage: string) {
+    if (!canEditSettings) return toast.error("Seu perfil não pode editar configurações.")
     startTransition(async () => {
       const result = await saveBrandProfileAction(brandForm)
-      handleResult(result, "Marca salva.", setBrandErrors)
+      handleResult(result, successMessage, setBrandErrors)
     })
   }
 
   function saveContact() {
-    if (!canEditSettings) return toast.error("Seu perfil nao pode editar configuracoes.")
+    if (!canEditSettings) return toast.error("Seu perfil não pode editar configurações.")
+    if (contactForm.channelType === "email" && contactForm.value && !isValidEmail(contactForm.value)) {
+      setContactErrors({ value: "Informe um e-mail válido." })
+      return
+    }
+    if ((contactForm.channelType === "website" || contactForm.url) && contactForm.url && !isValidUrl(contactForm.url)) {
+      setContactErrors({ url: "Informe uma URL válida (https://...)." })
+      return
+    }
     startTransition(async () => {
       const result = await saveContactChannelAction(contactForm)
       handleResult(result, contactForm.id ? "Contato atualizado." : "Contato criado.", setContactErrors)
-      if (result.ok) setContactForm(emptyContactForm())
+      if (result.ok) setContactForm(emptyContactForm(nextSortOrder))
     })
   }
 
@@ -356,12 +414,13 @@ export function CompanySettingsClient({
   }
 
   function deactivateContact(contact: CompanyContactChannel) {
-    if (!canEditSettings) return toast.error("Seu perfil nao pode editar configuracoes.")
+    if (!canEditSettings) return toast.error("Seu perfil não pode editar configurações.")
+    if (!confirm(`Inativar o contato "${contact.label || contactTypeLabels[contact.channelType]}"?`)) return
     startTransition(async () => {
       const result = await deactivateContactChannelAction(contact.id)
       if (result.ok) {
         toast.success("Contato inativado.")
-        if (contactForm.id === contact.id) setContactForm(emptyContactForm())
+        if (contactForm.id === contact.id) setContactForm(emptyContactForm(nextSortOrder))
         router.refresh()
       } else {
         toast.error(result.message)
@@ -369,8 +428,29 @@ export function CompanySettingsClient({
     })
   }
 
+  function moveContact(contactId: string, direction: "up" | "down") {
+    if (!canEditSettings) return
+    const index = sortedContacts.findIndex((c) => c.id === contactId)
+    const swap = direction === "up" ? index - 1 : index + 1
+    if (index < 0 || swap < 0 || swap >= sortedContacts.length) return
+    const a = sortedContacts[index]
+    const b = sortedContacts[swap]
+    startTransition(async () => {
+      const r1 = await saveContactChannelAction({ ...contactToForm(a), sortOrder: b.sortOrder })
+      const r2 = await saveContactChannelAction({ ...contactToForm(b), sortOrder: a.sortOrder })
+      if (!r1.ok || !r2.ok) {
+        toast.error("Não foi possível reordenar.")
+      }
+      router.refresh()
+    })
+  }
+
   function saveDocument() {
-    if (!canEditSettings) return toast.error("Seu perfil nao pode editar configuracoes.")
+    if (!canEditSettings) return toast.error("Seu perfil não pode editar configurações.")
+    if (documentForm.email && !isValidEmail(documentForm.email)) {
+      setDocumentErrors({ email: "Informe um e-mail válido." })
+      return
+    }
     startTransition(async () => {
       const result = await saveDocumentProfileAction(documentForm)
       handleResult(result, "Perfil documental salvo.", setDocumentErrors)
@@ -387,11 +467,10 @@ export function CompanySettingsClient({
               Configurações
             </Link>
             <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-3xl font-black tracking-tight text-white">Configurações da Empresa</h1>
-              <Badge variant="blue">Fase 1B</Badge>
+              <h1 className="text-3xl font-black tracking-tight text-white">Central da empresa</h1>
             </div>
             <p className="mt-2 max-w-3xl text-sm text-slate-400">
-              Identidade, contatos e perfil documental usados como base interna do ERP.
+              Identidade, marca, canais de contato e perfil documental usados como base do ERP.
             </p>
           </div>
           {!canEditSettings ? (
@@ -417,11 +496,10 @@ export function CompanySettingsClient({
         <SectionCard
           icon={SlidersHorizontal}
           title="Status da configuração"
-          description="Resumo operacional da base configurada nesta fase."
+          description="Resumo do que já está preenchido."
         >
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-            <StatusPill ok={Boolean(identity)} label={identity?.displayName || company.name} />
-            <StatusPill ok={Boolean(brandProfile)} label={brandProfile ? "Marca completa" : "Marca ausente"} />
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <StatusPill ok={Boolean(brandProfile)} label={identity?.displayName || company.name} />
             <StatusPill ok={activeContacts.length > 0} label={`${activeContacts.length} contatos ativos`} />
             <StatusPill ok={Boolean(primaryWhatsapp)} label={primaryWhatsapp ? "WhatsApp configurado" : "WhatsApp ausente"} />
             <StatusPill ok={Boolean(documentProfile)} label={documentProfile ? "Documento ativo" : "Documento ausente"} />
@@ -435,101 +513,216 @@ export function CompanySettingsClient({
 
           <div className="mt-4 flex items-start gap-3 rounded-xl border border-blue-400/20 bg-blue-400/10 p-4 text-sm text-blue-100">
             <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
-            <p>Regras de garantia, financeiro, catálogo e portal ainda não são controladas por esta tela.</p>
+            <p>Garantia, financeiro, catálogo e portal continuam sendo configurados em telas próprias.</p>
           </div>
         </SectionCard>
 
-        <SectionCard icon={Palette} title="Marca" description="Identidade exibível e assets de marca por empresa.">
+        {/* IDENTIDADE PÚBLICA */}
+        <SectionCard
+          icon={Building2}
+          title="Identidade da empresa"
+          description="Dados públicos e institucionais usados pelo ERP e pelo catálogo."
+        >
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <Field label="Nome público" error={brandErrors.displayName}>
               <input className={inputClass(brandErrors.displayName)} value={brandForm.displayName} disabled={!canEditSettings} onChange={(event) => setBrandForm({ ...brandForm, displayName: event.target.value })} />
             </Field>
-            <Field label="Nome curto" error={brandErrors.shortName}>
+            <Field label="Nome curto" hint="Versão reduzida usada em espaços pequenos." error={brandErrors.shortName}>
               <input className={inputClass(brandErrors.shortName)} value={brandForm.shortName} disabled={!canEditSettings} onChange={(event) => setBrandForm({ ...brandForm, shortName: event.target.value })} />
             </Field>
-            <Field label="Nome legal">
+            <Field label="Nome legal" hint="Razão social. Aparece em documentos.">
               <input className={inputClass()} value={brandForm.legalName} disabled={!canEditSettings} onChange={(event) => setBrandForm({ ...brandForm, legalName: event.target.value })} />
             </Field>
             <Field label="Slogan">
               <input className={inputClass()} value={brandForm.slogan} disabled={!canEditSettings} onChange={(event) => setBrandForm({ ...brandForm, slogan: event.target.value })} />
             </Field>
-            <Field label="Domínio canônico" error={brandErrors.canonicalDomain}>
-              <input className={inputClass(brandErrors.canonicalDomain)} value={brandForm.canonicalDomain} disabled={!canEditSettings} placeholder="https://..." onChange={(event) => setBrandForm({ ...brandForm, canonicalDomain: event.target.value })} />
-            </Field>
-            <Field label="Tema" error={brandErrors.themeMode}>
-              <select className={inputClass(brandErrors.themeMode)} value={brandForm.themeMode} disabled={!canEditSettings} onChange={(event) => setBrandForm({ ...brandForm, themeMode: event.target.value as CompanyThemeMode })}>
-                {Object.entries(themeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              </select>
-            </Field>
             <Field label="Cidade">
               <input className={inputClass()} value={brandForm.city} disabled={!canEditSettings} onChange={(event) => setBrandForm({ ...brandForm, city: event.target.value })} />
             </Field>
-            <Field label="Estado" error={brandErrors.state}>
+            <Field label="Estado" hint="Sigla UF (2 letras)." error={brandErrors.state}>
               <input className={inputClass(brandErrors.state)} value={brandForm.state} disabled={!canEditSettings} maxLength={2} onChange={(event) => setBrandForm({ ...brandForm, state: event.target.value.toUpperCase() })} />
             </Field>
-            <Field label="Locale" error={brandErrors.locale}>
+            <Field label="Idioma" hint="Locale (ex: pt-BR)." error={brandErrors.locale}>
               <input className={inputClass(brandErrors.locale)} value={brandForm.locale} disabled={!canEditSettings} onChange={(event) => setBrandForm({ ...brandForm, locale: event.target.value })} />
             </Field>
-            <Field label="Cor principal" error={brandErrors.primaryColor}>
-              <input className={inputClass(brandErrors.primaryColor)} value={brandForm.primaryColor} disabled={!canEditSettings} placeholder="#07162f" onChange={(event) => setBrandForm({ ...brandForm, primaryColor: event.target.value })} />
-            </Field>
-            <Field label="Cor de destaque" error={brandErrors.accentColor}>
-              <input className={inputClass(brandErrors.accentColor)} value={brandForm.accentColor} disabled={!canEditSettings} placeholder="#3A6BC4" onChange={(event) => setBrandForm({ ...brandForm, accentColor: event.target.value })} />
-            </Field>
-            <Field label="Logo URL" error={brandErrors.logoUrl}>
-              <input className={inputClass(brandErrors.logoUrl)} value={brandForm.logoUrl} disabled={!canEditSettings} onChange={(event) => setBrandForm({ ...brandForm, logoUrl: event.target.value })} />
-            </Field>
-            <Field label="Favicon URL" error={brandErrors.faviconUrl}>
-              <input className={inputClass(brandErrors.faviconUrl)} value={brandForm.faviconUrl} disabled={!canEditSettings} onChange={(event) => setBrandForm({ ...brandForm, faviconUrl: event.target.value })} />
-            </Field>
-            <Field label="Apple icon URL" error={brandErrors.appleIconUrl}>
-              <input className={inputClass(brandErrors.appleIconUrl)} value={brandForm.appleIconUrl} disabled={!canEditSettings} onChange={(event) => setBrandForm({ ...brandForm, appleIconUrl: event.target.value })} />
-            </Field>
-            <Field label="OG image URL" error={brandErrors.ogImageUrl}>
-              <input className={inputClass(brandErrors.ogImageUrl)} value={brandForm.ogImageUrl} disabled={!canEditSettings} onChange={(event) => setBrandForm({ ...brandForm, ogImageUrl: event.target.value })} />
+            <Field label="Domínio público" hint="URL canônica da loja (https://...)." error={brandErrors.canonicalDomain}>
+              <input className={inputClass(brandErrors.canonicalDomain)} value={brandForm.canonicalDomain} disabled={!canEditSettings} placeholder="https://..." onChange={(event) => setBrandForm({ ...brandForm, canonicalDomain: event.target.value })} />
             </Field>
             <div className="md:col-span-2 xl:col-span-3">
-              <Field label="Descrição pública">
+              <Field label="Descrição pública" hint="Texto institucional usado em metadados e telas públicas.">
                 <textarea className={textareaClass()} value={brandForm.publicDescription} disabled={!canEditSettings} onChange={(event) => setBrandForm({ ...brandForm, publicDescription: event.target.value })} />
               </Field>
             </div>
           </div>
           <div className="mt-5">
-            <Button onClick={saveBrand} disabled={!canEditSettings || isPending}>
+            <Button onClick={() => saveBrand("Identidade salva.")} disabled={!canEditSettings || isPending}>
+              {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              Salvar identidade
+            </Button>
+          </div>
+        </SectionCard>
+
+        {/* MARCA E APARÊNCIA */}
+        <SectionCard
+          icon={Palette}
+          title="Marca e aparência"
+          description="Logo, favicon, imagem social e cores. Influencia identidade visual pública, vitrine e elementos de branding."
+        >
+          <div className="grid gap-4 md:grid-cols-3">
+            <UploadField
+              label="Logo"
+              description="Aparece em telas internas e na vitrine."
+              slot="logo"
+              value={brandForm.logoUrl || null}
+              disabled={!canEditSettings}
+              onChange={(url) => setBrandForm({ ...brandForm, logoUrl: url })}
+              onClear={() => setBrandForm({ ...brandForm, logoUrl: "" })}
+            />
+            <UploadField
+              label="Favicon"
+              description="Ícone exibido na aba do navegador."
+              slot="favicon"
+              value={brandForm.faviconUrl || null}
+              disabled={!canEditSettings}
+              onChange={(url) => setBrandForm({ ...brandForm, faviconUrl: url })}
+              onClear={() => setBrandForm({ ...brandForm, faviconUrl: "" })}
+            />
+            <UploadField
+              label="Imagem social"
+              description="Open Graph (WhatsApp, redes sociais). Proporção 1200×630."
+              slot="og"
+              aspect="wide"
+              value={brandForm.ogImageUrl || null}
+              disabled={!canEditSettings}
+              onChange={(url) => setBrandForm({ ...brandForm, ogImageUrl: url })}
+              onClear={() => setBrandForm({ ...brandForm, ogImageUrl: "" })}
+            />
+          </div>
+
+          <div className="mt-6 grid gap-4 md:grid-cols-2">
+            <ColorField
+              label="Cor principal"
+              description="Usada como base do branding."
+              value={brandForm.primaryColor || ""}
+              disabled={!canEditSettings}
+              onChange={(hex) => setBrandForm({ ...brandForm, primaryColor: hex })}
+              fallback="#0D1B2E"
+            />
+            <ColorField
+              label="Cor de destaque"
+              description="Usada em chamadas e CTAs."
+              value={brandForm.accentColor || ""}
+              disabled={!canEditSettings}
+              onChange={(hex) => setBrandForm({ ...brandForm, accentColor: hex })}
+              fallback="#3A6BC4"
+            />
+          </div>
+
+          <div className="mt-4 flex items-start gap-3 rounded-xl border border-blue-400/20 bg-blue-400/10 p-4 text-sm text-blue-100">
+            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+            <p>Estas cores influenciam identidade visual pública da marca, vitrine e elementos de branding. Ainda não são aplicadas em gráficos ou no ERP completo.</p>
+          </div>
+
+          {/* Tema — desabilitado (Fase futura) */}
+          <div className="mt-6 rounded-2xl border border-white/10 bg-slate-950/40 p-4 opacity-80">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <SlidersHorizontal className="h-4 w-4 text-slate-400" />
+                <div>
+                  <p className="text-sm font-semibold text-white">Tema visual do ERP</p>
+                  <p className="text-xs text-slate-400">Personalização visual do ERP será liberada em fase futura.</p>
+                </div>
+              </div>
+              <select className={cn(inputClass(), "h-10 w-auto cursor-not-allowed")} value={brandForm.themeMode} disabled>
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+                <option value="system">Sistema</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="mt-5">
+            <Button onClick={() => saveBrand("Marca salva.")} disabled={!canEditSettings || isPending}>
               {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
               Salvar marca
             </Button>
           </div>
         </SectionCard>
 
-        <SectionCard icon={MessageCircle} title="Canais de contato" description="Canais oficiais, visibilidade e prioridade por tipo.">
+        {/* CANAIS DE CONTATO */}
+        <SectionCard
+          icon={MessageCircle}
+          title="Canais de contato"
+          description="Canais oficiais exibidos para clientes. A ordem é a sequência da lista."
+        >
           <div className="overflow-hidden rounded-2xl border border-white/10">
-            <div className="grid grid-cols-[1.1fr_1.2fr_1.4fr_100px_110px_120px] gap-3 bg-slate-950/80 px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500 max-lg:hidden">
+            <div className="grid grid-cols-[1fr_1.4fr_1.6fr_140px_140px] gap-3 bg-slate-950/80 px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500 max-lg:hidden">
               <span>Tipo</span>
-              <span>Label</span>
-              <span>Valor</span>
-              <span>Publico</span>
-              <span>Principal</span>
+              <span>Nome exibido</span>
+              <span>Contato</span>
+              <span>Visibilidade</span>
               <span>Status</span>
             </div>
             <div className="divide-y divide-white/10">
-              {contactChannels.length === 0 ? (
+              {sortedContacts.length === 0 ? (
                 <div className="px-4 py-6 text-sm text-slate-400">Nenhum canal cadastrado.</div>
-              ) : contactChannels.map((contact) => (
-                <div key={contact.id} className="grid gap-3 px-4 py-4 text-sm lg:grid-cols-[1.1fr_1.2fr_1.4fr_100px_110px_120px] lg:items-center">
-                  <div className="font-semibold text-white">{contactTypeLabels[contact.channelType]}</div>
-                  <div className="text-slate-300">{contact.label}</div>
+              ) : sortedContacts.map((contact, index) => (
+                <div key={contact.id} className="grid gap-3 px-4 py-4 text-sm lg:grid-cols-[1fr_1.4fr_1.6fr_140px_140px] lg:items-center">
+                  <div className="flex items-center gap-2">
+                    <div className="flex flex-col">
+                      <button
+                        type="button"
+                        aria-label="Mover para cima"
+                        onClick={() => moveContact(contact.id, "up")}
+                        disabled={!canEditSettings || index === 0 || isPending}
+                        className="text-slate-500 hover:text-white disabled:opacity-30"
+                      >
+                        <ChevronUp className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Mover para baixo"
+                        onClick={() => moveContact(contact.id, "down")}
+                        disabled={!canEditSettings || index === sortedContacts.length - 1 || isPending}
+                        className="text-slate-500 hover:text-white disabled:opacity-30"
+                      >
+                        <ChevronDown className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <span className="font-semibold text-white">{contactTypeLabels[contact.channelType]}</span>
+                    {contact.isPrimary ? <Badge variant="green">Principal</Badge> : null}
+                  </div>
+                  <div className="text-slate-300">{contact.label || <span className="text-slate-500">—</span>}</div>
                   <div className="min-w-0 text-slate-400">
                     <p className="truncate">{contact.value}</p>
                     {contact.url ? <p className="truncate text-xs text-slate-600">{contact.url}</p> : null}
                   </div>
-                  <div>{contact.isPublic ? <Badge variant="blue">Público</Badge> : <Badge variant="gray">Interno</Badge>}</div>
-                  <div>{contact.isPrimary ? <Badge variant="green">Principal</Badge> : <Badge variant="gray">Não</Badge>}</div>
+                  <div>
+                    {contact.isPublic ? <Badge variant="blue">Visível</Badge> : <Badge variant="gray">Oculto</Badge>}
+                  </div>
                   <div className="flex items-center justify-between gap-2">
                     {contact.active ? <Badge variant="green">Ativo</Badge> : <Badge variant="gray">Inativo</Badge>}
-                    <div className="flex gap-2">
-                      <button type="button" className="text-xs font-bold text-blue-200 hover:text-white" disabled={!canEditSettings} onClick={() => editContact(contact)}>Editar</button>
-                      {contact.active ? <button type="button" className="text-xs font-bold text-red-200 hover:text-white" disabled={!canEditSettings} onClick={() => deactivateContact(contact)}>Inativar</button> : null}
+                    <div className="flex gap-1">
+                      <button
+                        type="button"
+                        aria-label="Editar contato"
+                        className="rounded-lg p-1.5 text-blue-200 hover:bg-white/5 disabled:opacity-30"
+                        disabled={!canEditSettings || isPending}
+                        onClick={() => editContact(contact)}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      {contact.active ? (
+                        <button
+                          type="button"
+                          aria-label="Inativar contato"
+                          className="rounded-lg p-1.5 text-red-200 hover:bg-white/5 disabled:opacity-30"
+                          disabled={!canEditSettings || isPending}
+                          onClick={() => deactivateContact(contact)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -537,50 +730,75 @@ export function CompanySettingsClient({
             </div>
           </div>
 
+          {/* Formulário novo / editar */}
           <div className="mt-5 rounded-2xl border border-white/10 bg-slate-950/40 p-4">
             <div className="mb-4 flex items-center gap-2 text-sm font-bold text-white">
               <Plus className="h-4 w-4 text-blue-200" />
               {contactForm.id ? "Editar contato" : "Novo contato"}
             </div>
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               <Field label="Tipo" error={contactErrors.channelType}>
                 <select className={inputClass(contactErrors.channelType)} value={contactForm.channelType} disabled={!canEditSettings} onChange={(event) => setContactForm({ ...contactForm, channelType: event.target.value as CompanyContactChannelType })}>
                   {contactTypes.map((type) => <option key={type} value={type}>{contactTypeLabels[type]}</option>)}
                 </select>
               </Field>
-              <Field label="Label" error={contactErrors.label}>
-                <input className={inputClass(contactErrors.label)} value={contactForm.label} disabled={!canEditSettings} onChange={(event) => setContactForm({ ...contactForm, label: event.target.value })} />
+              <Field label="Nome exibido" hint="Como o canal aparece para o cliente." error={contactErrors.label}>
+                <input className={inputClass(contactErrors.label)} value={contactForm.label} disabled={!canEditSettings} placeholder="Ex: WhatsApp da loja" onChange={(event) => setContactForm({ ...contactForm, label: event.target.value })} />
               </Field>
-              <Field label="Valor" error={contactErrors.value}>
-                <input className={inputClass(contactErrors.value)} value={contactForm.value} disabled={!canEditSettings} onChange={(event) => setContactForm({ ...contactForm, value: event.target.value })} />
+              <Field label="Contato" hint={contactForm.channelType === "phone" || contactForm.channelType === "whatsapp" ? "Aceita máscara automática." : undefined} error={contactErrors.value}>
+                <input
+                  className={inputClass(contactErrors.value)}
+                  value={
+                    contactForm.channelType === "phone" || contactForm.channelType === "whatsapp"
+                      ? maskPhoneBr(contactForm.value)
+                      : contactForm.value
+                  }
+                  disabled={!canEditSettings}
+                  onChange={(event) => {
+                    const isPhone = contactForm.channelType === "phone" || contactForm.channelType === "whatsapp"
+                    const raw = event.target.value
+                    setContactForm({ ...contactForm, value: isPhone ? digitsOnly(raw) : raw })
+                  }}
+                />
               </Field>
-              <Field label="URL" error={contactErrors.url}>
+              <Field label="Link (opcional)" hint="Link direto. Útil para Instagram, site ou WhatsApp." error={contactErrors.url}>
                 <input className={inputClass(contactErrors.url)} value={contactForm.url} disabled={!canEditSettings} placeholder="https://..." onChange={(event) => setContactForm({ ...contactForm, url: event.target.value })} />
               </Field>
-              <Field label="Ordem">
-                <input className={inputClass()} type="number" value={contactForm.sortOrder} disabled={!canEditSettings} onChange={(event) => setContactForm({ ...contactForm, sortOrder: Number(event.target.value) })} />
-              </Field>
-              <label className="flex h-11 items-center gap-3 self-end rounded-xl border border-white/10 bg-slate-950/60 px-3 text-sm font-semibold text-slate-200">
-                <input type="checkbox" checked={contactForm.isPublic} disabled={!canEditSettings} onChange={(event) => setContactForm({ ...contactForm, isPublic: event.target.checked })} />
-                Público
-              </label>
-              <label className="flex h-11 items-center gap-3 self-end rounded-xl border border-white/10 bg-slate-950/60 px-3 text-sm font-semibold text-slate-200">
-                <input type="checkbox" checked={contactForm.isPrimary} disabled={!canEditSettings} onChange={(event) => setContactForm({ ...contactForm, isPrimary: event.target.checked })} />
-                Principal
-              </label>
-              <label className="flex h-11 items-center gap-3 self-end rounded-xl border border-white/10 bg-slate-950/60 px-3 text-sm font-semibold text-slate-200">
-                <input type="checkbox" checked={contactForm.active} disabled={!canEditSettings} onChange={(event) => setContactForm({ ...contactForm, active: event.target.checked })} />
-                Ativo
-              </label>
             </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              <Toggle
+                label="Visível para clientes"
+                description="Aparece em telas públicas (catálogo, recibos)."
+                checked={contactForm.isPublic}
+                disabled={!canEditSettings}
+                onChange={(v) => setContactForm({ ...contactForm, isPublic: v })}
+              />
+              <Toggle
+                label="Canal principal"
+                description="Usado como contato preferencial deste tipo."
+                checked={contactForm.isPrimary}
+                disabled={!canEditSettings}
+                onChange={(v) => setContactForm({ ...contactForm, isPrimary: v })}
+              />
+              <Toggle
+                label="Ativo"
+                description="Desligar inativa sem apagar o histórico."
+                checked={contactForm.active}
+                disabled={!canEditSettings}
+                onChange={(v) => setContactForm({ ...contactForm, active: v })}
+              />
+            </div>
+
             {contactErrors.isPrimary ? <p className="mt-3 text-xs font-semibold text-red-300">{contactErrors.isPrimary}</p> : null}
+
             <div className="mt-4 flex flex-wrap gap-3">
               <Button onClick={saveContact} disabled={!canEditSettings || isPending}>
                 {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                 {contactForm.id ? "Salvar contato" : "Adicionar contato"}
               </Button>
               {contactForm.id ? (
-                <Button variant="ghost" onClick={() => setContactForm(emptyContactForm())} disabled={isPending}>
+                <Button variant="ghost" onClick={() => setContactForm(emptyContactForm(nextSortOrder))} disabled={isPending}>
                   Cancelar edição
                 </Button>
               ) : null}
@@ -588,21 +806,31 @@ export function CompanySettingsClient({
           </div>
         </SectionCard>
 
-        <SectionCard icon={FileText} title="Perfil documental" description="Dados base para documentos em fase futura.">
+        {/* PERFIL DOCUMENTAL */}
+        <SectionCard
+          icon={FileText}
+          title="Perfil documental"
+          description="Dados base para recibos, termos e laudos."
+        >
           <div className="mb-5 flex items-start gap-3 rounded-xl border border-amber-400/20 bg-amber-400/10 p-4 text-sm text-amber-100">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            <p>Esses dados ainda não alteram os documentos gerados. A integração com recibos, termos e laudos será feita em fase futura.</p>
+            <p>A integração com documentos gerados (recibos, termos e laudos) ocorre em fase futura. Esta tela só registra os dados.</p>
           </div>
 
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <Field label="Nome do emissor" error={documentErrors.issuerName}>
               <input className={inputClass(documentErrors.issuerName)} value={documentForm.issuerName} disabled={!canEditSettings} onChange={(event) => setDocumentForm({ ...documentForm, issuerName: event.target.value })} />
             </Field>
-            <Field label="Nome legal" error={documentErrors.legalName}>
+            <Field label="Razão social" error={documentErrors.legalName}>
               <input className={inputClass(documentErrors.legalName)} value={documentForm.legalName} disabled={!canEditSettings} onChange={(event) => setDocumentForm({ ...documentForm, legalName: event.target.value })} />
             </Field>
-            <Field label="Documento/CNPJ/CPF">
-              <input className={inputClass()} value={documentForm.documentNumber} disabled={!canEditSettings} onChange={(event) => setDocumentForm({ ...documentForm, documentNumber: event.target.value })} />
+            <Field label="CPF / CNPJ" hint="Máscara aplicada automaticamente.">
+              <input
+                className={inputClass()}
+                value={maskCpfCnpj(documentForm.documentNumber)}
+                disabled={!canEditSettings}
+                onChange={(event) => setDocumentForm({ ...documentForm, documentNumber: digitsOnly(event.target.value) })}
+              />
             </Field>
             <Field label="Endereço">
               <input className={inputClass()} value={documentForm.addressLine} disabled={!canEditSettings} onChange={(event) => setDocumentForm({ ...documentForm, addressLine: event.target.value })} />
@@ -610,31 +838,48 @@ export function CompanySettingsClient({
             <Field label="Cidade">
               <input className={inputClass()} value={documentForm.city} disabled={!canEditSettings} onChange={(event) => setDocumentForm({ ...documentForm, city: event.target.value })} />
             </Field>
-            <Field label="Estado" error={documentErrors.state}>
+            <Field label="Estado" hint="Sigla UF (2 letras)." error={documentErrors.state}>
               <input className={inputClass(documentErrors.state)} value={documentForm.state} disabled={!canEditSettings} maxLength={2} onChange={(event) => setDocumentForm({ ...documentForm, state: event.target.value.toUpperCase() })} />
             </Field>
-            <Field label="Telefone" error={documentErrors.phone}>
-              <input className={inputClass(documentErrors.phone)} value={documentForm.phone} disabled={!canEditSettings} onChange={(event) => setDocumentForm({ ...documentForm, phone: event.target.value })} />
+            <Field label="Telefone" hint="Máscara automática para celular/fixo." error={documentErrors.phone}>
+              <input
+                className={inputClass(documentErrors.phone)}
+                value={maskPhoneBr(documentForm.phone)}
+                disabled={!canEditSettings}
+                onChange={(event) => setDocumentForm({ ...documentForm, phone: digitsOnly(event.target.value) })}
+              />
             </Field>
-            <Field label="Email" error={documentErrors.email}>
-              <input className={inputClass(documentErrors.email)} value={documentForm.email} disabled={!canEditSettings} onChange={(event) => setDocumentForm({ ...documentForm, email: event.target.value })} />
+            <Field label="E-mail" error={documentErrors.email}>
+              <input
+                type="email"
+                className={inputClass(documentErrors.email)}
+                value={documentForm.email}
+                disabled={!canEditSettings}
+                placeholder="contato@dominio.com"
+                onChange={(event) => setDocumentForm({ ...documentForm, email: event.target.value })}
+              />
             </Field>
-            <Field label="Vendedor padrão">
+            <Field label="Vendedor padrão" hint="Aparece em assinaturas de documentos.">
               <input className={inputClass()} value={documentForm.defaultSellerName} disabled={!canEditSettings} onChange={(event) => setDocumentForm({ ...documentForm, defaultSellerName: event.target.value })} />
             </Field>
-            <Field label="Label de assinatura">
+            <Field label="Texto da assinatura">
               <input className={inputClass()} value={documentForm.signatureLabel} disabled={!canEditSettings} onChange={(event) => setDocumentForm({ ...documentForm, signatureLabel: event.target.value })} />
             </Field>
-            <Field label="Vigência inicial" error={documentErrors.effectiveFrom}>
+            <Field label="Vigência inicial" hint="A partir desta data o perfil passa a valer." error={documentErrors.effectiveFrom}>
               <input className={inputClass(documentErrors.effectiveFrom)} type="datetime-local" value={documentForm.effectiveFrom} disabled={!canEditSettings} onChange={(event) => setDocumentForm({ ...documentForm, effectiveFrom: event.target.value })} />
             </Field>
-            <Field label="Vigência final" error={documentErrors.effectiveUntil}>
+            <Field label="Vigência final" hint="Opcional. Deixe vazio para indefinido." error={documentErrors.effectiveUntil}>
               <input className={inputClass(documentErrors.effectiveUntil)} type="datetime-local" value={documentForm.effectiveUntil} disabled={!canEditSettings} onChange={(event) => setDocumentForm({ ...documentForm, effectiveUntil: event.target.value })} />
             </Field>
-            <label className="flex h-11 items-center gap-3 self-end rounded-xl border border-white/10 bg-slate-950/60 px-3 text-sm font-semibold text-slate-200">
-              <input type="checkbox" checked={documentForm.active} disabled={!canEditSettings} onChange={(event) => setDocumentForm({ ...documentForm, active: event.target.checked })} />
-              Ativo
-            </label>
+            <div className="md:col-span-2 xl:col-span-3">
+              <Toggle
+                label="Ativo"
+                description="Desligar suspende este perfil sem apagar."
+                checked={documentForm.active}
+                disabled={!canEditSettings}
+                onChange={(v) => setDocumentForm({ ...documentForm, active: v })}
+              />
+            </div>
           </div>
           <div className="mt-5">
             <Button onClick={saveDocument} disabled={!canEditSettings || isPending}>
@@ -644,6 +889,7 @@ export function CompanySettingsClient({
           </div>
         </SectionCard>
 
+        {/* AUDIT LOGS */}
         <SectionCard icon={Clock} title="Alterações recentes" description="Histórico das últimas modificações nas configurações da empresa.">
           {auditLogs.length === 0 ? (
             <p className="text-sm text-slate-500">Nenhuma alteração registrada ainda.</p>
@@ -673,8 +919,8 @@ export function CompanySettingsClient({
 
         <div className="grid gap-3 rounded-2xl border border-white/10 bg-slate-900/50 p-4 text-sm text-slate-400 md:grid-cols-3">
           <div className="flex items-center gap-2"><Building2 className="h-4 w-4 text-slate-500" /> {company.slug}</div>
-          <div className="flex items-center gap-2"><Globe2 className="h-4 w-4 text-slate-500" /> Sem impacto em metadata pública</div>
-          <div className="flex items-center gap-2"><Mail className="h-4 w-4 text-slate-500" /> Sem troca de WhatsApp público</div>
+          <div className="flex items-center gap-2"><Globe2 className="h-4 w-4 text-slate-500" /> Sem impacto em metadados públicos automáticos</div>
+          <div className="flex items-center gap-2"><Mail className="h-4 w-4 text-slate-500" /> Sem troca de canais públicos sem salvar</div>
         </div>
       </div>
     </main>
