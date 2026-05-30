@@ -247,17 +247,19 @@ function Field({ label, hint, children, error }: { label: string; hint?: string;
 
 function inputClass(error?: string) {
   return cn(
-    "h-11 w-full rounded-xl border bg-slate-950/60 px-3 text-sm text-white outline-none transition placeholder:text-slate-600",
-    "focus:border-blue-400 focus:ring-2 focus:ring-blue-400/15 disabled:cursor-not-allowed disabled:opacity-60",
-    error ? "border-red-400/70" : "border-white/10"
+    "h-11 w-full rounded-xl border bg-white/[0.03] px-3 text-sm text-white outline-none transition placeholder:text-slate-500",
+    "hover:bg-white/[0.04] focus:border-blue-400/60 focus:bg-white/[0.05] focus:ring-2 focus:ring-blue-400/15",
+    "disabled:cursor-not-allowed disabled:opacity-60",
+    error ? "border-red-400/60" : "border-white/[0.06]"
   )
 }
 
 function textareaClass(error?: string) {
   return cn(
-    "min-h-24 w-full resize-y rounded-xl border bg-slate-950/60 px-3 py-2.5 text-sm text-white outline-none transition placeholder:text-slate-600",
-    "focus:border-blue-400 focus:ring-2 focus:ring-blue-400/15 disabled:cursor-not-allowed disabled:opacity-60",
-    error ? "border-red-400/70" : "border-white/10"
+    "min-h-24 w-full resize-y rounded-xl border bg-white/[0.03] px-3 py-2.5 text-sm text-white outline-none transition placeholder:text-slate-500",
+    "hover:bg-white/[0.04] focus:border-blue-400/60 focus:bg-white/[0.05] focus:ring-2 focus:ring-blue-400/15",
+    "disabled:cursor-not-allowed disabled:opacity-60",
+    error ? "border-red-400/60" : "border-white/[0.06]"
   )
 }
 
@@ -275,7 +277,7 @@ function SectionCard({
   children: ReactNode
 }) {
   return (
-    <section className="rounded-2xl border border-white/10 bg-slate-900/70 p-5 shadow-2xl shadow-black/20">
+    <section className="rounded-2xl border border-white/[0.06] bg-slate-900/60 p-5 shadow-2xl shadow-black/20">
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-blue-400/20 bg-blue-400/10 text-blue-200">
@@ -319,7 +321,7 @@ function Toggle({
   disabled?: boolean
 }) {
   return (
-    <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-white/10 bg-slate-950/60 p-3">
+    <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3 transition hover:bg-white/[0.04]">
       <input
         type="checkbox"
         className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-900 text-blue-500 focus:ring-blue-400"
@@ -582,6 +584,7 @@ export function CompanySettingsClient({
               label="Favicon"
               description="Ícone exibido na aba do navegador."
               slot="favicon"
+              previewKind="icon"
               value={brandForm.faviconUrl || null}
               disabled={!canEditSettings}
               onChange={(url) => setBrandForm({ ...brandForm, faviconUrl: url })}
@@ -624,7 +627,7 @@ export function CompanySettingsClient({
           </div>
 
           {/* Tema — desabilitado (Fase futura) */}
-          <div className="mt-6 rounded-2xl border border-white/10 bg-slate-950/40 p-4 opacity-80">
+          <div className="mt-6 rounded-2xl border border-white/[0.06] bg-slate-950/40 p-4 opacity-80">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <SlidersHorizontal className="h-4 w-4 text-slate-400" />
@@ -655,8 +658,8 @@ export function CompanySettingsClient({
           title="Canais de contato"
           description="Canais oficiais exibidos para clientes. A ordem é a sequência da lista."
         >
-          <div className="overflow-hidden rounded-2xl border border-white/10">
-            <div className="grid grid-cols-[1fr_1.4fr_1.6fr_140px_140px] gap-3 bg-slate-950/80 px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500 max-lg:hidden">
+          <div className="overflow-hidden rounded-2xl border border-white/[0.06]">
+            <div className="grid grid-cols-[1fr_1.4fr_1.6fr_140px_160px] gap-3 bg-white/[0.02] px-4 py-3 text-xs font-bold uppercase tracking-wider text-slate-500 max-lg:hidden">
               <span>Tipo</span>
               <span>Nome exibido</span>
               <span>Contato</span>
@@ -667,26 +670,26 @@ export function CompanySettingsClient({
               {sortedContacts.length === 0 ? (
                 <div className="px-4 py-6 text-sm text-slate-400">Nenhum canal cadastrado.</div>
               ) : sortedContacts.map((contact, index) => (
-                <div key={contact.id} className="grid gap-3 px-4 py-4 text-sm lg:grid-cols-[1fr_1.4fr_1.6fr_140px_140px] lg:items-center">
-                  <div className="flex items-center gap-2">
-                    <div className="flex flex-col">
+                <div key={contact.id} className="grid gap-3 px-4 py-3 text-sm transition lg:grid-cols-[1fr_1.4fr_1.6fr_140px_160px] lg:items-center hover:bg-white/[0.02]">
+                  <div className="flex items-center gap-3">
+                    <div className="flex flex-col overflow-hidden rounded-lg border border-white/[0.06] bg-white/[0.02]">
                       <button
                         type="button"
                         aria-label="Mover para cima"
                         onClick={() => moveContact(contact.id, "up")}
                         disabled={!canEditSettings || index === 0 || isPending}
-                        className="text-slate-500 hover:text-white disabled:opacity-30"
+                        className="flex h-6 w-7 items-center justify-center text-slate-400 transition hover:bg-white/[0.06] hover:text-white disabled:opacity-30 disabled:hover:bg-transparent"
                       >
-                        <ChevronUp className="h-4 w-4" />
+                        <ChevronUp className="h-3.5 w-3.5" />
                       </button>
                       <button
                         type="button"
                         aria-label="Mover para baixo"
                         onClick={() => moveContact(contact.id, "down")}
                         disabled={!canEditSettings || index === sortedContacts.length - 1 || isPending}
-                        className="text-slate-500 hover:text-white disabled:opacity-30"
+                        className="flex h-6 w-7 items-center justify-center border-t border-white/[0.06] text-slate-400 transition hover:bg-white/[0.06] hover:text-white disabled:opacity-30 disabled:hover:bg-transparent"
                       >
-                        <ChevronDown className="h-4 w-4" />
+                        <ChevronDown className="h-3.5 w-3.5" />
                       </button>
                     </div>
                     <span className="font-semibold text-white">{contactTypeLabels[contact.channelType]}</span>
@@ -695,32 +698,34 @@ export function CompanySettingsClient({
                   <div className="text-slate-300">{contact.label || <span className="text-slate-500">—</span>}</div>
                   <div className="min-w-0 text-slate-400">
                     <p className="truncate">{contact.value}</p>
-                    {contact.url ? <p className="truncate text-xs text-slate-600">{contact.url}</p> : null}
+                    {contact.url ? <p className="truncate text-xs text-slate-500/80">{contact.url}</p> : null}
                   </div>
                   <div>
                     {contact.isPublic ? <Badge variant="blue">Visível</Badge> : <Badge variant="gray">Oculto</Badge>}
                   </div>
                   <div className="flex items-center justify-between gap-2">
                     {contact.active ? <Badge variant="green">Ativo</Badge> : <Badge variant="gray">Inativo</Badge>}
-                    <div className="flex gap-1">
+                    <div className="flex items-center gap-1">
                       <button
                         type="button"
                         aria-label="Editar contato"
-                        className="rounded-lg p-1.5 text-blue-200 hover:bg-white/5 disabled:opacity-30"
+                        title="Editar contato"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-300 transition hover:bg-white/[0.06] hover:text-white disabled:opacity-30 disabled:hover:bg-transparent"
                         disabled={!canEditSettings || isPending}
                         onClick={() => editContact(contact)}
                       >
-                        <Pencil className="h-3.5 w-3.5" />
+                        <Pencil className="h-4 w-4" />
                       </button>
                       {contact.active ? (
                         <button
                           type="button"
                           aria-label="Inativar contato"
-                          className="rounded-lg p-1.5 text-red-200 hover:bg-white/5 disabled:opacity-30"
+                          title="Inativar contato"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-300 transition hover:bg-rose-500/10 hover:text-rose-300 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-300"
                           disabled={!canEditSettings || isPending}
                           onClick={() => deactivateContact(contact)}
                         >
-                          <Trash2 className="h-3.5 w-3.5" />
+                          <Trash2 className="h-4 w-4" />
                         </button>
                       ) : null}
                     </div>
@@ -731,7 +736,7 @@ export function CompanySettingsClient({
           </div>
 
           {/* Formulário novo / editar */}
-          <div className="mt-5 rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+          <div className="mt-5 rounded-2xl border border-white/[0.06] bg-slate-950/40 p-4">
             <div className="mb-4 flex items-center gap-2 text-sm font-bold text-white">
               <Plus className="h-4 w-4 text-blue-200" />
               {contactForm.id ? "Editar contato" : "Novo contato"}
@@ -798,9 +803,14 @@ export function CompanySettingsClient({
                 {contactForm.id ? "Salvar contato" : "Adicionar contato"}
               </Button>
               {contactForm.id ? (
-                <Button variant="ghost" onClick={() => setContactForm(emptyContactForm(nextSortOrder))} disabled={isPending}>
+                <button
+                  type="button"
+                  onClick={() => setContactForm(emptyContactForm(nextSortOrder))}
+                  disabled={isPending}
+                  className="inline-flex h-10 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-slate-300 transition hover:bg-white/[0.04] hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                >
                   Cancelar edição
-                </Button>
+                </button>
               ) : null}
             </div>
           </div>
@@ -917,7 +927,7 @@ export function CompanySettingsClient({
           )}
         </SectionCard>
 
-        <div className="grid gap-3 rounded-2xl border border-white/10 bg-slate-900/50 p-4 text-sm text-slate-400 md:grid-cols-3">
+        <div className="grid gap-3 rounded-2xl border border-white/[0.06] bg-slate-900/50 p-4 text-sm text-slate-400 md:grid-cols-3">
           <div className="flex items-center gap-2"><Building2 className="h-4 w-4 text-slate-500" /> {company.slug}</div>
           <div className="flex items-center gap-2"><Globe2 className="h-4 w-4 text-slate-500" /> Sem impacto em metadados públicos automáticos</div>
           <div className="flex items-center gap-2"><Mail className="h-4 w-4 text-slate-500" /> Sem troca de canais públicos sem salvar</div>

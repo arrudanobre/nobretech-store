@@ -3,7 +3,6 @@
 import { useRef, useState } from "react"
 import { toast } from "sonner"
 import { ImageIcon, Loader2, Trash2, Upload } from "lucide-react"
-import { Button } from "@/components/ui/button"
 
 type Props = {
   label: string
@@ -15,6 +14,9 @@ type Props = {
   disabled?: boolean
   // Apenas presentational: define proporções da prévia.
   aspect?: "square" | "wide"
+  // "icon" mostra a imagem em um quadro pequeno centralizado, sem upscale agressivo.
+  // Útil para favicon, evitando aparência de blur ao esticar 16-32px na caixa toda.
+  previewKind?: "default" | "icon"
 }
 
 export function UploadField({
@@ -26,6 +28,7 @@ export function UploadField({
   onClear,
   disabled = false,
   aspect = "square",
+  previewKind = "default",
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
@@ -78,7 +81,7 @@ export function UploadField({
   const isBusy = uploading || removing
 
   return (
-    <div className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+    <div className="flex flex-col gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-semibold text-white">{label}</p>
@@ -87,11 +90,22 @@ export function UploadField({
       </div>
 
       <div
-        className={`relative flex w-full items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-slate-950/60 ${wrapperRatio}`}
+        className={`relative flex w-full items-center justify-center overflow-hidden rounded-xl border border-white/[0.06] bg-slate-950/40 ${wrapperRatio}`}
       >
         {value ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={value} alt={label} className="h-full w-full object-contain" />
+          previewKind === "icon" ? (
+            // Favicon: renderiza em um quadro pequeno centralizado para evitar
+            // que o browser upscale 16-32px para a caixa inteira (parece blur).
+            <div className="flex h-full w-full items-center justify-center p-6">
+              <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-white/[0.06] bg-white/[0.03] p-2 shadow-inner">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={value} alt={label} className="h-full w-full object-contain" />
+              </div>
+            </div>
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={value} alt={label} className="h-full w-full object-contain" />
+          )
         ) : (
           <div className="flex flex-col items-center gap-1 text-slate-500">
             <ImageIcon className="h-7 w-7" />
@@ -117,25 +131,25 @@ export function UploadField({
       />
 
       <div className="flex flex-wrap gap-2">
-        <Button
-          variant="outline"
-          size="sm"
+        <button
+          type="button"
           onClick={() => inputRef.current?.click()}
           disabled={disabled || isBusy}
+          className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 text-sm font-semibold text-white transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white/[0.04]"
         >
           <Upload className="h-4 w-4" />
           {value ? "Trocar imagem" : "Enviar imagem"}
-        </Button>
+        </button>
         {value ? (
-          <Button
-            variant="ghost"
-            size="sm"
+          <button
+            type="button"
             onClick={handleRemove}
             disabled={disabled || isBusy}
+            className="inline-flex h-9 items-center gap-2 rounded-xl px-3 text-sm font-semibold text-slate-300 transition hover:bg-rose-500/10 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-300"
           >
             <Trash2 className="h-4 w-4" />
             Remover
-          </Button>
+          </button>
         ) : null}
       </div>
     </div>

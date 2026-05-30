@@ -26,7 +26,7 @@ export function ColorField({
   const showError = Boolean(hex) && !isValidHex(hex)
 
   return (
-    <div className="flex flex-col gap-2 rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+    <div className="flex flex-col gap-2 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
       <div className="flex flex-col">
         <label htmlFor={id} className="text-sm font-semibold text-white">
           {label}
@@ -70,8 +70,8 @@ export function ColorField({
             const withHash = raw.startsWith("#") ? raw : `#${raw}`
             onChange(withHash.toUpperCase())
           }}
-          className={`h-11 flex-1 rounded-xl border bg-slate-950/60 px-3 font-mono text-sm uppercase tracking-wider text-white placeholder:text-slate-600 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-400/15 disabled:cursor-not-allowed disabled:opacity-60 ${
-            showError ? "border-red-400/70" : "border-white/10"
+          className={`h-11 flex-1 rounded-xl border bg-white/[0.03] px-3 font-mono text-sm uppercase tracking-wider text-white placeholder:text-slate-500 outline-none transition hover:bg-white/[0.04] focus:border-blue-400/60 focus:bg-white/[0.05] focus:ring-2 focus:ring-blue-400/15 disabled:cursor-not-allowed disabled:opacity-60 ${
+            showError ? "border-red-400/60" : "border-white/[0.06]"
           }`}
         />
       </div>
