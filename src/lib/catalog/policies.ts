@@ -131,6 +131,23 @@ export async function getCatalogPublicationPolicies(
   return result.rows.map(mapPolicy)
 }
 
+export async function getCatalogPublicationPoliciesForDiagnostics(
+  companyId: string
+): Promise<CatalogPublicationPolicy[]> {
+  if (!UUID_RE.test(companyId)) return []
+  const result = await readQueryWithRetry<PolicyRow>(
+    `SELECT * FROM catalog_publication_policies
+     WHERE company_id = $1
+     ORDER BY
+       active DESC,
+       (CASE WHEN product_type IS NOT NULL THEN 1 ELSE 0 END +
+        CASE WHEN condition IS NOT NULL THEN 1 ELSE 0 END) DESC,
+       effective_from DESC, updated_at DESC`,
+    [companyId]
+  )
+  return result.rows.map(mapPolicy)
+}
+
 export function pickPolicyForCriteria(
   policies: CatalogPublicationPolicy[],
   criteria: CatalogPolicyResolutionCriteria = {}
@@ -176,6 +193,27 @@ export async function getCatalogReadinessRulesForPolicies(
     `SELECT * FROM catalog_readiness_rules
      WHERE catalog_publication_policy_id = ANY($1::uuid[]) AND active = TRUE
      ORDER BY created_at ASC`,
+    [validIds]
+  )
+  for (const row of result.rows) {
+    const rule = mapRule(row)
+    const existing = map.get(rule.policyId) ?? []
+    existing.push(rule)
+    map.set(rule.policyId, existing)
+  }
+  return map
+}
+
+export async function getCatalogReadinessRulesForPoliciesForDiagnostics(
+  policyIds: string[]
+): Promise<Map<string, CatalogReadinessRule[]>> {
+  const map = new Map<string, CatalogReadinessRule[]>()
+  const validIds = policyIds.filter((id) => UUID_RE.test(id))
+  if (validIds.length === 0) return map
+  const result = await readQueryWithRetry<RuleRow>(
+    `SELECT * FROM catalog_readiness_rules
+     WHERE catalog_publication_policy_id = ANY($1::uuid[])
+     ORDER BY active DESC, created_at ASC`,
     [validIds]
   )
   for (const row of result.rows) {

@@ -35,7 +35,9 @@ import {
   updateCatalogTrustBadgeAction,
   deactivateCatalogTrustBadgeAction,
 } from "./actions"
+import { PublicationRulesPanel } from "./publication-rules-panel"
 import type { CatalogPublicSettings, CatalogTrustBadge } from "@/lib/catalog/settings"
+import type { CatalogPublicationRulesPanelData } from "@/lib/catalog/publication-rules-diagnostics"
 import { BADGE_ICON_GALLERY, DEFAULT_BADGE_ICON, resolveBadgeIconKey } from "@/lib/catalog/badge-icons"
 
 function normalize(value: string) {
@@ -51,12 +53,16 @@ export function VitrinePublicaClient({
   initialSettings,
   initialCatalogBadges,
   initialProductBadges,
+  publicationRulesData,
+  publicationRulesError,
   loadError,
 }: {
   canEditSettings: boolean
   initialSettings: CatalogPublicSettings | null
   initialCatalogBadges: CatalogTrustBadge[]
   initialProductBadges: CatalogTrustBadge[]
+  publicationRulesData: CatalogPublicationRulesPanelData | null
+  publicationRulesError: string | null
   loadError: string | null
 }) {
   const [isPending, startTransition] = useTransition()
@@ -530,6 +536,8 @@ export function VitrinePublicaClient({
           </div>
         </div>
       </div>
+
+      <PublicationRulesPanel data={publicationRulesData} loadError={publicationRulesError} />
 
       {/* Badge modal */}
       {isBadgeModalOpen && editingBadge && (
