@@ -1,10 +1,11 @@
 "use client"
 
 import { useMemo, useState } from "react"
-import { AlertTriangle, Ban, CheckCircle2, Info, Lock, ShieldAlert } from "lucide-react"
+import { AlertTriangle, Ban, CheckCircle2, Info, Lock, Search, ShieldAlert } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import type {
   CatalogPublicationDiagnosticsItem,
   CatalogPublicationRulesPanelData,
@@ -24,6 +25,8 @@ const FILTERS: Array<{ key: Filter; label: string }> = [
   { key: "warnings", label: "Com alertas" },
   { key: "ready", label: "Prontos" },
 ]
+
+const PRODUCTS_PER_PAGE = 5
 
 function statusBadge(item: CatalogPublicationDiagnosticsItem) {
   if (item.readinessStatus === "published") return <Badge variant="green">Publicado</Badge>
@@ -46,12 +49,49 @@ function matchesFilter(item: CatalogPublicationDiagnosticsItem, filter: Filter) 
   return true
 }
 
+function normalizeSearch(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim()
+}
+
+function matchesSearch(item: CatalogPublicationDiagnosticsItem, query: string) {
+  if (!query) return true
+
+  const searchableText = [
+    item.product,
+    item.subtitle,
+    item.inventoryStatusLabel,
+    item.conditionLabel,
+    item.publicationLabel,
+    item.policyLabel,
+    item.readinessLabel,
+    ...item.reasons,
+    ...item.warnings,
+  ]
+    .filter(Boolean)
+    .join(" ")
+
+  return normalizeSearch(searchableText).includes(query)
+}
+
 export function PublicationRulesPanel({ data, loadError }: Props) {
   const [filter, setFilter] = useState<Filter>("all")
+  const [search, setSearch] = useState("")
+  const [page, setPage] = useState(1)
 
   const filteredDiagnostics = useMemo(() => {
-    return data?.diagnostics.filter((item) => matchesFilter(item, filter)) ?? []
-  }, [data?.diagnostics, filter])
+    const query = normalizeSearch(search)
+    return data?.diagnostics.filter((item) => matchesFilter(item, filter) && matchesSearch(item, query)) ?? []
+  }, [data?.diagnostics, filter, search])
+
+  const totalPages = Math.max(1, Math.ceil(filteredDiagnostics.length / PRODUCTS_PER_PAGE))
+  const currentPage = Math.min(page, totalPages)
+  const startIndex = filteredDiagnostics.length === 0 ? 0 : (currentPage - 1) * PRODUCTS_PER_PAGE
+  const endIndex = Math.min(startIndex + PRODUCTS_PER_PAGE, filteredDiagnostics.length)
+  const paginatedDiagnostics = filteredDiagnostics.slice(startIndex, endIndex)
 
   if (loadError) {
     return (
@@ -146,40 +186,59 @@ export function PublicationRulesPanel({ data, loadError }: Props) {
           </section>
 
           <section className="rounded-2xl border border-gray-100 bg-white shadow-sm">
-            <div className="flex flex-col gap-4 border-b border-gray-100 p-5 lg:flex-row lg:items-center lg:justify-between">
+            <div className="space-y-4 border-b border-gray-100 p-5">
               <div>
                 <h3 className="font-bold text-navy-900">Diagnóstico de produtos</h3>
                 <p className="mt-1 text-xs text-gray-500">Produtos publicados ou candidatos e o motivo do estado atual.</p>
               </div>
-              <div className="flex flex-wrap gap-2">
-                {FILTERS.map((option) => (
-                  <Button
-                    key={option.key}
-                    type="button"
-                    size="sm"
-                    variant={filter === option.key ? "secondary" : "outline"}
-                    onClick={() => setFilter(option.key)}
-                  >
-                    {option.label}
-                  </Button>
-                ))}
+              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                <div className="w-full xl:max-w-md">
+                  <Input
+                    icon={<Search className="h-4 w-4" />}
+                    value={search}
+                    onChange={(event) => {
+                      setSearch(event.target.value)
+                      setPage(1)
+                    }}
+                    placeholder="Buscar por produto, modelo, cor ou status..."
+                  />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {FILTERS.map((option) => (
+                    <Button
+                      key={option.key}
+                      type="button"
+                      size="sm"
+                      variant={filter === option.key ? "secondary" : "outline"}
+                      onClick={() => {
+                        setFilter(option.key)
+                        setPage(1)
+                      }}
+                    >
+                      {option.label}
+                    </Button>
+                  ))}
+                </div>
               </div>
             </div>
 
             <div className="divide-y divide-gray-100">
               {filteredDiagnostics.length === 0 ? (
-                <div className="p-8 text-center text-sm text-gray-500">Nenhum produto encontrado neste filtro.</div>
+                <div className="p-8 text-center">
+                  <p className="font-semibold text-navy-900">Nenhum produto encontrado</p>
+                  <p className="mt-1 text-sm text-gray-500">Revise a busca ou altere os filtros.</p>
+                </div>
               ) : (
-                filteredDiagnostics.map((item) => (
-                  <article key={item.inventoryId} className="p-5">
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                paginatedDiagnostics.map((item) => (
+                  <article key={item.inventoryId} className="px-4 py-3 sm:px-5">
+                    <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
                       <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2.5">
                           <h4 className="font-semibold text-navy-900">{item.product}</h4>
                           {statusBadge(item)}
                         </div>
-                        {item.subtitle && <p className="mt-1 text-sm text-gray-500">{item.subtitle}</p>}
-                        <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-500">
+                        {item.subtitle && <p className="mt-0.5 text-xs text-gray-500">{item.subtitle}</p>}
+                        <div className="mt-2 flex flex-wrap gap-1.5 text-xs text-gray-500">
                           <span className="rounded-full bg-gray-100 px-2.5 py-1">{item.inventoryStatusLabel}</span>
                           <span className="rounded-full bg-gray-100 px-2.5 py-1">{item.conditionLabel}</span>
                           <span className="rounded-full bg-gray-100 px-2.5 py-1">{item.publicationLabel}</span>
@@ -189,7 +248,7 @@ export function PublicationRulesPanel({ data, loadError }: Props) {
                     </div>
 
                     {(item.reasons.length > 0 || item.warnings.length > 0) && (
-                      <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      <div className="mt-3 grid gap-2 lg:grid-cols-2">
                         {item.reasons.length > 0 && (
                           <ReasonList icon="block" title="Bloqueios" items={item.reasons} />
                         )}
@@ -202,6 +261,37 @@ export function PublicationRulesPanel({ data, loadError }: Props) {
                 ))
               )}
             </div>
+
+            {filteredDiagnostics.length > 0 && (
+              <div className="flex flex-col gap-3 border-t border-gray-100 px-5 py-4 text-sm text-gray-500 sm:flex-row sm:items-center sm:justify-between">
+                <p>
+                  Mostrando {startIndex + 1}–{endIndex} de {filteredDiagnostics.length} produtos
+                </p>
+                <div className="flex items-center gap-3">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={currentPage === 1}
+                    onClick={() => setPage((current) => Math.max(1, current - 1))}
+                  >
+                    Anterior
+                  </Button>
+                  <span className="min-w-24 text-center text-xs font-semibold text-navy-900">
+                    Página {currentPage} de {totalPages}
+                  </span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={currentPage === totalPages}
+                    onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                  >
+                    Próxima
+                  </Button>
+                </div>
+              </div>
+            )}
           </section>
         </div>
 
@@ -287,19 +377,25 @@ function RuleGroup({
 
 function ReasonList({ icon, title, items }: { icon: "block" | "warning"; title: string; items: string[] }) {
   const Icon = icon === "block" ? Ban : AlertTriangle
+  const visibleItems = items.slice(0, 3)
+  const hiddenCount = items.length - visibleItems.length
+
   return (
-    <div className={`rounded-2xl border p-3 ${icon === "block" ? "border-danger-100 bg-danger-50" : "border-warning-100 bg-warning-50"}`}>
+    <div className={`rounded-xl border px-3 py-2 ${icon === "block" ? "border-danger-100 bg-danger-50" : "border-warning-100 bg-warning-50"}`}>
       <div className="flex items-center gap-2">
-        <Icon className={`h-4 w-4 ${icon === "block" ? "text-danger-600" : "text-amber-700"}`} />
-        <p className="text-sm font-semibold text-navy-900">{title}</p>
+        <Icon className={`h-3.5 w-3.5 ${icon === "block" ? "text-danger-600" : "text-amber-700"}`} />
+        <p className="text-xs font-semibold uppercase text-navy-900">{title}</p>
       </div>
-      <ul className="mt-2 space-y-1.5">
-        {items.map((item) => (
-          <li key={item} className="flex gap-2 text-xs leading-5 text-gray-700">
-            {icon === "block" ? <Ban className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+      <ul className="mt-1.5 space-y-1">
+        {visibleItems.map((item) => (
+          <li key={item} className="flex gap-1.5 text-xs leading-4 text-gray-700">
+            {icon === "block" ? <Ban className="mt-0.5 h-3 w-3 shrink-0" /> : <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0" />}
             <span>{item}</span>
           </li>
         ))}
+        {hiddenCount > 0 && (
+          <li className="text-xs font-medium text-gray-500">+{hiddenCount} motivo{hiddenCount > 1 ? "s" : ""}</li>
+        )}
       </ul>
     </div>
   )
