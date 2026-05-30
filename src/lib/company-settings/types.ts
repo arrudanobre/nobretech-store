@@ -41,6 +41,8 @@ export type CompanyBrandProfile = {
   faviconUrl: string | null
   appleIconUrl: string | null
   ogImageUrl: string | null
+  catalogOgImageUrl: string | null
+  portalOgImageUrl: string | null
   themeMode: CompanyThemeMode
   active: boolean
   createdAt: string

@@ -2,6 +2,7 @@ import type { Metadata } from "next"
 import { ClerkProvider } from "@clerk/nextjs"
 import { Inter, Syne, DM_Mono } from "next/font/google"
 import { Providers } from "@/components/providers"
+import { getCatalogCompanyIdentity } from "@/lib/catalog/company-identity"
 import "./globals.css"
 
 const inter = Inter({
@@ -51,40 +52,51 @@ const clerkLocalization = {
   },
 }
 
-export const metadata: Metadata = {
-  metadataBase: new URL("https://www.nobretechstore.com.br"),
-  title: {
-    default: "Nobretech Store",
-    template: "%s | Nobretech Store",
-  },
-  description: "Tecnologia com procedência, garantia e atendimento direto em São Luís.",
-  openGraph: {
+export async function generateMetadata(): Promise<Metadata> {
+  // Override só se houver imagem específica do SITE. Sem override, Next cai
+  // automaticamente na /opengraph-image.tsx (auto-rendered).
+  const identity = await getCatalogCompanyIdentity().catch(() => null)
+  const siteOgImageUrl = identity?.ogImageUrl ?? null
+
+  const openGraph: Metadata["openGraph"] = {
     title: "Nobretech Store",
     description: "Tecnologia com procedência, garantia e atendimento direto em São Luís.",
     siteName: "Nobretech Store",
     url: "https://www.nobretechstore.com.br",
     locale: "pt_BR",
     type: "website",
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: "Nobretech Store",
+  }
+  if (siteOgImageUrl) openGraph.images = [{ url: siteOgImageUrl }]
+
+  return {
+    metadataBase: new URL("https://www.nobretechstore.com.br"),
+    title: {
+      default: "Nobretech Store",
+      template: "%s | Nobretech Store",
+    },
     description: "Tecnologia com procedência, garantia e atendimento direto em São Luís.",
-  },
-  icons: {
-    icon: [
-      { url: "/favicon.ico", sizes: "any" },
-      { url: "/icon.svg", type: "image/svg+xml" },
-      { url: "/icon.png", sizes: "512x512", type: "image/png" },
-    ],
-    shortcut: "/favicon.ico",
-    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
-  },
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: "default",
-    title: "Nobretech Store",
-  },
+    openGraph,
+    twitter: {
+      card: "summary_large_image",
+      title: "Nobretech Store",
+      description: "Tecnologia com procedência, garantia e atendimento direto em São Luís.",
+      ...(siteOgImageUrl ? { images: [{ url: siteOgImageUrl }] } : {}),
+    },
+    icons: {
+      icon: [
+        { url: "/favicon.ico", sizes: "any" },
+        { url: "/icon.svg", type: "image/svg+xml" },
+        { url: "/icon.png", sizes: "512x512", type: "image/png" },
+      ],
+      shortcut: "/favicon.ico",
+      apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+    },
+    appleWebApp: {
+      capable: true,
+      statusBarStyle: "default",
+      title: "Nobretech Store",
+    },
+  }
 }
 
 export default function RootLayout({

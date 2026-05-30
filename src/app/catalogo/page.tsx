@@ -27,7 +27,9 @@ export async function generateMetadata(): Promise<Metadata> {
     siteName,
   }
   if (url) og.url = url
-  if (identity.ogImageUrl) og.images = [{ url: identity.ogImageUrl }]
+  // Override só se houver imagem específica do catálogo. Sem override, Next cai
+  // automaticamente na /catalogo/opengraph-image.tsx (branded auto-rendered).
+  if (identity.catalogOgImageUrl) og.images = [{ url: identity.catalogOgImageUrl }]
 
   return {
     title,
@@ -38,7 +40,7 @@ export async function generateMetadata(): Promise<Metadata> {
       card: "summary_large_image",
       title,
       description,
-      ...(identity.ogImageUrl ? { images: [{ url: identity.ogImageUrl }] } : {}),
+      ...(identity.catalogOgImageUrl ? { images: [{ url: identity.catalogOgImageUrl }] } : {}),
     },
   }
 }

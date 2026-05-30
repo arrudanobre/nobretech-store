@@ -7,7 +7,7 @@ import { ImageIcon, Loader2, Trash2, Upload } from "lucide-react"
 type Props = {
   label: string
   description?: string
-  slot: "logo" | "favicon" | "og"
+  slot: "logo" | "favicon" | "og" | "catalog_og" | "portal_og"
   value: string | null | undefined
   onChange: (url: string) => void
   onClear: () => void

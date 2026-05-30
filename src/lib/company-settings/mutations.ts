@@ -48,6 +48,8 @@ export type BrandProfileInput = {
   faviconUrl: string
   appleIconUrl: string
   ogImageUrl: string
+  catalogOgImageUrl: string
+  portalOgImageUrl: string
   themeMode: CompanyThemeMode
 }
 
@@ -155,7 +157,7 @@ function validateBrandProfile(input: BrandProfileInput) {
   }
   if (!themeModes.includes(themeMode)) errors.themeMode = 'Tema invalido.'
 
-  for (const field of ['logoUrl', 'faviconUrl', 'appleIconUrl', 'ogImageUrl'] as const) {
+  for (const field of ['logoUrl', 'faviconUrl', 'appleIconUrl', 'ogImageUrl', 'catalogOgImageUrl', 'portalOgImageUrl'] as const) {
     if (!isSafeAssetReference(clean(input[field]))) {
       errors[field] = 'Use um caminho interno seguro ou uma URL valida.'
     }
@@ -179,6 +181,8 @@ function validateBrandProfile(input: BrandProfileInput) {
       faviconUrl: nullIfEmpty(input.faviconUrl),
       appleIconUrl: nullIfEmpty(input.appleIconUrl),
       ogImageUrl: nullIfEmpty(input.ogImageUrl),
+      catalogOgImageUrl: nullIfEmpty(input.catalogOgImageUrl),
+      portalOgImageUrl: nullIfEmpty(input.portalOgImageUrl),
       themeMode,
     },
   }
@@ -313,6 +317,8 @@ export async function upsertCompanyBrandProfile(
           apple_icon_url = $15,
           og_image_url = $16,
           theme_mode = $17,
+          catalog_og_image_url = $18,
+          portal_og_image_url = $19,
           active = TRUE
         WHERE id = (SELECT id FROM active_profile)
         RETURNING id
@@ -321,9 +327,10 @@ export async function upsertCompanyBrandProfile(
         INSERT INTO company_brand_profile (
           company_id, display_name, legal_name, short_name, slogan, public_description,
           canonical_domain, city, state, locale, primary_color, accent_color,
-          logo_url, favicon_url, apple_icon_url, og_image_url, theme_mode, active
+          logo_url, favicon_url, apple_icon_url, og_image_url, theme_mode,
+          catalog_og_image_url, portal_og_image_url, active
         )
-        SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, TRUE
+        SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, TRUE
         WHERE NOT EXISTS (SELECT 1 FROM updated)
         RETURNING id
       )
@@ -333,6 +340,7 @@ export async function upsertCompanyBrandProfile(
         values.publicDescription, values.canonicalDomain, values.city, values.state,
         values.locale, values.primaryColor, values.accentColor, values.logoUrl,
         values.faviconUrl, values.appleIconUrl, values.ogImageUrl, values.themeMode,
+        values.catalogOgImageUrl, values.portalOgImageUrl,
       ]
     )
     const entityId = upsertResult.rows[0]?.id ?? null

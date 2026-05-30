@@ -57,7 +57,9 @@ export async function generateMetadata({
     : `${product.title} disponível${brandTail}. Veja fotos, condição, garantia e atendimento pelo WhatsApp.`
 
   const primaryImage = product.images[0]
-  const ogImageUrl = primaryImage?.url ?? identity.ogImageUrl ?? undefined
+  // Sem imagem do produto: cai pra imagem do catálogo (override) e, na falta,
+  // herda /catalogo/opengraph-image.tsx automaticamente.
+  const ogImageUrl = primaryImage?.url ?? identity.catalogOgImageUrl ?? undefined
   const titleTail = identity.shortName ? ` | ${identity.shortName}` : ""
   const ogImageAlt = primaryImage?.alt
     ? `${product.title} — ${primaryImage.alt}`

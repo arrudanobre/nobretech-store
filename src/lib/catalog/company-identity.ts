@@ -24,6 +24,8 @@ export type CatalogCompanyIdentity = {
   canonicalDomain: string | null
   catalogUrl: string | null
   ogImageUrl: string | null
+  catalogOgImageUrl: string | null
+  portalOgImageUrl: string | null
   whatsapp: CatalogWhatsAppContact | null
   instagram: CatalogInstagramContact | null
 }
@@ -48,6 +50,8 @@ function neutralIdentity(): CatalogCompanyIdentity {
     canonicalDomain: null,
     catalogUrl: null,
     ogImageUrl: null,
+    catalogOgImageUrl: null,
+    portalOgImageUrl: null,
     whatsapp: null,
     instagram: null,
   }
@@ -114,6 +118,8 @@ export async function getCatalogCompanyIdentity(): Promise<CatalogCompanyIdentit
     canonicalDomain,
     catalogUrl,
     ogImageUrl: brand?.ogImageUrl ?? null,
+    catalogOgImageUrl: brand?.catalogOgImageUrl ?? null,
+    portalOgImageUrl: brand?.portalOgImageUrl ?? null,
     whatsapp,
     instagram,
   }

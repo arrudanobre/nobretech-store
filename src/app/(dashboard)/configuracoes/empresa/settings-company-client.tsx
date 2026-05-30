@@ -151,6 +151,8 @@ function emptyBrandForm(companyName: string): BrandProfileInput {
     faviconUrl: "",
     appleIconUrl: "",
     ogImageUrl: "",
+    catalogOgImageUrl: "",
+    portalOgImageUrl: "",
     themeMode: "dark",
   }
 }
@@ -173,6 +175,8 @@ function brandToForm(profile: CompanyBrandProfile | null, companyName: string): 
     faviconUrl: profile.faviconUrl || "",
     appleIconUrl: profile.appleIconUrl || "",
     ogImageUrl: profile.ogImageUrl || "",
+    catalogOgImageUrl: profile.catalogOgImageUrl || "",
+    portalOgImageUrl: profile.portalOgImageUrl || "",
     themeMode: profile.themeMode || "dark",
   }
 }
@@ -570,7 +574,7 @@ export function CompanySettingsClient({
           title="Marca e aparência"
           description="Logo, favicon, imagem social e cores. Influencia identidade visual pública, vitrine e elementos de branding."
         >
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-2">
             <UploadField
               label="Logo"
               description="Aparece em telas internas e na vitrine."
@@ -590,15 +594,38 @@ export function CompanySettingsClient({
               onChange={(url) => setBrandForm({ ...brandForm, faviconUrl: url })}
               onClear={() => setBrandForm({ ...brandForm, faviconUrl: "" })}
             />
+          </div>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-3">
             <UploadField
-              label="Imagem social"
-              description="Open Graph (WhatsApp, redes sociais). Proporção 1200×630."
+              label="Imagem social do site"
+              description="Usada ao compartilhar o site principal da loja. 1200×630."
               slot="og"
               aspect="wide"
               value={brandForm.ogImageUrl || null}
               disabled={!canEditSettings}
               onChange={(url) => setBrandForm({ ...brandForm, ogImageUrl: url })}
               onClear={() => setBrandForm({ ...brandForm, ogImageUrl: "" })}
+            />
+            <UploadField
+              label="Imagem social do catálogo"
+              description="Usada ao compartilhar o catálogo público no WhatsApp e redes sociais. 1200×630."
+              slot="catalog_og"
+              aspect="wide"
+              value={brandForm.catalogOgImageUrl || null}
+              disabled={!canEditSettings}
+              onChange={(url) => setBrandForm({ ...brandForm, catalogOgImageUrl: url })}
+              onClear={() => setBrandForm({ ...brandForm, catalogOgImageUrl: "" })}
+            />
+            <UploadField
+              label="Imagem social do portal de garantia"
+              description="Usada ao compartilhar links de compra verificada, garantia e transparência. 1200×630."
+              slot="portal_og"
+              aspect="wide"
+              value={brandForm.portalOgImageUrl || null}
+              disabled={!canEditSettings}
+              onChange={(url) => setBrandForm({ ...brandForm, portalOgImageUrl: url })}
+              onClear={() => setBrandForm({ ...brandForm, portalOgImageUrl: "" })}
             />
           </div>
 

@@ -39,6 +39,8 @@ type BrandProfileRow = {
   favicon_url: string | null
   apple_icon_url: string | null
   og_image_url: string | null
+  catalog_og_image_url: string | null
+  portal_og_image_url: string | null
   theme_mode: CompanyThemeMode
   active: boolean
   created_at: Date | string
@@ -129,6 +131,8 @@ function mapBrandProfile(row: BrandProfileRow): CompanyBrandProfile {
     faviconUrl: row.favicon_url,
     appleIconUrl: row.apple_icon_url,
     ogImageUrl: row.og_image_url,
+    catalogOgImageUrl: row.catalog_og_image_url,
+    portalOgImageUrl: row.portal_og_image_url,
     themeMode: row.theme_mode,
     active: row.active,
     createdAt: toISOString(row.created_at) ?? "",
@@ -214,6 +218,8 @@ export async function getCompanyBrandProfile(companyId: string): Promise<Company
         favicon_url,
         apple_icon_url,
         og_image_url,
+        catalog_og_image_url,
+        portal_og_image_url,
         theme_mode,
         active,
         created_at,

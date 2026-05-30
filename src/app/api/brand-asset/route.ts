@@ -7,7 +7,8 @@ export const runtime = "nodejs"
 
 // Slots permitidos do branding. apple_icon ficou fora do UI por decisão de produto;
 // se voltar a ser editável basta incluir aqui.
-const ALLOWED_SLOTS = new Set(["logo", "favicon", "og"])
+// "og" = imagem social do SITE; "catalog_og" = catálogo; "portal_og" = portal de garantia.
+const ALLOWED_SLOTS = new Set(["logo", "favicon", "og", "catalog_og", "portal_og"])
 
 function brandAssetKey(companyId: string, slot: string) {
   // Chave estável por (empresa, slot). Upload subsequente sobrescreve o objeto.
