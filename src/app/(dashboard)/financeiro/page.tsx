@@ -251,7 +251,7 @@ export default function FinanceiroPage() {
           .order("movement_date", { ascending: true }),
         (supabase.from("transactions") as any).select("*").or("status.is.null,status.neq.cancelled").order("due_date", { ascending: true }),
         (supabase.from("sales") as any)
-          .select("id, sale_date, payment_due_date, sale_status, sale_price, net_amount, payment_method, inventory:inventory_id(catalog:catalog_id(model))")
+          .select("id, sale_date, payment_due_date, sale_status, sale_price, net_amount, supplier_cost, payment_method, inventory:inventory_id(purchase_price, type, catalog:catalog_id(model)), sales_additional_items(*)")
           .neq("sale_status", "cancelled")
           .order("payment_due_date", { ascending: true }),
         (supabase.from("sale_payments") as any)
@@ -282,6 +282,17 @@ export default function FinanceiroPage() {
         ...sale,
         sale_price: Number(sale.sale_price || 0),
         net_amount: sale.net_amount === null ? null : Number(sale.net_amount || 0),
+        supplier_cost: sale.supplier_cost === null ? null : Number(sale.supplier_cost || 0),
+        inventory: sale.inventory ? {
+          ...sale.inventory,
+          purchase_price: sale.inventory.purchase_price === null ? null : Number(sale.inventory.purchase_price || 0),
+        } : null,
+        sales_additional_items: (sale.sales_additional_items || []).map((item: any) => ({
+          ...item,
+          cost_price: Number(item.cost_price || 0),
+          sale_price: item.sale_price === null ? null : Number(item.sale_price || 0),
+          profit: item.profit === null ? null : Number(item.profit || 0),
+        })),
       }))
       const validProjectionSaleIds = new Set(projectionSalesData.map((sale: any) => String(sale.id)))
 
@@ -760,11 +771,12 @@ export default function FinanceiroPage() {
         </Card>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
         <MetricCard title="Resultado do período" value={formatBRL(financialDashboard.periodResult.netResult)} icon={LineChart} tone={financialDashboard.periodResult.netResult > 0 ? "green" : "navy"} hint={financialDashboard.periodResult.description} />
+        <MetricCard title="Lucro acumulado não retirado" value={formatBRL(financialDashboard.retainedProfitSnapshot.retainedProfitAvailable)} icon={Banknote} tone={financialDashboard.retainedProfitSnapshot.retainedProfitAvailable > 0 ? "green" : "navy"} hint="Lucro reconhecido historicamente que permaneceu disponível antes da retirada segura." />
         <MetricCard title={financialDashboard.patrimonialMovement.primaryLabel} value={formatBRL(financialDashboard.patrimonialMovement.total)} icon={Building2} tone="navy" hint={financialDashboard.patrimonialMovement.description} />
         <MetricCard title="Caixa operacional" value={formatBRL(financialDashboard.cashPosition.reconciledCash)} icon={Wallet} tone="navy" hint={`Fonte: extrato · ${accountBalances.length} conta(s)`} />
-        <MetricCard title="Retirada segura hoje" value={formatBRL(financialDashboard.safeWithdrawal.amount)} icon={Shield} tone={financialDashboard.safeWithdrawal.amount > 0 ? "green" : "navy"} hint={financialDashboard.safeWithdrawal.noMonthlyProfit ? "Sem lucro realizado neste mês. Estimativa considera caixa acumulado." : financialDashboard.safeWithdrawal.description} />
+        <MetricCard title="Retirada segura hoje" value={formatBRL(financialDashboard.safeWithdrawal.amount)} icon={Shield} tone={financialDashboard.safeWithdrawal.amount > 0 ? "green" : "navy"} hint={financialDashboard.safeWithdrawal.description} />
         <MetricCard title="Compromissos futuros" value={formatBRL(financialDashboard.futureCommitments.total)} icon={CalendarClock} tone={financialDashboard.futureCommitments.status === "critical" ? "red" : financialDashboard.futureCommitments.status === "attention" ? "navy" : "green"} hint={financialDashboard.futureCommitments.description} />
       </div>
 
@@ -848,7 +860,7 @@ export default function FinanceiroPage() {
                   </div>
                   <div className="min-w-0">
                     <h3 className="font-display font-bold text-navy-900 font-syne">Caixa e retirada segura</h3>
-                    <p className="mt-1 text-sm text-gray-500">Caixa, lucro do mês e compromissos futuros separados.</p>
+                    <p className="mt-1 text-sm text-gray-500">Caixa, lucro acumulado e compromissos futuros separados.</p>
                   </div>
                 </div>
                 <Badge
@@ -862,6 +874,7 @@ export default function FinanceiroPage() {
 
               <div className="rounded-3xl border border-gray-100/80 bg-white/95 p-3.5 sm:p-4">
                   <ProfitSummaryLine label="Resultado do mês" value={financialDashboard.periodResult.netResult} tone={financialDashboard.periodResult.netResult >= 0 ? "green" : "navy"} />
+                  <ProfitSummaryLine label="Lucro acumulado não retirado" value={financialDashboard.retainedProfitSnapshot.retainedProfitAvailable} tone={financialDashboard.retainedProfitSnapshot.retainedProfitAvailable > 0 ? "green" : "navy"} />
                   <ProfitSummaryLine label="Caixa operacional" value={financialDashboard.cashPosition.reconciledCash} />
                   {financialDashboard.patrimonialMovement.total > 0 && (
                     <ProfitSummaryLine label="Movimentação patrimonial" value={financialDashboard.patrimonialMovement.total} tone="navy" />
@@ -930,9 +943,9 @@ export default function FinanceiroPage() {
                   {financialDashboard.futureCommitments.status === "critical" ? (
                     <>Compromissos futuros excedem o caixa projetado. Reduza retirada ou reprograme pagamentos.</>
                   ) : financialDashboard.safeWithdrawal.noMonthlyProfit && financialDashboard.safeWithdrawal.amount > 0 ? (
-                    <>Sem lucro realizado neste mês. <strong>Retirada segura estimada: <span className="tabular-nums">{formatBRL(financialDashboard.safeWithdrawal.amount)}</span></strong>, considerando caixa acumulado.</>
+                    <>Sem lucro realizado neste mês. <strong>Retirada segura estimada: <span className="tabular-nums">{formatBRL(financialDashboard.safeWithdrawal.amount)}</span></strong>, considerando lucro acumulado e caixa atual.</>
                   ) : financialDashboard.safeWithdrawal.amount > 0 ? (
-                    <>Retirada segura estimada em <strong className="tabular-nums">{formatBRL(financialDashboard.safeWithdrawal.amount)}</strong> sem comprometer obrigações mapeadas.</>
+                    <>Retirada segura estimada em <strong className="tabular-nums">{formatBRL(financialDashboard.safeWithdrawal.amount)}</strong>, limitada por lucro acumulado e obrigações mapeadas.</>
                   ) : (
                     <>Sem retirada segura recomendada no contexto atual.</>
                   )}
@@ -946,14 +959,14 @@ export default function FinanceiroPage() {
                 </div>
                 <div className="space-y-1.5">
                   {financialDashboard.safeWithdrawal.breakdown.formula
-                    .filter((line) => Math.abs(line.amount) > 0 || line.kind === "receivable")
+                    .filter((line) => Math.abs(line.amount) > 0 || line.kind === "receivable" || line.kind === "inventory" || line.displayAmount !== undefined)
                     .map((line) => (
                       <div key={`${line.kind}-${line.label}`} className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-3">
                         <span className="min-w-0 truncate text-[11px] text-gray-500">{line.label}</span>
                         <span className={cn(
                           "whitespace-nowrap text-right text-[11px] font-semibold tabular-nums",
                           line.amount < 0 ? "text-gray-500" : "text-navy-800"
-                        )}>{line.amount < 0 ? "-" : ""}{formatBRL(Math.abs(line.amount))}</span>
+                        )}>{line.amount < 0 ? "-" : ""}{formatBRL(Math.abs(line.displayAmount ?? line.amount))}</span>
                       </div>
                     ))}
                 </div>
