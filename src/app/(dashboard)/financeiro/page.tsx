@@ -9,26 +9,17 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { supabase } from "@/lib/supabase"
-import { addMonthsISO, currentMonthKey, formatBRL, formatDate, getProductName, monthRangeISO, todayISO } from "@/lib/helpers"
+import { currentMonthKey, formatBRL, formatDate, getProductName, monthRangeISO, todayISO } from "@/lib/helpers"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/toaster"
 import { requestSyncTransactionMovement } from "@/lib/finance/sync-transaction-movement-client"
 import { upsertSaleReceivable } from "@/lib/finance/sale-receivable-client"
+import { buildFinancialDashboardSnapshot } from "@/lib/finance/financial-dashboard-adapter"
 import {
-  buildOwnerCapitalSnapshot,
   getActiveLedgerMovements,
-  getLatestOfficialBalance,
   isCanceledTransaction,
-  isInventoryAssetTransaction,
-  isOwnerCapitalReimbursement,
-  isOwnerEquityMovement,
-  isPendingTransaction,
-  isProfitWithdrawal,
   isReconciledTransaction,
   isSalePaymentTransaction,
-  isValidCommercialSale,
-  shouldAffectOperationalDre,
-  type TransactionLike,
 } from "@/lib/finance/finance-source-of-truth"
 
 type FinanceAccount = {
@@ -126,12 +117,6 @@ type InventoryItem = {
 type DashboardMovementStatus = "reconciled" | "pending" | "cancelled" | "reversed" | "reversal"
 
 const expenseColors = ["#ef4444", "#f97316", "#eab308", "#2563eb", "#14b8a6", "#8b5cf6"]
-const STOCK_PURCHASE_CATEGORY = "Estoque (Peças/Acessórios)"
-
-function isInventoryPurchaseTransaction(transaction: Transaction) {
-  return transaction.source_type === "inventory_purchase" || transaction.category === STOCK_PURCHASE_CATEGORY
-}
-
 function dashboardMovementStatusFromTransaction(transaction?: Transaction | null): DashboardMovementStatus {
   if (!transaction) return "pending"
   if (isReconciledTransaction(transaction)) return "reconciled"
@@ -139,18 +124,8 @@ function dashboardMovementStatusFromTransaction(transaction?: Transaction | null
   return "pending"
 }
 
-function saleCost(sale: Sale) {
-  const baseCost = Number(sale.supplier_cost ?? sale.inventory?.purchase_price ?? 0)
-  const additionalCost = (sale.sales_additional_items || []).reduce((sum, item) => sum + Number(item.cost_price || 0), 0)
-  return baseCost + additionalCost
-}
-
 function saleNetRevenue(sale: Sale) {
   return Number(sale.net_amount ?? sale.sale_price ?? 0)
-}
-
-function saleBusinessRevenue(sale: Sale) {
-  return Number(sale.sale_price ?? sale.net_amount ?? 0)
 }
 
 function compactCurrency(value: number) {
@@ -200,12 +175,6 @@ function buildMonthOptions() {
 
 function toDateOnly(value?: string | null) {
   return String(value || "").slice(0, 10)
-}
-
-function addDaysISO(dateISO: string, days: number) {
-  const date = new Date(`${dateISO}T00:00:00`)
-  date.setDate(date.getDate() + days)
-  return date.toISOString().slice(0, 10)
 }
 
 function formatShortDate(value: string) {
@@ -426,10 +395,6 @@ export default function FinanceiroPage() {
     })
   }, [activeAccountMovements, accounts])
 
-  const statementBalance = useMemo(() => {
-    return getLatestOfficialBalance(accountMovements)
-  }, [accountMovements])
-
   useEffect(() => {
     if (accountBalances.length === 0) {
       setSelectedAccountId("")
@@ -440,394 +405,47 @@ export default function FinanceiroPage() {
     }
   }, [accountBalances, selectedAccountId])
 
-  const chartAccountById = useMemo(() => {
-    return new Map(chartAccounts.map((account) => [account.id, account]))
-  }, [chartAccounts])
-
-  const chartAccountByName = useMemo(() => {
-    return new Map(chartAccounts.map((account) => [account.name, account]))
-  }, [chartAccounts])
-
-  const accountNameById = useMemo(() => {
-    return new Map(accounts.map((account) => [account.id, account.name]))
-  }, [accounts])
-
-  const getTransactionAccount = (transaction: Transaction) => {
-    if (transaction.type === "expense" && isInventoryPurchaseTransaction(transaction)) {
-      return chartAccounts.find((account) => account.code === "7.01") || null
-    }
-    return (
-      (transaction.chart_account_id ? chartAccountById.get(transaction.chart_account_id) : undefined) ||
-      chartAccountByName.get(transaction.category) ||
-      null
-    )
-  }
-
-  const toFinanceSourceEntry = (transaction: Transaction, account = getTransactionAccount(transaction)): TransactionLike => ({
-    ...transaction,
-    sourceType: transaction.source_type,
-    sourceId: transaction.source_id,
-    financialType: account?.financial_type,
-    financial_type: account?.financial_type,
-    statementSection: account?.statement_section,
-    statement_section: account?.statement_section,
-    affectsCash: account?.affects_cash,
-    affects_cash: account?.affects_cash,
-    affectsDre: account?.affects_dre,
-    affects_dre: account?.affects_dre,
-    affectsInventory: account?.affects_inventory,
-    affects_inventory: account?.affects_inventory,
-    affectsOwnerEquity: account?.affects_owner_equity,
-    affects_owner_equity: account?.affects_owner_equity,
-  })
-
-  const hasFinancialType = (transaction: Transaction, type: ChartAccount["financial_type"]) => {
-    const account = getTransactionAccount(transaction)
-    if (account) return account.financial_type === type
-    const financeEntry = toFinanceSourceEntry(transaction, account)
-    if (type === "inventory_asset") return transaction.type === "expense" && (isInventoryPurchaseTransaction(transaction) || isInventoryAssetTransaction(financeEntry))
-    if (type === "owner_equity") return isOwnerEquityMovement(financeEntry)
-    if (type === "tax") return transaction.category === "Impostos / Taxas"
-    if (type === "revenue") return transaction.type === "income" && !["Aporte do proprietário"].includes(transaction.category)
-    if (type === "operating_expense") {
-      return transaction.type === "expense"
-        && shouldAffectOperationalDre(financeEntry)
-        && !isInventoryAssetTransaction(financeEntry)
-        && !isOwnerEquityMovement(financeEntry)
-        && !["Impostos / Taxas"].includes(transaction.category)
-    }
-    return false
-  }
-
-  const isResultExpense = (transaction: Transaction) => hasFinancialType(transaction, "operating_expense") || hasFinancialType(transaction, "tax")
-  const isMarketingInvestment = (transaction: Transaction) => {
-    const account = getTransactionAccount(transaction)
-    const label = `${transaction.category || ""} ${account?.name || ""}`.toLowerCase()
-    return /marketing|tr[aá]fego|an[uú]ncio|ads|campanha/.test(label)
-  }
-  const isFixedExpense = (transaction: Transaction) =>
-    isResultExpense(transaction) && !hasFinancialType(transaction, "tax") && !isMarketingInvestment(transaction)
-  const isInventoryCashOut = (transaction: Transaction) => hasFinancialType(transaction, "inventory_asset")
-  const isOwnerWithdrawal = (transaction: Transaction) => {
-    const financeEntry = toFinanceSourceEntry(transaction)
-    return transaction.type === "expense"
-      && (isOwnerEquityMovement(financeEntry) || isProfitWithdrawal(financeEntry) || isOwnerCapitalReimbursement(financeEntry))
-  }
-  const isOwnerContribution = (transaction: Transaction) => transaction.type === "income" && hasFinancialType(transaction, "owner_equity")
-  const isRevenueIncome = (transaction: Transaction) => transaction.type === "income" && hasFinancialType(transaction, "revenue")
   const salesRevenueAccount = chartAccounts.find((account) => account.code === "1.01") || chartAccounts.find((account) => account.financial_type === "revenue" && account.cash_flow_type === "income")
 
-  const activePeriodAccountMovements = useMemo(() => {
-    const { start, end } = monthRangeISO(month)
-    return activeAccountMovements.filter((movement) => movement.movement_date >= start && movement.movement_date <= end)
-  }, [activeAccountMovements, month])
-
-  const ownerCapitalSnapshot = useMemo(() => {
-    const { start, end } = monthRangeISO(month)
-    return buildOwnerCapitalSnapshot({
-      period: {
-        preset: "custom",
-        startDate: start,
-        endDate: end,
-        label: monthOptions.find((option) => option.value === month)?.label || month,
-      },
-      movements: projectionTransactions.map((transaction) => {
-        const account = transaction.type === "expense" && isInventoryPurchaseTransaction(transaction)
-          ? chartAccounts.find((item) => item.code === "7.01") || null
-          : (transaction.chart_account_id ? chartAccountById.get(transaction.chart_account_id) : undefined) || chartAccountByName.get(transaction.category) || null
-        return {
-          ...transaction,
-          date: transaction.date,
-          dueDate: transaction.due_date,
-          accountName: transaction.account_id ? accountNameById.get(transaction.account_id) : undefined,
-          paymentMethod: transaction.payment_method,
-          financialType: account?.financial_type,
-          financial_type: account?.financial_type,
-          statementSection: account?.statement_section,
-          statement_section: account?.statement_section,
-          affectsCash: account?.affects_cash,
-          affects_cash: account?.affects_cash,
-          affectsDre: account?.affects_dre,
-          affects_dre: account?.affects_dre,
-          affectsInventory: account?.affects_inventory,
-          affects_inventory: account?.affects_inventory,
-          affectsOwnerEquity: account?.affects_owner_equity,
-          affects_owner_equity: account?.affects_owner_equity,
-        }
-      }),
-    })
-  }, [accountNameById, chartAccountById, chartAccountByName, chartAccounts, month, monthOptions, projectionTransactions])
-
-  const metrics = useMemo(() => {
-    const completedSales = sales.filter((sale) => isValidCommercialSale({ sale_status: sale.sale_status || "completed" }))
-    const activeTransactions = transactions.filter((t) => !isCanceledTransaction(t))
-    const reconciledTransactions = transactions.filter((t) => isReconciledTransaction(t))
-    const manualIncome = reconciledTransactions.filter((t) => t.source_type !== "sale" && !isSalePaymentTransaction(t) && isRevenueIncome(t)).reduce((sum, t) => sum + Number(t.amount), 0)
-    const cashInflows = activePeriodAccountMovements.filter((movement) => Number(movement.amount || 0) > 0).reduce((sum, movement) => sum + Number(movement.amount || 0), 0)
-    const cashOutflows = activePeriodAccountMovements.filter((movement) => Number(movement.amount || 0) < 0).reduce((sum, movement) => sum + Math.abs(Number(movement.amount || 0)), 0)
-    const reconciledInventoryPurchases = reconciledTransactions.filter(isInventoryCashOut).reduce((sum, t) => sum + Number(t.amount), 0)
-    const reconciledOperatingOutflows = reconciledTransactions.filter(isResultExpense).reduce((sum, t) => sum + Number(t.amount), 0)
-    const reconciledOwnerWithdrawals = reconciledTransactions.filter(isOwnerWithdrawal).reduce((sum, t) => sum + Number(t.amount), 0)
-    const inventoryPurchases = reconciledTransactions.filter(isInventoryCashOut).reduce((sum, t) => sum + Number(t.amount), 0)
-    const ownerWithdrawals = reconciledTransactions.filter(isOwnerWithdrawal).reduce((sum, t) => sum + Number(t.amount), 0)
-    const ownerContributions = reconciledTransactions.filter(isOwnerContribution).reduce((sum, t) => sum + Number(t.amount), 0)
-    const paidOperatingExpenses = reconciledTransactions.filter(isResultExpense).reduce((sum, t) => sum + Number(t.amount), 0)
-    const plannedOperatingExpenses = activeTransactions.filter(isResultExpense).reduce((sum, t) => sum + Number(t.amount), 0)
-    const pendingOperatingExpenses = activeTransactions.filter((t) => isPendingTransaction(t) && isResultExpense(t)).reduce((sum, t) => sum + Number(t.amount), 0)
-    const salesRevenue = completedSales.reduce((sum, sale) => sum + saleBusinessRevenue(sale), 0)
-    const cmv = completedSales.reduce((sum, sale) => sum + saleCost(sale), 0)
-    const netRevenue = salesRevenue + manualIncome
-    const grossProfit = salesRevenue - cmv
-    const netProfit = netRevenue - cmv - paidOperatingExpenses
-    const grossMargin = salesRevenue > 0 ? (grossProfit / salesRevenue) * 100 : 0
-    const fixedExpenses = activeTransactions.filter(isFixedExpense).reduce((sum, t) => sum + Number(t.amount), 0)
-    const grossMarginRate = salesRevenue > 0 ? grossProfit / salesRevenue : 0
-    const breakEvenRevenue = grossMarginRate > 0 ? fixedExpenses / grossMarginRate : fixedExpenses
-    const breakEvenGap = Math.max(0, breakEvenRevenue - salesRevenue)
-    const profitCoverage = grossProfit - fixedExpenses
-    const profitGap = Math.max(0, fixedExpenses - grossProfit)
-    const breakEvenProgress = breakEvenRevenue > 0 ? Math.min(100, Math.round((salesRevenue / breakEvenRevenue) * 100)) : 0
-    const averageTicket = completedSales.length > 0 ? salesRevenue / completedSales.length : 0
-    const salesNeeded = averageTicket > 0 ? Math.ceil(breakEvenGap / averageTicket) : 0
-    const accountTotal = statementBalance
-    const ownerProfitWithdrawals = ownerCapitalSnapshot.ownerProfitWithdrawalsInPeriod
-    const ownerCapitalReturns = ownerCapitalSnapshot.ownerCapitalReturnsInPeriod + ownerCapitalSnapshot.untracedOwnerCapitalReturnsInPeriod
-    const profitAvailable = roundCurrency(netProfit - ownerProfitWithdrawals)
-    const profitWithdrawalRate = netProfit > 0 ? Math.min(999, Math.round((ownerProfitWithdrawals / netProfit) * 100)) : ownerProfitWithdrawals > 0 ? 100 : 0
-    const profitAvailabilityStatus: "exceeded" | "attention" | "available" = profitAvailable < 0 ? "exceeded" : profitWithdrawalRate >= 80 ? "attention" : "available"
-    const pendingSales = sales.filter((sale) => !isCanceledTransaction({ status: sale.sale_status }) && !reconciledSaleIds.has(sale.id) && !saleIdsWithSplitPayments.has(sale.id))
-    const pendingSalePayments = projectionSalePayments.filter((payment) => isPendingTransaction({ status: payment.status }))
-    const pendingTransactions = transactions.filter((t) => t.source_type !== "sale" && !isSalePaymentTransaction(t) && isPendingTransaction(t))
-    const pendingAmount =
-      pendingSales.reduce((sum, sale) => sum + saleNetRevenue(sale), 0) +
-      pendingSalePayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) +
-      pendingTransactions.reduce((sum, t) => sum + Number(t.amount), 0)
-
-    return {
-      manualIncome,
-      cashInflows,
-      cashOutflows,
-      reconciledInventoryPurchases,
-      reconciledOperatingOutflows,
-      reconciledOwnerWithdrawals,
-      inventoryPurchases,
-      ownerWithdrawals,
-      ownerContributions,
-      operatingExpenses: paidOperatingExpenses,
-      paidOperatingExpenses,
-      plannedOperatingExpenses,
-      pendingOperatingExpenses,
-      salesRevenue,
-      cmv,
-      netRevenue,
-      grossProfit,
-      netProfit,
-      grossMargin,
-      fixedExpenses,
-      breakEvenRevenue,
-      breakEvenGap,
-      profitCoverage,
-      profitGap,
-      breakEvenProgress,
-      averageTicket,
-      salesNeeded,
-      accountTotal,
-      ownerProfitWithdrawals,
-      ownerCapitalReturns,
-      profitAvailable,
-      profitWithdrawalRate,
-      profitAvailabilityStatus,
-      pendingSales,
-      pendingSalePayments,
-      pendingTransactions,
-      pendingAmount,
-    }
-  }, [activePeriodAccountMovements, chartAccountById, chartAccountByName, ownerCapitalSnapshot, projectionSalePayments, reconciledSaleIds, saleIdsWithSplitPayments, sales, statementBalance, transactions])
-
-  const cashProjection = useMemo(() => {
-    const today = todayISO()
-    const horizon = addDaysISO(today, 60)
-    const startingBalance = metrics.accountTotal
-    const saleById = new Map(projectionSales.map((sale) => [String(sale.id), sale]))
-    const transactionById = new Map(
-      projectionTransactions
-        .filter((transaction) => !isCanceledTransaction(transaction))
-        .map((transaction) => [String(transaction.id), transaction])
-    )
-    const transactionBySaleId = new Map(
-      projectionTransactions
-        .filter((transaction) => transaction.source_type === "sale" && transaction.source_id && !isCanceledTransaction(transaction))
-        .map((transaction) => [String(transaction.source_id), transaction])
-    )
-    const transactionBySalePaymentId = new Map(
-      projectionTransactions
-        .filter((transaction) => isSalePaymentTransaction(transaction) && transaction.source_id && !isCanceledTransaction(transaction))
-        .map((transaction) => [String(transaction.source_id), transaction])
-    )
-    const transactionItems = projectionTransactions
-      .filter((transaction) => isPendingTransaction(transaction))
-      .map((transaction) => {
-        const rawDate = toDateOnly(transaction.due_date || transaction.date)
-        const dueDate = rawDate && rawDate < today ? today : rawDate
-        return {
-          id: transaction.id,
-          type: transaction.type,
-          date: dueDate,
-          originalDate: rawDate,
-          description: transaction.description || transaction.category,
-          category: transaction.category,
-          amount: Number(transaction.amount || 0),
-          signedAmount: transaction.type === "income" ? Number(transaction.amount || 0) : -Number(transaction.amount || 0),
-          isOverdue: Boolean(rawDate && rawDate < today),
-          isCardInvoice: transaction.payment_method === "Cartão de Crédito" || Boolean(transaction.credit_card_id),
-        }
-      })
-    const salePaymentItems = projectionSalePayments
-      .filter((payment) =>
-        isPendingTransaction({ status: payment.status }) &&
-        !transactionBySalePaymentId.has(String(payment.id)) &&
-        !(payment.transaction_id && transactionById.has(String(payment.transaction_id)))
-      )
-      .map((payment) => {
-        const sale = saleById.get(String(payment.sale_id))
-        const rawDate = toDateOnly(payment.due_date || sale?.payment_due_date || sale?.sale_date)
-        const dueDate = rawDate && rawDate < today ? today : rawDate
-        const amount = Number(payment.amount || 0)
-        const method = payment.payment_method ? ` · ${payment.payment_method}` : ""
-        return {
-          id: payment.id,
-          type: "income" as const,
-          date: dueDate,
-          originalDate: rawDate,
-          description: `Venda${sale?.inventory?.catalog?.model ? ` · ${sale.inventory.catalog.model}` : ""}${method}`,
-          category: "Venda",
-          amount,
-          signedAmount: amount,
-          isOverdue: Boolean(rawDate && rawDate < today),
-          isCardInvoice: false,
-        }
-      })
-    const saleItems = projectionSales
-      .filter((sale: Sale) => {
-        const transaction = transactionBySaleId.get(String(sale.id))
-        return !transaction && !saleIdsWithSplitPayments.has(String(sale.id)) && !isCanceledTransaction({ status: sale.sale_status })
-      })
-      .map((sale: Sale) => {
-        const rawDate = toDateOnly(sale.payment_due_date || sale.sale_date)
-        const dueDate = rawDate && rawDate < today ? today : rawDate
-        const amount = saleNetRevenue(sale)
-        return {
-          id: sale.id,
-          type: "income" as const,
-          date: dueDate,
-          originalDate: rawDate,
-          description: `Venda${sale.inventory?.catalog?.model ? ` · ${sale.inventory.catalog.model}` : ""}`,
-          category: "Venda",
-          amount,
-          signedAmount: amount,
-          isOverdue: Boolean(rawDate && rawDate < today),
-          isCardInvoice: false,
-        }
-      })
-    const pendingItems = [...transactionItems, ...salePaymentItems, ...saleItems]
-      .filter((item) => item.date && item.date <= horizon)
-      .sort((a, b) => a.date.localeCompare(b.date))
-
-    const byDate = new Map<string, { date: string; entradas: number; saidas: number; saldo: number }>()
-    for (const item of pendingItems) {
-      const row = byDate.get(item.date) || { date: item.date, entradas: 0, saidas: 0, saldo: startingBalance }
-      if (item.type === "income") row.entradas += item.amount
-      else row.saidas += item.amount
-      byDate.set(item.date, row)
-    }
-
-    let running = startingBalance
-    const chart = [{ date: today, label: "Hoje", entradas: 0, saidas: 0, saldo: startingBalance }]
-    for (const row of Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date))) {
-      running += row.entradas - row.saidas
-      chart.push({ ...row, label: formatShortDate(row.date), saldo: running })
-    }
-    const lastKnownBalanceAt = (days: number) => {
-      const limit = addDaysISO(today, days)
-      return startingBalance + pendingItems
-        .filter((item) => item.date <= limit)
-        .reduce((sum, item) => sum + item.signedAmount, 0)
-    }
-    const totalByWindow = (days: number, type: "income" | "expense") => {
-      const limit = addDaysISO(today, days)
-      return pendingItems
-        .filter((item) => item.date <= limit && item.type === type)
-        .reduce((sum, item) => sum + item.amount, 0)
-    }
-    const overdue = pendingItems
-      .filter((item) => item.isOverdue)
-      .reduce((sum, item) => sum + item.signedAmount, 0)
-    const nextSevenOut = totalByWindow(7, "expense")
-    const nextSevenIn = totalByWindow(7, "income")
-    const minBalance = chart.reduce((min, item) => Math.min(min, item.saldo), startingBalance)
-
-    return {
-      today,
-      startingBalance,
-      pendingItems,
-      chart,
-      balance15: lastKnownBalanceAt(15),
-      balance30: lastKnownBalanceAt(30),
-      balance60: lastKnownBalanceAt(60),
-      income30: totalByWindow(30, "income"),
-      expense30: totalByWindow(30, "expense"),
-      overdue,
-      nextSevenOut,
-      nextSevenIn,
-      minBalance,
-    }
-  }, [metrics.accountTotal, projectionTransactions, projectionSalePayments, projectionSales, saleIdsWithSplitPayments])
-
-  const profitFutureRisk = useMemo(() => {
-    const nextMonthStartDate = addMonthsISO(`${month}-01`, 1)
-    if (!nextMonthStartDate) return null
-    const nextMonthKey = nextMonthStartDate.slice(0, 7)
-    const { start: nmStart, end: nmEnd } = monthRangeISO(nextMonthKey)
-    const futureExpenses = cashProjection.pendingItems
-      .filter((item) => item.type === "expense" && item.originalDate && item.originalDate >= nmStart && item.originalDate <= nmEnd)
-      .sort((a, b) => (a.originalDate || a.date).localeCompare(b.originalDate || b.date))
-    if (futureExpenses.length === 0) {
-      return { items: [], futureTotal: 0, projectedCashAfter: null as number | null, nextMonthKey, nextMonthLabel: "" }
-    }
-    const futureTotal = futureExpenses.reduce((sum, item) => sum + item.amount, 0)
-    const projectedCashAfter = cashProjection.startingBalance + cashProjection.pendingItems
-      .filter((item) => item.date <= nmEnd)
-      .reduce((sum, item) => sum + item.signedAmount, 0)
-    const monthDate = new Date(`${nextMonthKey}-01T00:00:00`)
-    const monthFormatter = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" })
-    const nextMonthLabel = monthFormatter.format(monthDate).replace(/^\w/, (letter) => letter.toUpperCase())
-    return { items: futureExpenses, futureTotal, projectedCashAfter, nextMonthKey, nextMonthLabel }
-  }, [cashProjection, month])
-
-  const profitDecision = useMemo(() => {
-    const committed = profitFutureRisk?.futureTotal ?? 0
-    const availableToday = metrics.profitAvailable
-    const availableAfter = roundCurrency(availableToday - committed)
-    const impactRate = availableToday > 0
-      ? Math.min(999, Math.round((committed / availableToday) * 100))
-      : committed > 0
-      ? 100
-      : 0
-    let status: "exceeded" | "attention" | "available"
-    if (availableAfter < 0 || metrics.profitAvailabilityStatus === "exceeded") status = "exceeded"
-    else if (impactRate >= 30 || metrics.profitAvailabilityStatus === "attention") status = "attention"
-    else status = "available"
-    return {
-      availableToday,
-      committed,
-      availableAfter,
-      impactRate,
-      status,
-      hasCommitments: committed > 0,
-      nextMonthLabel: profitFutureRisk?.nextMonthLabel ?? "",
-      projectedCashAfter: profitFutureRisk?.projectedCashAfter ?? null,
-    }
-  }, [metrics.profitAvailable, metrics.profitAvailabilityStatus, profitFutureRisk])
+  const financialDashboard = useMemo(() => buildFinancialDashboardSnapshot({
+    month,
+    monthLabel: monthOptions.find((option) => option.value === month)?.label || month,
+    accounts,
+    chartAccounts,
+    transactions,
+    accountMovements,
+    projectionTransactions,
+    projectionSales,
+    projectionSalePayments,
+    sales,
+    inventory,
+    reconciledSaleIds,
+    saleIdsWithSplitPayments,
+  }), [
+    accountMovements,
+    accounts,
+    chartAccounts,
+    inventory,
+    month,
+    monthOptions,
+    projectionSalePayments,
+    projectionSales,
+    projectionTransactions,
+    reconciledSaleIds,
+    saleIdsWithSplitPayments,
+    sales,
+    transactions,
+  ])
+  const ownerCapitalSnapshot = financialDashboard.ownerCapitalSnapshot
+  const metrics = financialDashboard.legacyMetrics
+  const cashProjection = financialDashboard.cashProjection
+  const profitFutureRisk = {
+    items: financialDashboard.futureCommitments.items,
+    futureTotal: financialDashboard.futureCommitments.total,
+    projectedCashAfter: financialDashboard.futureCommitments.projectedCashAfter,
+    nextMonthKey: "",
+    nextMonthLabel: financialDashboard.futureCommitments.label,
+  }
 
   const productRecommendations = useMemo(() => {
     return inventory
@@ -1142,11 +760,12 @@ export default function FinanceiroPage() {
         </Card>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
-        <MetricCard title="Saldo em contas" value={formatBRL(metrics.accountTotal)} icon={Wallet} tone="navy" hint={`Fonte: extrato · ${accountBalances.length} conta(s)`} />
-        <MetricCard title="Entradas conciliadas" value={formatBRL(metrics.cashInflows)} icon={ArrowUpRight} tone="green" hint={`Receita do mês: ${formatBRL(metrics.netRevenue)}`} />
-        <MetricCard title="Saídas de caixa" value={formatBRL(metrics.cashOutflows)} icon={ArrowDownRight} tone="red" hint={`Estoque ${formatBRL(metrics.reconciledInventoryPurchases)} · retiradas ${formatBRL(metrics.reconciledOwnerWithdrawals)}`} />
-        <MetricCard title="Resultado líquido" value={formatBRL(metrics.netProfit)} icon={LineChart} tone={metrics.netProfit >= 0 ? "green" : "red"} hint="DRE gerencial: lucro bruto - despesas pagas" />
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
+        <MetricCard title="Resultado do período" value={formatBRL(financialDashboard.periodResult.netResult)} icon={LineChart} tone={financialDashboard.periodResult.netResult > 0 ? "green" : "navy"} hint={financialDashboard.periodResult.description} />
+        <MetricCard title={financialDashboard.patrimonialMovement.primaryLabel} value={formatBRL(financialDashboard.patrimonialMovement.total)} icon={Building2} tone="navy" hint={financialDashboard.patrimonialMovement.description} />
+        <MetricCard title="Caixa operacional" value={formatBRL(financialDashboard.cashPosition.reconciledCash)} icon={Wallet} tone="navy" hint={`Fonte: extrato · ${accountBalances.length} conta(s)`} />
+        <MetricCard title="Retirada segura hoje" value={formatBRL(financialDashboard.safeWithdrawal.amount)} icon={Shield} tone={financialDashboard.safeWithdrawal.amount > 0 ? "green" : "navy"} hint={financialDashboard.safeWithdrawal.noMonthlyProfit ? "Sem lucro realizado neste mês. Estimativa considera caixa acumulado." : financialDashboard.safeWithdrawal.description} />
+        <MetricCard title="Compromissos futuros" value={formatBRL(financialDashboard.futureCommitments.total)} icon={CalendarClock} tone={financialDashboard.futureCommitments.status === "critical" ? "red" : financialDashboard.futureCommitments.status === "attention" ? "navy" : "green"} hint={financialDashboard.futureCommitments.description} />
       </div>
 
       {loading ? (
@@ -1161,8 +780,13 @@ export default function FinanceiroPage() {
                     <TrendingUp className="h-5 w-5" />
                   </div>
                   <div className="min-w-0">
-                    <h3 className="font-display font-bold text-navy-900 font-syne">Movimento de lucro</h3>
-                    <p className="mt-1 text-sm text-gray-500">Acompanhe o lucro gerado, retiradas e compromissos futuros.</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-display font-bold text-navy-900 font-syne">Resultado do período</h3>
+                      {financialDashboard.periodResult.badge && (
+                        <Badge variant="gray" className="px-2 py-0.5 text-[10px]">{financialDashboard.periodResult.badge}</Badge>
+                      )}
+                    </div>
+                    <p className="mt-1 text-sm text-gray-500">{financialDashboard.periodResult.description}</p>
                   </div>
                 </div>
                 <div className="rounded-xl bg-rose-50/40 px-3 py-1.5 text-left ring-1 ring-rose-100/70 sm:text-right">
@@ -1194,6 +818,26 @@ export default function FinanceiroPage() {
                   <p>Reembolsos de aporte no período: {formatBRL(metrics.ownerCapitalReturns)}. Fora das retiradas de lucro.</p>
                 </div>
               ) : null}
+
+              {financialDashboard.patrimonialMovement.lines.length > 0 && (
+                <div className="mt-4 rounded-2xl border border-gray-100 bg-gray-50/70 p-3.5">
+                  <div className="mb-2 flex items-center gap-2">
+                    <Building2 className="h-4 w-4 text-navy-500" />
+                    <span className="text-xs font-bold uppercase tracking-[0.08em] text-navy-700">Movimentação patrimonial</span>
+                  </div>
+                  <div className="space-y-2">
+                    {financialDashboard.patrimonialMovement.lines.map((line) => (
+                      <div key={`${line.kind}-${line.label}`} className="grid gap-1 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-baseline">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-navy-900">{line.label}</p>
+                          <p className="text-xs leading-relaxed text-gray-500">{line.description}</p>
+                        </div>
+                        <span className="whitespace-nowrap text-sm font-bold tabular-nums text-navy-900">{formatBRL(line.amount)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="bg-gradient-to-br from-white via-emerald-50/15 to-white p-5 lg:p-6 animate-fade-in">
@@ -1203,69 +847,73 @@ export default function FinanceiroPage() {
                     <Wallet className="h-5 w-5" />
                   </div>
                   <div className="min-w-0">
-                    <h3 className="font-display font-bold text-navy-900 font-syne">Lucro disponível</h3>
-                    <p className="mt-1 text-sm text-gray-500">Decisão de retirada considerando compromissos M+1.</p>
+                    <h3 className="font-display font-bold text-navy-900 font-syne">Caixa e retirada segura</h3>
+                    <p className="mt-1 text-sm text-gray-500">Caixa, lucro do mês e compromissos futuros separados.</p>
                   </div>
                 </div>
                 <Badge
                   className="shrink-0 whitespace-nowrap px-3 py-1 text-[11px]"
-                  variant={profitDecision.status === "exceeded" ? "red" : profitDecision.status === "attention" ? "yellow" : "green"}
+                  variant={financialDashboard.futureCommitments.status === "critical" ? "red" : financialDashboard.futureCommitments.status === "attention" ? "yellow" : "green"}
                 >
                   <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-current align-middle" />
-                  {profitDecision.status === "exceeded" ? "Excedido" : profitDecision.status === "attention" ? "Atenção" : "Disponível"}
+                  {financialDashboard.futureCommitments.status === "critical" ? "Risco real" : financialDashboard.futureCommitments.status === "attention" ? "Atenção" : "Caixa cobre"}
                 </Badge>
               </div>
 
-              {/* Block 1: white card — Disponível hoje */}
               <div className="rounded-3xl border border-gray-100/80 bg-white/95 p-3.5 sm:p-4">
-                <ProfitSummaryLine label="Resultado líquido" value={metrics.netProfit} />
-                <ProfitSummaryLine label="Retiradas de lucro" value={-metrics.ownerProfitWithdrawals} tone="red" />
-                <div className="my-1 h-px bg-gradient-to-r from-transparent via-gray-200 to-transparent" />
-                <ProfitSummaryLine label="Disponível hoje" value={metrics.profitAvailable} highlight tone={metrics.profitAvailable >= 0 ? "green" : "red"} />
-              </div>
+                  <ProfitSummaryLine label="Resultado do mês" value={financialDashboard.periodResult.netResult} tone={financialDashboard.periodResult.netResult >= 0 ? "green" : "navy"} />
+                  <ProfitSummaryLine label="Caixa operacional" value={financialDashboard.cashPosition.reconciledCash} />
+                  {financialDashboard.patrimonialMovement.total > 0 && (
+                    <ProfitSummaryLine label="Movimentação patrimonial" value={financialDashboard.patrimonialMovement.total} tone="navy" />
+                  )}
+                  <div className="my-1 h-px bg-gradient-to-r from-transparent via-gray-200 to-transparent" />
+                  <ProfitSummaryLine label="Retirada segura hoje" value={financialDashboard.safeWithdrawal.amount} highlight tone={financialDashboard.safeWithdrawal.amount > 0 ? "green" : "navy"} />
+                </div>
 
-              {/* Block 2: amber card — Compromissos M+1 */}
-              {profitDecision.hasCommitments && (
+              {financialDashboard.futureCommitments.total > 0 && (
                 <div className="relative mt-3 overflow-hidden rounded-3xl border border-amber-200/60 bg-gradient-to-br from-amber-50/70 via-amber-50/40 to-white p-3.5 sm:p-4">
                   <div className="mb-2 flex items-center justify-between gap-3">
-                    <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-amber-700">Compromissos · {profitDecision.nextMonthLabel} (M+1)</span>
+                    <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-amber-700">Compromissos · {financialDashboard.futureCommitments.label} (M+1)</span>
                     <span className="relative flex h-6 w-6 items-center justify-center">
-                      <span aria-hidden className="absolute inset-0 rounded-full bg-amber-400/40 animate-ping" />
                       <span className="relative inline-flex h-6 w-6 items-center justify-center rounded-full bg-amber-500 text-white shadow-sm">
                         <AlertTriangle className="h-3 w-3" />
                       </span>
                     </span>
                   </div>
-                  <ProfitSummaryLine label="Total compromissos M+1" value={-profitDecision.committed} tone="red" />
-                  <ProfitSummaryLine
-                    label="Disponível após compromissos"
-                    value={profitDecision.availableAfter}
-                    highlight
-                    tone={profitDecision.availableAfter >= 0 ? "green" : "red"}
-                  />
-                  {profitDecision.projectedCashAfter !== null && (
+                  <ProfitSummaryLine label="Total compromissos M+1" value={-financialDashboard.futureCommitments.total} tone="red" />
+                  <div className="my-1 h-px bg-gradient-to-r from-transparent via-amber-200 to-transparent" />
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-3 px-1">
+                    <span className="min-w-0 truncate text-[11px] font-semibold text-gray-600">Representam do caixa atual</span>
+                    <span className={cn(
+                      "whitespace-nowrap text-right text-lg font-bold tabular-nums",
+                      financialDashboard.futureCommitments.status === "critical" ? "text-rose-600" : "text-navy-900"
+                    )}>
+                      {financialDashboard.futureCommitments.cashImpactRate.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%
+                    </span>
+                  </div>
+                  <p className="mt-2 px-1 text-[11px] leading-relaxed text-amber-800/90">{financialDashboard.futureCommitments.description}</p>
+                  {financialDashboard.futureCommitments.projectedCashAfter !== null && (
                     <div className="mt-1.5 grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-3 px-1">
                       <span className="min-w-0 truncate text-[11px] text-gray-500">Caixa projetado M+1 (referência)</span>
-                      <span className="whitespace-nowrap text-right text-[11px] font-semibold tabular-nums text-gray-600">{formatBRL(profitDecision.projectedCashAfter)}</span>
+                      <span className="whitespace-nowrap text-right text-[11px] font-semibold tabular-nums text-gray-600">{formatBRL(financialDashboard.futureCommitments.projectedCashAfter)}</span>
                     </div>
                   )}
                 </div>
               )}
 
-              {/* Block 3: emerald margem segura */}
               <div className={cn(
                 "mt-3 flex items-start gap-3 rounded-2xl border p-3",
-                profitDecision.status === "exceeded"
+                financialDashboard.futureCommitments.status === "critical"
                   ? "border-rose-100 bg-rose-50/40"
-                  : profitDecision.status === "attention"
+                  : financialDashboard.futureCommitments.status === "attention"
                   ? "border-amber-100 bg-amber-50/40"
                   : "border-emerald-100 bg-emerald-50/40"
               )}>
                 <div className={cn(
                   "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full",
-                  profitDecision.status === "exceeded"
+                  financialDashboard.futureCommitments.status === "critical"
                     ? "bg-rose-100 text-rose-600"
-                    : profitDecision.status === "attention"
+                    : financialDashboard.futureCommitments.status === "attention"
                     ? "bg-amber-100 text-amber-700"
                     : "bg-emerald-100 text-emerald-700"
                 )}>
@@ -1273,31 +921,48 @@ export default function FinanceiroPage() {
                 </div>
                 <p className={cn(
                   "text-[12px] leading-relaxed",
-                  profitDecision.status === "exceeded"
+                  financialDashboard.futureCommitments.status === "critical"
                     ? "text-rose-900"
-                    : profitDecision.status === "attention"
+                    : financialDashboard.futureCommitments.status === "attention"
                     ? "text-amber-900"
                     : "text-emerald-900"
                 )}>
-                  {profitDecision.hasCommitments ? (
-                    profitDecision.availableAfter < 0 ? (
-                      <>
-                        <strong>Atenção:</strong> compromissos de {profitDecision.nextMonthLabel} excedem o lucro disponível hoje em <span className="font-semibold tabular-nums">{formatBRL(Math.abs(profitDecision.availableAfter))}</span>. Retirar agora pode quebrar o caixa.
-                      </>
-                    ) : (
-                      <>
-                        <strong>Margem segura estimada: <span className="tabular-nums">{formatBRL(profitDecision.availableAfter)}</span></strong> após compromissos de {profitDecision.nextMonthLabel}. Você tem <span className="font-semibold tabular-nums">{formatBRL(profitDecision.availableToday)}</span> disponível hoje, mas <span className="font-semibold tabular-nums text-amber-700">{formatBRL(profitDecision.committed)}</span> já está reservado para contas futuras.
-                      </>
-                    )
-                  ) : metrics.profitAvailable > 0 ? (
-                    <>Sem compromissos M+1 mapeados. <strong>Margem segura: <span className="tabular-nums">{formatBRL(metrics.profitAvailable)}</span></strong>.</>
+                  {financialDashboard.futureCommitments.status === "critical" ? (
+                    <>Compromissos futuros excedem o caixa projetado. Reduza retirada ou reprograme pagamentos.</>
+                  ) : financialDashboard.safeWithdrawal.noMonthlyProfit && financialDashboard.safeWithdrawal.amount > 0 ? (
+                    <>Sem lucro realizado neste mês. <strong>Retirada segura estimada: <span className="tabular-nums">{formatBRL(financialDashboard.safeWithdrawal.amount)}</span></strong>, considerando caixa acumulado.</>
+                  ) : financialDashboard.safeWithdrawal.amount > 0 ? (
+                    <>Retirada segura estimada em <strong className="tabular-nums">{formatBRL(financialDashboard.safeWithdrawal.amount)}</strong> sem comprometer obrigações mapeadas.</>
                   ) : (
-                    <>Sem lucro disponível para retirada neste período.</>
+                    <>Sem retirada segura recomendada no contexto atual.</>
                   )}
                 </p>
               </div>
 
-              {/* Progress bars */}
+              <div className="mt-3 rounded-2xl border border-gray-100 bg-white/80 p-3">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-gray-500">Como a retirada foi estimada</span>
+                  <span className="text-[10px] font-semibold text-gray-400">{financialDashboard.safeWithdrawal.breakdown.confidence === "high" ? "base auditável" : "estimativa conservadora"}</span>
+                </div>
+                <div className="space-y-1.5">
+                  {financialDashboard.safeWithdrawal.breakdown.formula
+                    .filter((line) => Math.abs(line.amount) > 0 || line.kind === "receivable")
+                    .map((line) => (
+                      <div key={`${line.kind}-${line.label}`} className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-3">
+                        <span className="min-w-0 truncate text-[11px] text-gray-500">{line.label}</span>
+                        <span className={cn(
+                          "whitespace-nowrap text-right text-[11px] font-semibold tabular-nums",
+                          line.amount < 0 ? "text-gray-500" : "text-navy-800"
+                        )}>{line.amount < 0 ? "-" : ""}{formatBRL(Math.abs(line.amount))}</span>
+                      </div>
+                    ))}
+                </div>
+                <div className="mt-2 border-t border-gray-100 pt-2">
+                  <ProfitSummaryLine label="Resultado da retirada segura" value={financialDashboard.safeWithdrawal.breakdown.result} highlight tone={financialDashboard.safeWithdrawal.breakdown.result > 0 ? "green" : "navy"} />
+                  <p className="mt-1 text-[11px] leading-relaxed text-gray-500">{financialDashboard.safeWithdrawal.breakdown.explanation}</p>
+                </div>
+              </div>
+
               <div className="mt-4 space-y-3">
                 <div>
                   <div className="mb-1.5 flex items-center justify-between text-xs font-semibold">
@@ -1312,16 +977,24 @@ export default function FinanceiroPage() {
                   <ProfitWithdrawalRateBar rate={metrics.profitWithdrawalRate} status={metrics.profitAvailabilityStatus} />
                 </div>
 
-                {profitDecision.hasCommitments && (
+                {financialDashboard.futureCommitments.total > 0 && (
                   <div>
                     <div className="mb-1.5 flex items-center justify-between text-xs font-semibold">
-                      <span className="flex items-center gap-1 text-gray-500">Comprometido em M+1 <Info className="h-3 w-3 text-gray-300" /></span>
-                      <span className="tabular-nums text-amber-700">{Math.min(999, profitDecision.impactRate)}%</span>
+                      <span className="flex items-center gap-1 text-gray-500">M+1 sobre caixa <Info className="h-3 w-3 text-gray-300" /></span>
+                      <span className="tabular-nums text-amber-700">{financialDashboard.futureCommitments.cashImpactRate.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%</span>
                     </div>
-                    <ProfitWithdrawalRateBar rate={profitDecision.impactRate} status={profitDecision.status === "exceeded" ? "exceeded" : "attention"} />
+                    <ProfitWithdrawalRateBar rate={financialDashboard.futureCommitments.cashImpactRate} status={financialDashboard.futureCommitments.status === "critical" ? "exceeded" : financialDashboard.futureCommitments.status === "attention" ? "attention" : "available"} />
                   </div>
                 )}
               </div>
+
+              {financialDashboard.diagnostics.insights.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  {financialDashboard.diagnostics.insights.slice(0, 3).map((insight) => (
+                    <p key={insight} className="rounded-2xl bg-gray-50 px-3 py-2 text-[11px] leading-relaxed text-gray-600">{insight}</p>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </Card>
