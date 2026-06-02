@@ -160,11 +160,13 @@ export type FinancialDashboardMoneyLine = {
 }
 
 export type FinancialDashboardRetainedProfitSnapshot = {
+  accumulatedSalesProfit: number
   accumulatedNetProfitUntilPreviousMonth: number
   currentMonthNetProfit: number
   totalProfitWithdrawals: number
   pendingProfitWithdrawals: number
   retainedProfitAvailable: number
+  ownerAvailableProfit: number
   cashBackedRetainedProfit: number
   cashLimitAfterCommitmentsAndReserve: number
   minimumOperationalReserve: number
@@ -179,6 +181,23 @@ export type FinancialDashboardRetainedProfitSnapshot = {
     salesCount: number
     profit: number
   }[]
+}
+
+export type FinancialDashboardOperationalCostLine = {
+  id: string
+  date: string
+  amount: number
+  label: string
+  status: "reconciled" | "pending"
+  timing: "paid" | "m1"
+}
+
+export type FinancialDashboardOperationalCostsSnapshot = {
+  total: number
+  paidTotal: number
+  upcomingTotal: number
+  lines: FinancialDashboardOperationalCostLine[]
+  description: string
 }
 
 export type BuildFinancialDashboardSnapshotInput = {
@@ -396,35 +415,43 @@ function buildSafeWithdrawalBreakdown(input: {
   workingCapitalSnapshot: WorkingCapitalSnapshot
   pendingReceivables: number
   retainedProfitSnapshot: FinancialDashboardRetainedProfitSnapshot
-  futureCommitments: number
+  operationalCosts: FinancialDashboardOperationalCostsSnapshot
 }) {
   const retained = input.retainedProfitSnapshot
   return {
     formula: [
       {
-        label: "Caixa reconciliado",
-        amount: retained.cashBackedRetainedProfit,
-        displayAmount: input.workingCapitalSnapshot.availableCash,
-        description: "Saldo real em contas ativas, vindo do extrato reconciliado.",
+        label: "Lucro acumulado operacional",
+        amount: retained.accumulatedSalesProfit,
+        description: "Lucro auditado das vendas do mês anterior e do mês atual.",
         kind: "asset" as const,
       },
       {
-        label: "Lucro acumulado não retirado",
-        amount: retained.retainedProfitAvailable,
-        description: "Lucro histórico e do mês atual que ainda não foi classificado como retirada.",
-        kind: "asset" as const,
+        label: "Retiradas do proprietário",
+        amount: -retained.totalProfitWithdrawals,
+        description: "Retiradas e pró-labore variável já reconciliados.",
+        kind: "owner_equity" as const,
       },
       {
-        label: "Compromissos previstos",
-        amount: -input.futureCommitments,
-        description: "Contas próximas já mapeadas para o próximo ciclo.",
+        label: "Custos da operação",
+        amount: -input.operationalCosts.total,
+        description: "Despesas operacionais reais e previstas em M+1 pagas com resultado operacional.",
         kind: "payable" as const,
       },
       {
         label: "Reserva mínima operacional",
         amount: -retained.minimumOperationalReserve,
-        description: "Reserva estruturada configurada fora dos compromissos mapeados.",
+        description: retained.minimumOperationalReserve > 0
+          ? "Margem protegida configurada para preservar operação."
+          : "Sem margem mínima configurada; nenhum valor foi inventado.",
         kind: "reserve" as const,
+      },
+      {
+        label: "Caixa operacional",
+        amount: retained.cashBackedRetainedProfit,
+        displayAmount: input.workingCapitalSnapshot.availableCash,
+        description: "Limitador final: nunca sugerir retirada maior que o caixa real após obrigações.",
+        kind: "asset" as const,
       },
       {
         label: "Capital em estoque",
@@ -445,14 +472,65 @@ function buildSafeWithdrawalBreakdown(input: {
     ] satisfies FinancialDashboardMoneyLine[],
     estimatedAccumulatedProfit: null,
     cashAfterProtectedCapital: retained.cashLimitAfterCommitmentsAndReserve,
-    cashAfterBills: roundCurrency(input.workingCapitalSnapshot.availableCash - input.futureCommitments),
-    profitAfterBills: roundCurrency(retained.retainedProfitAvailable - input.futureCommitments),
-    withdrawalBase: Math.min(retained.retainedProfitAvailable, retained.cashLimitAfterCommitmentsAndReserve),
+    cashAfterBills: retained.cashLimitAfterCommitmentsAndReserve,
+    profitAfterBills: retained.ownerAvailableProfit,
+    withdrawalBase: Math.min(retained.ownerAvailableProfit, retained.cashLimitAfterCommitmentsAndReserve),
     pendingPayablesReserve: 0,
     confidence: "high" as const,
     result: retained.safeWithdrawableAmount,
-    explanation: "Retirada segura usa o menor valor entre lucro acumulado não retirado e caixa operacional após compromissos e reserva mínima. Estoque e recebíveis ficam separados para decisão, sem duplicar caixa.",
+    explanation: "Disponível para Vinícius usa lucro auditado das vendas menos retiradas, custos da operação e margem protegida; depois limita pelo caixa real após obrigações. Estoque e recebíveis ficam separados.",
   }
+}
+
+function buildOperationalCostsSnapshot(input: {
+  transactions: FinancialDashboardTransaction[]
+  accountFor: (transaction: FinancialDashboardTransaction) => FinancialDashboardChartAccount | null
+  auditedWindowStart: string
+  currentEnd: string
+  nextMonthStart: string
+  nextMonthEnd: string
+}) {
+  const lines = input.transactions
+    .filter((transaction) => {
+      if (isCanceledTransaction(transaction)) return false
+      if (!isResultExpense(transaction, input.accountFor(transaction))) return false
+      const paidDate = toDateOnly(transaction.date)
+      const dueDate = toDateOnly(transaction.due_date || transaction.date)
+      const isPaidInWindow = isReconciledTransaction(transaction)
+        && paidDate >= input.auditedWindowStart
+        && paidDate <= input.currentEnd
+      const isUpcomingM1 = isPendingTransaction(transaction)
+        && dueDate >= input.nextMonthStart
+        && dueDate <= input.nextMonthEnd
+      return isPaidInWindow || isUpcomingM1
+    })
+    .map((transaction): FinancialDashboardOperationalCostLine => {
+      const dueDate = toDateOnly(transaction.due_date || transaction.date)
+      const isUpcomingM1 = isPendingTransaction(transaction)
+        && dueDate >= input.nextMonthStart
+        && dueDate <= input.nextMonthEnd
+      return {
+        id: transaction.id,
+        date: isUpcomingM1 ? dueDate : toDateOnly(transaction.date),
+        amount: roundCurrency(number(transaction.amount)),
+        label: transaction.description || transaction.category || "Custo operacional",
+        status: isUpcomingM1 ? "pending" : "reconciled",
+        timing: isUpcomingM1 ? "m1" : "paid",
+      }
+    })
+    .sort((a, b) => a.date.localeCompare(b.date) || a.label.localeCompare(b.label))
+  const paidTotal = roundCurrency(lines.filter((line) => line.timing === "paid").reduce((sum, line) => sum + line.amount, 0))
+  const upcomingTotal = roundCurrency(lines.filter((line) => line.timing === "m1").reduce((sum, line) => sum + line.amount, 0))
+  const total = roundCurrency(paidTotal + upcomingTotal)
+  return {
+    total,
+    paidTotal,
+    upcomingTotal,
+    lines,
+    description: total > 0
+      ? "Custos da empresa pagos com resultado operacional."
+      : "Sem custos operacionais auditáveis na janela.",
+  } satisfies FinancialDashboardOperationalCostsSnapshot
 }
 
 function buildRetainedProfitSnapshot(input: {
@@ -462,7 +540,7 @@ function buildRetainedProfitSnapshot(input: {
   currentEnd: string
   accountFor: (transaction: FinancialDashboardTransaction) => FinancialDashboardChartAccount | null
   accountTotal: number
-  futureCommitments: number
+  operationalCosts: FinancialDashboardOperationalCostsSnapshot
   activeInventoryCapital: number
   minimumOperationalReserve: number
 }) {
@@ -498,6 +576,7 @@ function buildRetainedProfitSnapshot(input: {
     },
   ]
   const accumulatedNetProfitUntilPreviousMonth = previousMonth.profit
+  const accumulatedSalesProfit = roundCurrency(accumulatedNetProfitUntilPreviousMonth + currentMonth.profit)
 
   const transactionsUntilCurrentPeriodEnd = input.transactions
     .filter((transaction) => {
@@ -510,23 +589,26 @@ function buildRetainedProfitSnapshot(input: {
   const pendingProfitWithdrawals = roundCurrency(transactionsUntilCurrentPeriodEnd
     .filter((transaction) => isPendingTransaction(transaction) && isProfitWithdrawalTransaction(transaction, input.accountFor(transaction)))
     .reduce((sum, transaction) => sum + number(transaction.amount), 0))
-  const retainedProfitAvailable = roundCurrency(Math.max(
+  const retainedProfitAvailable = roundCurrency(Math.max(0, accumulatedSalesProfit - totalProfitWithdrawals))
+  const ownerAvailableProfit = roundCurrency(Math.max(
     0,
-    accumulatedNetProfitUntilPreviousMonth + currentMonth.profit - totalProfitWithdrawals
+    accumulatedSalesProfit - totalProfitWithdrawals - input.operationalCosts.total - input.minimumOperationalReserve
   ))
   const cashBackedRetainedProfit = roundCurrency(Math.min(retainedProfitAvailable, Math.max(0, input.accountTotal)))
   const cashLimitAfterCommitmentsAndReserve = roundCurrency(Math.max(
     0,
-    input.accountTotal - input.futureCommitments - input.minimumOperationalReserve
+    input.accountTotal - input.operationalCosts.upcomingTotal - input.minimumOperationalReserve
   ))
-  const safeWithdrawableAmount = roundCurrency(Math.min(retainedProfitAvailable, cashLimitAfterCommitmentsAndReserve))
+  const safeWithdrawableAmount = roundCurrency(Math.min(ownerAvailableProfit, cashLimitAfterCommitmentsAndReserve))
 
   return {
+    accumulatedSalesProfit,
     accumulatedNetProfitUntilPreviousMonth,
     currentMonthNetProfit: currentMonth.profit,
     totalProfitWithdrawals,
     pendingProfitWithdrawals,
     retainedProfitAvailable,
+    ownerAvailableProfit,
     cashBackedRetainedProfit,
     cashLimitAfterCommitmentsAndReserve,
     minimumOperationalReserve: input.minimumOperationalReserve,
@@ -804,6 +886,14 @@ export function buildFinancialDashboardSnapshot(input: BuildFinancialDashboardSn
       : "clear"
   const activeInventoryCapital = roundCurrency(input.inventory.reduce((sum, item) => sum + number(item.purchase_price) * Math.max(1, number(item.quantity) || 1), 0))
   const minimumOperationalReserve = 0
+  const operationalCosts = buildOperationalCostsSnapshot({
+    transactions: input.projectionTransactions,
+    accountFor,
+    auditedWindowStart: addMonthsISO(start, -1) || start,
+    currentEnd: end,
+    nextMonthStart,
+    nextMonthEnd,
+  })
   const retainedProfitSnapshot = buildRetainedProfitSnapshot({
     sales: input.projectionSales,
     transactions: input.projectionTransactions,
@@ -811,7 +901,7 @@ export function buildFinancialDashboardSnapshot(input: BuildFinancialDashboardSn
     currentEnd: end,
     accountFor,
     accountTotal,
-    futureCommitments: futureTotal,
+    operationalCosts,
     activeInventoryCapital,
     minimumOperationalReserve,
   })
@@ -842,7 +932,7 @@ export function buildFinancialDashboardSnapshot(input: BuildFinancialDashboardSn
     workingCapitalSnapshot,
     pendingReceivables,
     retainedProfitSnapshot,
-    futureCommitments: futureTotal,
+    operationalCosts,
   })
   const safeWithdrawalStatus: "critical" | "attention" | "available" = safeWithdrawalAmount <= 0
     ? "critical"
@@ -870,6 +960,9 @@ export function buildFinancialDashboardSnapshot(input: BuildFinancialDashboardSn
       : null,
     retainedProfitSnapshot.accumulatedNetProfitUntilPreviousMonth > 0 && retainedProfitSnapshot.retainedProfitAvailable > netProfit
       ? "Lucro de meses anteriores permaneceu no caixa e segue considerado na retirada segura."
+      : null,
+    operationalCosts.total > 0
+      ? "Custos da operação reduzem o valor livre para o proprietário, sem serem confundidos com estoque ou retirada."
       : null,
     retainedProfitSnapshot.activeInventoryCapital > 0
       ? "Estoque ativo aparece como capital imobilizado, sem reduzir automaticamente o lucro acumulado retirável."
@@ -907,6 +1000,7 @@ export function buildFinancialDashboardSnapshot(input: BuildFinancialDashboardSn
       cashOutflows,
       description: "Saldo reconciliado disponível nas contas.",
     },
+    operationalCosts,
     retainedProfitSnapshot,
     safeWithdrawal: {
       amount: safeWithdrawalAmount,
@@ -914,8 +1008,8 @@ export function buildFinancialDashboardSnapshot(input: BuildFinancialDashboardSn
       monthlyProfitAvailable: profitAvailable,
       noMonthlyProfit: netProfit <= 0,
       description: safeWithdrawalAmount > 0
-        ? "Considera lucro acumulado, caixa atual e compromissos futuros."
-        : "Retirada segura indisponível pelo contexto financeiro atual.",
+        ? "Quanto Vinícius pode retirar hoje sem sufocar a operação."
+        : "Sem valor livre recomendado depois de custos e obrigações.",
       workingCapitalSnapshot,
       breakdown: safeWithdrawalBreakdown,
     },
@@ -936,6 +1030,8 @@ export function buildFinancialDashboardSnapshot(input: BuildFinancialDashboardSn
       ownerContributions,
       pendingReceivables,
       pendingPayables,
+      operationalCostsTotal: operationalCosts.total,
+      operationalCostsUpcoming: operationalCosts.upcomingTotal,
       retainedProfitAvailable: retainedProfitSnapshot.retainedProfitAvailable,
       pendingProfitWithdrawals: retainedProfitSnapshot.pendingProfitWithdrawals,
       conservativeWorkingCapitalAmount: workingCapitalSnapshot.safeWithdrawalAmount,

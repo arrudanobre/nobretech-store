@@ -771,13 +771,11 @@ export default function FinanceiroPage() {
         </Card>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-        <MetricCard title="Resultado do período" value={formatBRL(financialDashboard.periodResult.netResult)} icon={LineChart} tone={financialDashboard.periodResult.netResult > 0 ? "green" : "navy"} hint={financialDashboard.periodResult.description} />
-        <MetricCard title="Lucro acumulado não retirado" value={formatBRL(financialDashboard.retainedProfitSnapshot.retainedProfitAvailable)} icon={Banknote} tone={financialDashboard.retainedProfitSnapshot.retainedProfitAvailable > 0 ? "green" : "navy"} hint="Lucro auditado do mês anterior + mês atual, menos retiradas reconciliadas." />
-        <MetricCard title={financialDashboard.patrimonialMovement.primaryLabel} value={formatBRL(financialDashboard.patrimonialMovement.total)} icon={Building2} tone="navy" hint={financialDashboard.patrimonialMovement.description} />
-        <MetricCard title="Caixa operacional" value={formatBRL(financialDashboard.cashPosition.reconciledCash)} icon={Wallet} tone="navy" hint={`Fonte: extrato · ${accountBalances.length} conta(s)`} />
-        <MetricCard title="Retirada segura hoje" value={formatBRL(financialDashboard.safeWithdrawal.amount)} icon={Shield} tone={financialDashboard.safeWithdrawal.amount > 0 ? "green" : "navy"} hint={financialDashboard.safeWithdrawal.description} />
-        <MetricCard title="Compromissos futuros" value={formatBRL(financialDashboard.futureCommitments.total)} icon={CalendarClock} tone={financialDashboard.futureCommitments.status === "critical" ? "red" : financialDashboard.futureCommitments.status === "attention" ? "navy" : "green"} hint={financialDashboard.futureCommitments.description} />
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <MetricCard title="Caixa operacional" value={formatBRL(financialDashboard.cashPosition.reconciledCash)} icon={Wallet} tone="navy" hint="Dinheiro real disponível em conta." />
+        <MetricCard title="Lucro das vendas" value={formatBRL(financialDashboard.retainedProfitSnapshot.accumulatedSalesProfit)} icon={LineChart} tone={financialDashboard.retainedProfitSnapshot.accumulatedSalesProfit > 0 ? "green" : "navy"} hint="Lucro auditado do mês anterior + mês atual." />
+        <MetricCard title="Custos da operação" value={formatBRL(financialDashboard.operationalCosts.total)} icon={ReceiptText} tone="navy" hint="Custos da empresa pagos com resultado operacional." />
+        <MetricCard title="Disponível para retirada hoje" value={formatBRL(financialDashboard.safeWithdrawal.amount)} icon={Shield} tone={financialDashboard.safeWithdrawal.amount > 0 ? "green" : "navy"} hint="Quanto pode ser retirado hoje sem sufocar a operação." />
       </div>
 
       {loading ? (
@@ -859,8 +857,8 @@ export default function FinanceiroPage() {
                     <Wallet className="h-5 w-5" />
                   </div>
                   <div className="min-w-0">
-                    <h3 className="font-display font-bold text-navy-900 font-syne">Caixa e retirada segura</h3>
-                    <p className="mt-1 text-sm text-gray-500">Caixa, lucro acumulado e compromissos futuros separados.</p>
+                    <h3 className="font-display font-bold text-navy-900 font-syne">Caixa e retirada disponível</h3>
+                    <p className="mt-1 text-sm text-gray-500">Caixa, lucro das vendas, custos da empresa e retirada do dono separados.</p>
                   </div>
                 </div>
                 <Badge
@@ -873,19 +871,40 @@ export default function FinanceiroPage() {
               </div>
 
               <div className="rounded-3xl border border-gray-100/80 bg-white/95 p-3.5 sm:p-4">
-                  <ProfitSummaryLine label="Resultado do mês" value={financialDashboard.periodResult.netResult} tone={financialDashboard.periodResult.netResult >= 0 ? "green" : "navy"} />
                   {financialDashboard.retainedProfitSnapshot.months.map((line) => (
                     <ProfitSummaryLine key={line.month} label={`Lucro ${line.label}`} value={line.profit} tone={line.profit > 0 ? "green" : "navy"} />
                   ))}
+                  <ProfitSummaryLine label="Lucro acumulado operacional" value={financialDashboard.retainedProfitSnapshot.accumulatedSalesProfit} tone={financialDashboard.retainedProfitSnapshot.accumulatedSalesProfit > 0 ? "green" : "navy"} />
                   <ProfitSummaryLine label="Lucro já retirado" value={-financialDashboard.retainedProfitSnapshot.totalProfitWithdrawals} tone="red" />
-                  <ProfitSummaryLine label="Lucro acumulado não retirado" value={financialDashboard.retainedProfitSnapshot.retainedProfitAvailable} tone={financialDashboard.retainedProfitSnapshot.retainedProfitAvailable > 0 ? "green" : "navy"} />
+                  <ProfitSummaryLine label="Custos da operação" value={-financialDashboard.operationalCosts.total} tone="red" />
+                  {financialDashboard.retainedProfitSnapshot.minimumOperationalReserve > 0 && (
+                    <ProfitSummaryLine label="Margem protegida" value={-financialDashboard.retainedProfitSnapshot.minimumOperationalReserve} tone="red" />
+                  )}
                   <ProfitSummaryLine label="Caixa operacional" value={financialDashboard.cashPosition.reconciledCash} />
                   {financialDashboard.patrimonialMovement.total > 0 && (
                     <ProfitSummaryLine label="Movimentação patrimonial" value={financialDashboard.patrimonialMovement.total} tone="navy" />
                   )}
                   <div className="my-1 h-px bg-gradient-to-r from-transparent via-gray-200 to-transparent" />
-                  <ProfitSummaryLine label="Retirada segura hoje" value={financialDashboard.safeWithdrawal.amount} highlight tone={financialDashboard.safeWithdrawal.amount > 0 ? "green" : "navy"} />
+                  <ProfitSummaryLine label="Disponível para retirada hoje" value={financialDashboard.safeWithdrawal.amount} highlight tone={financialDashboard.safeWithdrawal.amount > 0 ? "green" : "navy"} />
                 </div>
+
+              {financialDashboard.operationalCosts.total > 0 && (
+                <div className="mt-3 rounded-3xl border border-gray-100 bg-white/90 p-3.5 sm:p-4">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-gray-500">Custos da operação</span>
+                    <span className="whitespace-nowrap text-xs font-bold tabular-nums text-navy-900">{formatBRL(financialDashboard.operationalCosts.total)}</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {financialDashboard.operationalCosts.lines.slice(0, 5).map((line) => (
+                      <div key={line.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-3">
+                        <span className="min-w-0 truncate text-[11px] text-gray-500">{line.label}{line.timing === "m1" ? " · M+1" : ""}</span>
+                        <span className="whitespace-nowrap text-right text-[11px] font-semibold tabular-nums text-gray-600">-{formatBRL(line.amount)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-[11px] leading-relaxed text-gray-500">{financialDashboard.operationalCosts.description}</p>
+                </div>
+              )}
 
               {financialDashboard.futureCommitments.total > 0 && (
                 <div className="relative mt-3 overflow-hidden rounded-3xl border border-amber-200/60 bg-gradient-to-br from-amber-50/70 via-amber-50/40 to-white p-3.5 sm:p-4">
@@ -947,18 +966,18 @@ export default function FinanceiroPage() {
                   {financialDashboard.futureCommitments.status === "critical" ? (
                     <>Compromissos futuros excedem o caixa projetado. Reduza retirada ou reprograme pagamentos.</>
                   ) : financialDashboard.safeWithdrawal.noMonthlyProfit && financialDashboard.safeWithdrawal.amount > 0 ? (
-                    <>Sem lucro realizado neste mês. <strong>Retirada segura estimada: <span className="tabular-nums">{formatBRL(financialDashboard.safeWithdrawal.amount)}</span></strong>, considerando lucro acumulado e caixa atual.</>
+                    <>Sem lucro relevante neste mês. <strong>Disponível para retirada: <span className="tabular-nums">{formatBRL(financialDashboard.safeWithdrawal.amount)}</span></strong>, considerando lucro acumulado e caixa atual.</>
                   ) : financialDashboard.safeWithdrawal.amount > 0 ? (
-                    <>Retirada segura estimada em <strong className="tabular-nums">{formatBRL(financialDashboard.safeWithdrawal.amount)}</strong>, limitada por lucro acumulado e obrigações mapeadas.</>
+                    <>Disponível para retirada hoje: <strong className="tabular-nums">{formatBRL(financialDashboard.safeWithdrawal.amount)}</strong>, depois dos custos da empresa e limitado pelo caixa.</>
                   ) : (
-                    <>Sem retirada segura recomendada no contexto atual.</>
+                    <>Sem valor livre recomendado para retirada no contexto atual.</>
                   )}
                 </p>
               </div>
 
               <div className="mt-3 rounded-2xl border border-gray-100 bg-white/80 p-3">
                 <div className="mb-2 flex items-center justify-between gap-3">
-                  <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-gray-500">Como a retirada foi estimada</span>
+                  <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-gray-500">Como o disponível foi estimado</span>
                   <span className="text-[10px] font-semibold text-gray-400">{financialDashboard.safeWithdrawal.breakdown.confidence === "high" ? "base auditável" : "estimativa conservadora"}</span>
                 </div>
                 <div className="space-y-1.5">
@@ -975,8 +994,8 @@ export default function FinanceiroPage() {
                     ))}
                 </div>
                 <div className="mt-2 border-t border-gray-100 pt-2">
-                  <ProfitSummaryLine label="Resultado da retirada segura" value={financialDashboard.safeWithdrawal.breakdown.result} highlight tone={financialDashboard.safeWithdrawal.breakdown.result > 0 ? "green" : "navy"} />
-                  <p className="mt-1 text-[11px] leading-relaxed text-gray-500">{financialDashboard.safeWithdrawal.breakdown.explanation}</p>
+                  <ProfitSummaryLine label="Disponível para retirada hoje" value={financialDashboard.safeWithdrawal.breakdown.result} highlight tone={financialDashboard.safeWithdrawal.breakdown.result > 0 ? "green" : "navy"} />
+                  <p className="mt-1 text-[11px] leading-relaxed text-gray-500">Disponível para retirada usa lucro auditado das vendas menos retiradas, custos da operação e margem protegida; depois limita pelo caixa real após obrigações. Estoque e recebíveis ficam separados.</p>
                 </div>
               </div>
 
