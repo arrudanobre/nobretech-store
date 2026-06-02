@@ -857,8 +857,8 @@ export default function FinanceiroPage() {
                     <Wallet className="h-5 w-5" />
                   </div>
                   <div className="min-w-0">
-                    <h3 className="font-display font-bold text-navy-900 font-syne">Caixa e retirada disponível</h3>
-                    <p className="mt-1 text-sm text-gray-500">Caixa, lucro das vendas, custos da empresa e retirada do dono separados.</p>
+                    <h3 className="font-display font-bold text-navy-900 font-syne">Acumulado e retirada</h3>
+                    <p className="mt-1 text-sm text-gray-500">Lucro gerado, retiradas realizadas e valor livre de hoje separados do futuro.</p>
                   </div>
                 </div>
                 <Badge
@@ -876,7 +876,12 @@ export default function FinanceiroPage() {
                   ))}
                   <ProfitSummaryLine label="Lucro acumulado operacional" value={financialDashboard.retainedProfitSnapshot.accumulatedSalesProfit} tone={financialDashboard.retainedProfitSnapshot.accumulatedSalesProfit > 0 ? "green" : "navy"} />
                   <ProfitSummaryLine label="Lucro já retirado" value={-financialDashboard.retainedProfitSnapshot.totalProfitWithdrawals} tone="red" />
-                  <ProfitSummaryLine label="Custos da operação" value={-financialDashboard.operationalCosts.total} tone="red" />
+                  {financialDashboard.operationalCosts.paidTotal > 0 && (
+                    <ProfitSummaryLine label="Custos operacionais pagos" value={-financialDashboard.operationalCosts.paidTotal} tone="red" />
+                  )}
+                  {financialDashboard.operationalCosts.upcomingTotal > 0 && (
+                    <ProfitSummaryLine label="Contas futuras protegidas" value={-financialDashboard.operationalCosts.upcomingTotal} tone="red" />
+                  )}
                   {financialDashboard.retainedProfitSnapshot.minimumOperationalReserve > 0 && (
                     <ProfitSummaryLine label="Margem protegida" value={-financialDashboard.retainedProfitSnapshot.minimumOperationalReserve} tone="red" />
                   )}
@@ -887,6 +892,19 @@ export default function FinanceiroPage() {
                   <div className="my-1 h-px bg-gradient-to-r from-transparent via-gray-200 to-transparent" />
                   <ProfitSummaryLine label="Disponível para retirada hoje" value={financialDashboard.safeWithdrawal.amount} highlight tone={financialDashboard.safeWithdrawal.amount > 0 ? "green" : "navy"} />
                 </div>
+
+              {(financialDashboard.futureReceivables.total > 0 || financialDashboard.futureCommitments.total > 0) && (
+                <div className="mt-3 rounded-3xl border border-gray-100 bg-white/90 p-3.5 sm:p-4">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-gray-500">Futuro da empresa</span>
+                    <span className="text-[10px] font-semibold text-gray-400">não é caixa de hoje</span>
+                  </div>
+                  <ProfitSummaryLine label="Recebíveis previstos" value={financialDashboard.futureReceivables.total} tone={financialDashboard.futureReceivables.total > 0 ? "green" : "navy"} />
+                  <ProfitSummaryLine label={`Contas ${financialDashboard.futureCommitments.label}`} value={-financialDashboard.futureCommitments.total} tone={financialDashboard.futureCommitments.total > 0 ? "red" : "navy"} />
+                  <ProfitSummaryLine label="Caixa projetado após futuro" value={financialDashboard.futureReceivables.projectedCashAfterReceipts} tone={financialDashboard.futureReceivables.projectedCashAfterReceipts >= 0 ? "green" : "red"} />
+                  <p className="mt-2 text-[11px] leading-relaxed text-gray-500">{financialDashboard.futureReceivables.description}</p>
+                </div>
+              )}
 
               {financialDashboard.operationalCosts.total > 0 && (
                 <div className="mt-3 rounded-3xl border border-gray-100 bg-white/90 p-3.5 sm:p-4">
@@ -902,7 +920,7 @@ export default function FinanceiroPage() {
                       </div>
                     ))}
                   </div>
-                  <p className="mt-2 text-[11px] leading-relaxed text-gray-500">{financialDashboard.operationalCosts.description}</p>
+                  <p className="mt-2 text-[11px] leading-relaxed text-gray-500">Custos pagos reduzem o lucro livre; contas futuras aparecem também no bloco futuro para leitura operacional, sem virar recebível ou caixa.</p>
                 </div>
               )}
 

@@ -109,6 +109,8 @@ export type FinancialDashboardProjectionItem = {
   signedAmount: number
   isOverdue: boolean
   isCardInvoice: boolean
+  sourceType?: string | null
+  sourceId?: string | null
 }
 
 export type FinancialDashboardLegacyMetrics = {
@@ -197,6 +199,13 @@ export type FinancialDashboardOperationalCostsSnapshot = {
   paidTotal: number
   upcomingTotal: number
   lines: FinancialDashboardOperationalCostLine[]
+  description: string
+}
+
+export type FinancialDashboardFutureReceivablesSnapshot = {
+  total: number
+  items: FinancialDashboardProjectionItem[]
+  projectedCashAfterReceipts: number
   description: string
 }
 
@@ -433,9 +442,15 @@ function buildSafeWithdrawalBreakdown(input: {
         kind: "owner_equity" as const,
       },
       {
-        label: "Custos da operação",
-        amount: -input.operationalCosts.total,
-        description: "Despesas operacionais reais e previstas em M+1 pagas com resultado operacional.",
+        label: "Custos operacionais pagos",
+        amount: -input.operationalCosts.paidTotal,
+        description: "Despesas operacionais já reconciliadas na janela auditada.",
+        kind: "payable" as const,
+      },
+      {
+        label: "Contas futuras M+1",
+        amount: -input.operationalCosts.upcomingTotal,
+        description: "Compromissos operacionais previstos no mês seguinte. Entram uma vez na proteção da retirada.",
         kind: "payable" as const,
       },
       {
@@ -478,7 +493,7 @@ function buildSafeWithdrawalBreakdown(input: {
     pendingPayablesReserve: 0,
     confidence: "high" as const,
     result: retained.safeWithdrawableAmount,
-    explanation: "Disponível para Vinícius usa lucro auditado das vendas menos retiradas, custos da operação e margem protegida; depois limita pelo caixa real após obrigações. Estoque e recebíveis ficam separados.",
+    explanation: "Disponível para retirada usa lucro auditado das vendas menos retiradas, custos pagos, contas futuras e margem protegida; depois limita pelo caixa real. Estoque e recebíveis ficam separados.",
   }
 }
 
@@ -643,6 +658,7 @@ function buildCashProjection(input: BuildFinancialDashboardSnapshotInput, starti
   const today = todayISO()
   const horizon = addDaysISO(today, 60)
   const saleById = new Map(input.projectionSales.map((sale) => [String(sale.id), sale]))
+  const salePaymentById = new Map(input.projectionSalePayments.map((payment) => [String(payment.id), payment]))
   const transactionById = new Map(
     input.projectionTransactions
       .filter((transaction) => !isCanceledTransaction(transaction))
@@ -659,7 +675,13 @@ function buildCashProjection(input: BuildFinancialDashboardSnapshotInput, starti
       .map((transaction) => [String(transaction.source_id), transaction])
   )
   const transactionItems = input.projectionTransactions
-    .filter((transaction) => isPendingTransaction(transaction))
+    .filter((transaction) => {
+      if (!isPendingTransaction(transaction)) return false
+      if (isSalePaymentTransaction(transaction) && transaction.source_id && !salePaymentById.has(String(transaction.source_id))) {
+        return false
+      }
+      return true
+    })
     .map((transaction): FinancialDashboardProjectionItem => {
       const rawDate = toDateOnly(transaction.due_date || transaction.date)
       const dueDate = rawDate && rawDate < today ? today : rawDate
@@ -675,6 +697,8 @@ function buildCashProjection(input: BuildFinancialDashboardSnapshotInput, starti
         signedAmount: transaction.type === "income" ? amount : -amount,
         isOverdue: Boolean(rawDate && rawDate < today),
         isCardInvoice: transaction.payment_method === "Cartão de Crédito" || Boolean(transaction.credit_card_id),
+        sourceType: transaction.source_type || null,
+        sourceId: transaction.source_id || null,
       }
     })
   const salePaymentItems = input.projectionSalePayments
@@ -700,6 +724,8 @@ function buildCashProjection(input: BuildFinancialDashboardSnapshotInput, starti
         signedAmount: amount,
         isOverdue: Boolean(rawDate && rawDate < today),
         isCardInvoice: false,
+        sourceType: "sale_payment",
+        sourceId: payment.id,
       }
     })
   const saleItems = input.projectionSales
@@ -724,6 +750,8 @@ function buildCashProjection(input: BuildFinancialDashboardSnapshotInput, starti
         signedAmount: amount,
         isOverdue: Boolean(rawDate && rawDate < today),
         isCardInvoice: false,
+        sourceType: "sale",
+        sourceId: sale.id,
       }
     })
   const pendingItems = [...transactionItems, ...salePaymentItems, ...saleItems]
@@ -846,11 +874,7 @@ export function buildFinancialDashboardSnapshot(input: BuildFinancialDashboardSn
   const averageTicket = completedSales.length > 0 ? salesRevenue / completedSales.length : 0
   const salesNeeded = averageTicket > 0 ? Math.ceil(breakEvenGap / averageTicket) : 0
   const accountTotal = activeLedgerBalanceByAccount(input.accounts, input.accountMovements)
-  const ownerProfitWithdrawals = roundCurrency(ownerCapitalSnapshot.ownerProfitWithdrawalsInPeriod)
   const ownerCapitalReturns = roundCurrency(ownerCapitalSnapshot.ownerCapitalReturnsInPeriod + ownerCapitalSnapshot.untracedOwnerCapitalReturnsInPeriod)
-  const profitAvailable = roundCurrency(netProfit - ownerProfitWithdrawals)
-  const profitWithdrawalRate = netProfit > 0 ? Math.min(999, Math.round((ownerProfitWithdrawals / netProfit) * 100)) : ownerProfitWithdrawals > 0 ? 100 : 0
-  const profitAvailabilityStatus: "exceeded" | "attention" | "available" = profitAvailable < 0 ? "exceeded" : profitWithdrawalRate >= 80 ? "attention" : "available"
   const pendingSales = input.sales.filter((sale) => !isCanceledTransaction({ status: sale.sale_status }) && !input.reconciledSaleIds.has(sale.id) && !input.saleIdsWithSplitPayments.has(sale.id))
   const pendingSalePayments = input.projectionSalePayments.filter((payment) => isPendingTransaction({ status: payment.status }))
   const pendingTransactions = input.transactions.filter((transaction) => transaction.source_type !== "sale" && !isSalePaymentTransaction(transaction) && isPendingTransaction(transaction))
@@ -869,6 +893,8 @@ export function buildFinancialDashboardSnapshot(input: BuildFinancialDashboardSn
         .sort((a, b) => (a.originalDate || a.date).localeCompare(b.originalDate || b.date))
     : []
   const futureTotal = roundCurrency(futureItems.reduce((sum, item) => sum + item.amount, 0))
+  const futureReceivableItems = cashProjection.pendingItems.filter((item) => item.type === "income")
+  const pendingReceivables = roundCurrency(futureReceivableItems.reduce((sum, item) => sum + item.amount, 0))
   const projectedCashAfter = nextMonthKey
     ? roundCurrency(cashProjection.startingBalance + cashProjection.pendingItems
         .filter((item) => item.date <= nextMonthEnd)
@@ -905,6 +931,17 @@ export function buildFinancialDashboardSnapshot(input: BuildFinancialDashboardSn
     activeInventoryCapital,
     minimumOperationalReserve,
   })
+  const accumulatedProfitWithdrawalRate = retainedProfitSnapshot.accumulatedSalesProfit > 0
+    ? Math.min(999, Math.round((retainedProfitSnapshot.totalProfitWithdrawals / retainedProfitSnapshot.accumulatedSalesProfit) * 100))
+    : retainedProfitSnapshot.totalProfitWithdrawals > 0
+      ? 100
+      : 0
+  const accumulatedProfitAvailabilityStatus: "exceeded" | "attention" | "available" =
+    retainedProfitSnapshot.retainedProfitAvailable < 0
+      ? "exceeded"
+      : accumulatedProfitWithdrawalRate >= 80
+        ? "attention"
+        : "available"
   const workingCapitalSnapshot: WorkingCapitalSnapshot = buildWorkingCapitalSnapshot({
     availableCash: accountTotal,
     activeInventoryItems: input.inventory.map((item) => ({
@@ -916,13 +953,20 @@ export function buildFinancialDashboardSnapshot(input: BuildFinancialDashboardSn
     realProfitSnapshot: { availableProfit: retainedProfitSnapshot.retainedProfitAvailable },
     estimatedOperationalProfit: null,
     upcomingBills30d: futureTotal,
-    pendingReceivables: pendingSales.reduce((sum, sale) => sum + saleNetRevenue(sale), 0) + pendingSalePayments.reduce((sum, payment) => sum + number(payment.amount), 0),
+    pendingReceivables,
     pendingPayables: cashProjection.pendingItems.filter((item) => item.type === "expense").reduce((sum, item) => sum + item.amount, 0),
   })
 
   const safeWithdrawalAmount = retainedProfitSnapshot.safeWithdrawableAmount
-  const pendingReceivables = roundCurrency(pendingSales.reduce((sum, sale) => sum + saleNetRevenue(sale), 0) + pendingSalePayments.reduce((sum, payment) => sum + number(payment.amount), 0))
   const pendingPayables = roundCurrency(cashProjection.pendingItems.filter((item) => item.type === "expense").reduce((sum, item) => sum + item.amount, 0))
+  const futureReceivables: FinancialDashboardFutureReceivablesSnapshot = {
+    total: pendingReceivables,
+    items: futureReceivableItems,
+    projectedCashAfterReceipts: roundCurrency(accountTotal + pendingReceivables - pendingPayables),
+    description: pendingReceivables > 0
+      ? "Recebíveis previstos ficam separados do caixa atual; só viram caixa depois da conciliação."
+      : "Sem recebíveis pendentes auditáveis.",
+  }
   const patrimonialMovement = buildPatrimonialMovement({
     inventoryOutsideDre: reconciledInventoryPurchases,
     ownerContributions,
@@ -1005,10 +1049,10 @@ export function buildFinancialDashboardSnapshot(input: BuildFinancialDashboardSn
     safeWithdrawal: {
       amount: safeWithdrawalAmount,
       status: safeWithdrawalStatus,
-      monthlyProfitAvailable: profitAvailable,
+      monthlyProfitAvailable: retainedProfitSnapshot.ownerAvailableProfit,
       noMonthlyProfit: netProfit <= 0,
       description: safeWithdrawalAmount > 0
-        ? "Quanto Vinícius pode retirar hoje sem sufocar a operação."
+        ? "Quanto pode ser retirado hoje sem sufocar a operação."
         : "Sem valor livre recomendado depois de custos e obrigações.",
       workingCapitalSnapshot,
       breakdown: safeWithdrawalBreakdown,
@@ -1024,6 +1068,7 @@ export function buildFinancialDashboardSnapshot(input: BuildFinancialDashboardSn
         ? `Representam apenas ${cashImpactRate.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% do caixa atual.`
         : "Sem compromissos M+1 mapeados.",
     },
+    futureReceivables,
     diagnostics: {
       inventoryOutsideDre: reconciledInventoryPurchases,
       ownerWithdrawals: reconciledOwnerWithdrawals,
@@ -1067,11 +1112,11 @@ export function buildFinancialDashboardSnapshot(input: BuildFinancialDashboardSn
       averageTicket,
       salesNeeded,
       accountTotal,
-      ownerProfitWithdrawals,
+      ownerProfitWithdrawals: retainedProfitSnapshot.totalProfitWithdrawals,
       ownerCapitalReturns,
-      profitAvailable,
-      profitWithdrawalRate,
-      profitAvailabilityStatus,
+      profitAvailable: retainedProfitSnapshot.ownerAvailableProfit,
+      profitWithdrawalRate: accumulatedProfitWithdrawalRate,
+      profitAvailabilityStatus: accumulatedProfitAvailabilityStatus,
       pendingSales,
       pendingSalePayments,
       pendingTransactions,
@@ -1079,8 +1124,8 @@ export function buildFinancialDashboardSnapshot(input: BuildFinancialDashboardSn
     } satisfies FinancialDashboardLegacyMetrics,
     legacyComparison: {
       buggyResultIfInventoryWasExpense: roundCurrency(netProfit - reconciledInventoryPurchases),
-      commitmentRateAgainstMonthlyProfit: profitAvailable > 0
-        ? Math.min(999, (futureTotal / profitAvailable) * 100)
+      commitmentRateAgainstMonthlyProfit: retainedProfitSnapshot.ownerAvailableProfit > 0
+        ? Math.min(999, (futureTotal / retainedProfitSnapshot.ownerAvailableProfit) * 100)
         : futureTotal > 0
           ? 100
           : 0,
