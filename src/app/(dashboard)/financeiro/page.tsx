@@ -773,7 +773,7 @@ export default function FinanceiroPage() {
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
         <MetricCard title="Resultado do período" value={formatBRL(financialDashboard.periodResult.netResult)} icon={LineChart} tone={financialDashboard.periodResult.netResult > 0 ? "green" : "navy"} hint={financialDashboard.periodResult.description} />
-        <MetricCard title="Lucro acumulado não retirado" value={formatBRL(financialDashboard.retainedProfitSnapshot.retainedProfitAvailable)} icon={Banknote} tone={financialDashboard.retainedProfitSnapshot.retainedProfitAvailable > 0 ? "green" : "navy"} hint="Lucro reconhecido historicamente que permaneceu disponível antes da retirada segura." />
+        <MetricCard title="Lucro acumulado não retirado" value={formatBRL(financialDashboard.retainedProfitSnapshot.retainedProfitAvailable)} icon={Banknote} tone={financialDashboard.retainedProfitSnapshot.retainedProfitAvailable > 0 ? "green" : "navy"} hint="Lucro auditado do mês anterior + mês atual, menos retiradas reconciliadas." />
         <MetricCard title={financialDashboard.patrimonialMovement.primaryLabel} value={formatBRL(financialDashboard.patrimonialMovement.total)} icon={Building2} tone="navy" hint={financialDashboard.patrimonialMovement.description} />
         <MetricCard title="Caixa operacional" value={formatBRL(financialDashboard.cashPosition.reconciledCash)} icon={Wallet} tone="navy" hint={`Fonte: extrato · ${accountBalances.length} conta(s)`} />
         <MetricCard title="Retirada segura hoje" value={formatBRL(financialDashboard.safeWithdrawal.amount)} icon={Shield} tone={financialDashboard.safeWithdrawal.amount > 0 ? "green" : "navy"} hint={financialDashboard.safeWithdrawal.description} />
@@ -874,6 +874,10 @@ export default function FinanceiroPage() {
 
               <div className="rounded-3xl border border-gray-100/80 bg-white/95 p-3.5 sm:p-4">
                   <ProfitSummaryLine label="Resultado do mês" value={financialDashboard.periodResult.netResult} tone={financialDashboard.periodResult.netResult >= 0 ? "green" : "navy"} />
+                  {financialDashboard.retainedProfitSnapshot.months.map((line) => (
+                    <ProfitSummaryLine key={line.month} label={`Lucro ${line.label}`} value={line.profit} tone={line.profit > 0 ? "green" : "navy"} />
+                  ))}
+                  <ProfitSummaryLine label="Lucro já retirado" value={-financialDashboard.retainedProfitSnapshot.totalProfitWithdrawals} tone="red" />
                   <ProfitSummaryLine label="Lucro acumulado não retirado" value={financialDashboard.retainedProfitSnapshot.retainedProfitAvailable} tone={financialDashboard.retainedProfitSnapshot.retainedProfitAvailable > 0 ? "green" : "navy"} />
                   <ProfitSummaryLine label="Caixa operacional" value={financialDashboard.cashPosition.reconciledCash} />
                   {financialDashboard.patrimonialMovement.total > 0 && (

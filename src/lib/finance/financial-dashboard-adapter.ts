@@ -171,6 +171,14 @@ export type FinancialDashboardRetainedProfitSnapshot = {
   safeWithdrawableAmount: number
   activeInventoryCapital: number
   stockProtectionApplied: number
+  auditedWindowStart: string
+  auditedWindowEnd: string
+  months: {
+    month: string
+    label: string
+    salesCount: number
+    profit: number
+  }[]
 }
 
 export type BuildFinancialDashboardSnapshotInput = {
@@ -453,28 +461,49 @@ function buildRetainedProfitSnapshot(input: {
   currentStart: string
   currentEnd: string
   accountFor: (transaction: FinancialDashboardTransaction) => FinancialDashboardChartAccount | null
-  currentMonthNetProfit: number
   accountTotal: number
   futureCommitments: number
   activeInventoryCapital: number
   minimumOperationalReserve: number
 }) {
+  const previousStart = addMonthsISO(input.currentStart, -1) || input.currentStart
+  const previousEnd = addDaysISO(input.currentStart, -1)
+  const auditedWindowStart = previousStart
+  const auditedWindowEnd = input.currentEnd
   const validSales = input.sales.filter((sale) => isValidCommercialSale({ sale_status: sale.sale_status || "completed" }))
-  const salesProfitUntilPreviousMonth = roundCurrency(validSales
-    .filter((sale) => toDateOnly(sale.sale_date) < input.currentStart)
-    .reduce((sum, sale) => sum + saleBusinessRevenue(sale) - saleCost(sale), 0))
-  const reconciledTransactionsUntilPreviousMonth = input.transactions
-    .filter((transaction) => !isCanceledTransaction(transaction) && isReconciledTransaction(transaction) && toDateOnly(transaction.date) < input.currentStart)
-  const manualRevenueUntilPreviousMonth = roundCurrency(reconciledTransactionsUntilPreviousMonth
-    .filter((transaction) => transaction.source_type !== "sale" && !isSalePaymentTransaction(transaction) && isRevenueIncome(transaction, input.accountFor(transaction)))
-    .reduce((sum, transaction) => sum + number(transaction.amount), 0))
-  const dreExpensesUntilPreviousMonth = roundCurrency(reconciledTransactionsUntilPreviousMonth
-    .filter((transaction) => isResultExpense(transaction, input.accountFor(transaction)))
-    .reduce((sum, transaction) => sum + number(transaction.amount), 0))
-  const accumulatedNetProfitUntilPreviousMonth = roundCurrency(salesProfitUntilPreviousMonth + manualRevenueUntilPreviousMonth - dreExpensesUntilPreviousMonth)
+  const profitForWindow = (startDate: string, endDate: string) => {
+    const sales = validSales.filter((sale) => {
+      const saleDate = toDateOnly(sale.sale_date)
+      return saleDate >= startDate && saleDate <= endDate
+    })
+    return {
+      salesCount: sales.length,
+      profit: roundCurrency(sales.reduce((sum, sale) => sum + saleBusinessRevenue(sale) - saleCost(sale), 0)),
+    }
+  }
+  const previousMonth = profitForWindow(previousStart, previousEnd)
+  const currentMonth = profitForWindow(input.currentStart, input.currentEnd)
+  const months = [
+    {
+      month: previousStart.slice(0, 7),
+      label: formatMonthLabel(previousStart.slice(0, 7)),
+      salesCount: previousMonth.salesCount,
+      profit: previousMonth.profit,
+    },
+    {
+      month: input.currentStart.slice(0, 7),
+      label: formatMonthLabel(input.currentStart.slice(0, 7)),
+      salesCount: currentMonth.salesCount,
+      profit: currentMonth.profit,
+    },
+  ]
+  const accumulatedNetProfitUntilPreviousMonth = previousMonth.profit
 
   const transactionsUntilCurrentPeriodEnd = input.transactions
-    .filter((transaction) => !isCanceledTransaction(transaction) && toDateOnly(transaction.date) <= input.currentEnd)
+    .filter((transaction) => {
+      const date = toDateOnly(transaction.date)
+      return !isCanceledTransaction(transaction) && date >= auditedWindowStart && date <= input.currentEnd
+    })
   const totalProfitWithdrawals = roundCurrency(transactionsUntilCurrentPeriodEnd
     .filter((transaction) => isReconciledTransaction(transaction) && isProfitWithdrawalTransaction(transaction, input.accountFor(transaction)))
     .reduce((sum, transaction) => sum + number(transaction.amount), 0))
@@ -483,7 +512,7 @@ function buildRetainedProfitSnapshot(input: {
     .reduce((sum, transaction) => sum + number(transaction.amount), 0))
   const retainedProfitAvailable = roundCurrency(Math.max(
     0,
-    accumulatedNetProfitUntilPreviousMonth + input.currentMonthNetProfit - totalProfitWithdrawals
+    accumulatedNetProfitUntilPreviousMonth + currentMonth.profit - totalProfitWithdrawals
   ))
   const cashBackedRetainedProfit = roundCurrency(Math.min(retainedProfitAvailable, Math.max(0, input.accountTotal)))
   const cashLimitAfterCommitmentsAndReserve = roundCurrency(Math.max(
@@ -494,7 +523,7 @@ function buildRetainedProfitSnapshot(input: {
 
   return {
     accumulatedNetProfitUntilPreviousMonth,
-    currentMonthNetProfit: input.currentMonthNetProfit,
+    currentMonthNetProfit: currentMonth.profit,
     totalProfitWithdrawals,
     pendingProfitWithdrawals,
     retainedProfitAvailable,
@@ -504,6 +533,9 @@ function buildRetainedProfitSnapshot(input: {
     safeWithdrawableAmount,
     activeInventoryCapital: input.activeInventoryCapital,
     stockProtectionApplied: 0,
+    auditedWindowStart,
+    auditedWindowEnd,
+    months,
   } satisfies FinancialDashboardRetainedProfitSnapshot
 }
 
@@ -778,7 +810,6 @@ export function buildFinancialDashboardSnapshot(input: BuildFinancialDashboardSn
     currentStart: start,
     currentEnd: end,
     accountFor,
-    currentMonthNetProfit: netProfit,
     accountTotal,
     futureCommitments: futureTotal,
     activeInventoryCapital,
