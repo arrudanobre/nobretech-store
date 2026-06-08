@@ -583,7 +583,6 @@ export default function FinanceiroPage() {
   const recentMovements = useMemo(() => {
     const saleMovements = sales
       .filter((sale) => isCanceledTransaction({ status: sale.sale_status }) || !saleIdsWithSplitPayments.has(String(sale.id)))
-      .slice(0, 8)
       .map((sale) => ({
         id: sale.id,
         kind: "sale" as const,
@@ -597,7 +596,6 @@ export default function FinanceiroPage() {
       }))
     const manual = transactions
       .filter((t) => t.source_type !== "sale")
-      .slice(0, 8)
       .map((t) => ({
         id: t.id,
         kind: "transaction" as const,
