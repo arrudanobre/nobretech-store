@@ -100,6 +100,7 @@ type SalePayment = {
   due_date?: string | null
   received_date?: string | null
   transaction_id?: string | null
+  sale?: { sale_status?: string | null } | null
 }
 
 type InventoryItem = {
@@ -122,6 +123,54 @@ function dashboardMovementStatusFromTransaction(transaction?: Transaction | null
   if (isReconciledTransaction(transaction)) return "reconciled"
   if (isCanceledTransaction(transaction)) return "cancelled"
   return "pending"
+}
+
+function dashboardMovementStatusFromSale(sale: Sale, financialStatus?: DashboardMovementStatus): DashboardMovementStatus {
+  if (isCanceledTransaction({ status: sale.sale_status })) return "cancelled"
+  return financialStatus || "pending"
+}
+
+function isActiveSalePayment(payment: SalePayment) {
+  return !isCanceledTransaction({ status: payment.status })
+    && !isCanceledTransaction({ status: payment.sale?.sale_status })
+}
+
+function recentMovementSourceKey(movement: {
+  kind: "sale" | "transaction"
+  id: string
+  sourceType?: string | null
+  sourceId?: string | null
+}) {
+  if (movement.kind === "sale") return `sale:${movement.id}`
+  if (movement.sourceType && movement.sourceId) return `${movement.sourceType}:${movement.sourceId}`
+  return `transaction:${movement.id}`
+}
+
+function movementStatusRank(status: DashboardMovementStatus) {
+  if (status === "reconciled") return 5
+  if (status === "pending") return 4
+  if (status === "cancelled") return 3
+  if (status === "reversed") return 2
+  return 1
+}
+
+function dedupeRecentMovements<T extends {
+  kind: "sale" | "transaction"
+  id: string
+  date: string
+  status: DashboardMovementStatus
+  sourceType?: string | null
+  sourceId?: string | null
+}>(movements: T[]) {
+  const bySource = new Map<string, T>()
+  for (const movement of movements) {
+    const key = recentMovementSourceKey(movement)
+    const current = bySource.get(key)
+    if (!current || movementStatusRank(movement.status) > movementStatusRank(current.status)) {
+      bySource.set(key, movement)
+    }
+  }
+  return Array.from(bySource.values())
 }
 
 function saleNetRevenue(sale: Sale) {
@@ -255,7 +304,7 @@ export default function FinanceiroPage() {
           .neq("sale_status", "cancelled")
           .order("payment_due_date", { ascending: true }),
         (supabase.from("sale_payments") as any)
-          .select("id, sale_id, payment_method, amount, status, due_date, received_date, transaction_id")
+          .select("id, sale_id, payment_method, amount, status, due_date, received_date, transaction_id, sale:sale_id(sale_status)")
           .neq("status", "cancelled")
           .order("due_date", { ascending: true }),
         (supabase.from("sales") as any)
@@ -309,12 +358,14 @@ export default function FinanceiroPage() {
         .filter((item: any) => item.source_type !== "sale" || validProjectionSaleIds.has(String(item.source_id)))
         .map((item: any) => ({ ...item, amount: Number(item.amount || 0) })))
       setProjectionSales(projectionSalesData)
-      setProjectionSalePayments((projectionSalePaymentsRes.data || []).map((payment: any) => ({
-        ...payment,
-        amount: Number(payment.amount || 0),
-        due_date: toDateOnly(payment.due_date),
-        received_date: toDateOnly(payment.received_date),
-      })))
+      setProjectionSalePayments((projectionSalePaymentsRes.data || [])
+        .map((payment: any) => ({
+          ...payment,
+          amount: Number(payment.amount || 0),
+          due_date: toDateOnly(payment.due_date),
+          received_date: toDateOnly(payment.received_date),
+        }))
+        .filter(isActiveSalePayment))
       setSales(salesRes.data || [])
       setInventory((inventoryRes.data || []).map((item: any) => ({
         ...item,
@@ -331,6 +382,10 @@ export default function FinanceiroPage() {
 
   const saleIdsWithSplitPayments = useMemo(() => {
     return new Set(projectionSalePayments.map((payment) => String(payment.sale_id)))
+  }, [projectionSalePayments])
+
+  const activeSalePaymentIds = useMemo(() => {
+    return new Set(projectionSalePayments.map((payment) => String(payment.id)))
   }, [projectionSalePayments])
 
   const projectionTransactionById = useMemo(() => {
@@ -527,7 +582,7 @@ export default function FinanceiroPage() {
 
   const recentMovements = useMemo(() => {
     const saleMovements = sales
-      .filter((sale) => !saleIdsWithSplitPayments.has(String(sale.id)))
+      .filter((sale) => isCanceledTransaction({ status: sale.sale_status }) || !saleIdsWithSplitPayments.has(String(sale.id)))
       .slice(0, 8)
       .map((sale) => ({
         id: sale.id,
@@ -536,7 +591,9 @@ export default function FinanceiroPage() {
         description: `Venda${sale.inventory?.catalog?.model ? ` · ${sale.inventory.catalog.model}` : ""}`,
         category: "Venda",
         amount: saleNetRevenue(sale),
-        status: saleFinanceStatusBySaleId.get(String(sale.id)) || "pending" as DashboardMovementStatus,
+        status: dashboardMovementStatusFromSale(sale, saleFinanceStatusBySaleId.get(String(sale.id))),
+        sourceType: "sale",
+        sourceId: sale.id,
       }))
     const manual = transactions
       .filter((t) => t.source_type !== "sale")
@@ -548,12 +605,16 @@ export default function FinanceiroPage() {
         description: t.description || t.category,
         category: t.category,
         amount: t.type === "income" ? Number(t.amount) : -Number(t.amount),
-        status: dashboardMovementStatusFromTransaction(t),
+        status: isSalePaymentTransaction(t) && (!t.source_id || !activeSalePaymentIds.has(String(t.source_id)))
+          ? "cancelled" as DashboardMovementStatus
+          : dashboardMovementStatusFromTransaction(t),
+        sourceType: t.source_type || null,
+        sourceId: t.source_id || null,
       }))
-    return [...saleMovements, ...manual]
+    return dedupeRecentMovements([...saleMovements, ...manual])
       .sort((a, b) => b.date.localeCompare(a.date))
       .slice(0, 8)
-  }, [saleFinanceStatusBySaleId, saleIdsWithSplitPayments, sales, transactions])
+  }, [activeSalePaymentIds, saleFinanceStatusBySaleId, saleIdsWithSplitPayments, sales, transactions])
 
   const profitWithdrawalTimeline = useMemo(() => {
     let running = 0

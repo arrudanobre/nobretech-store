@@ -217,6 +217,8 @@ type SaleAccessRow = {
   inventory_notes: string | null
   operational_thumbnail_url: string | null
   operational_image_url: string | null
+  product_thumbnail_url: string | null
+  product_image_url: string | null
   previous_sale_date: string | Date | null
   previous_owner_name: string | null
   previous_owner_cpf: string | null
@@ -272,6 +274,8 @@ type AdditionalSaleItemRow = {
   serial_number: string | null
   operational_thumbnail_url: string | null
   operational_image_url: string | null
+  product_thumbnail_url: string | null
+  product_image_url: string | null
 }
 
 type SaleVariantSelectionRow = {
@@ -590,6 +594,28 @@ function zeroMoney() {
   return 0
 }
 
+function firstInventoryPhoto(photos?: string[] | null) {
+  if (!Array.isArray(photos)) return null
+  return photos.find((photo) => typeof photo === "string" && photo.trim().length > 0)?.trim() || null
+}
+
+function publicItemPhotoUrl(input: {
+  operational_thumbnail_url?: string | null
+  operational_image_url?: string | null
+  product_thumbnail_url?: string | null
+  product_image_url?: string | null
+  inventory_photos?: string[] | null
+}) {
+  return (
+    input.operational_thumbnail_url ||
+    input.operational_image_url ||
+    input.product_thumbnail_url ||
+    input.product_image_url ||
+    firstInventoryPhoto(input.inventory_photos) ||
+    null
+  )
+}
+
 function consumeVariantSelection(
   selections: SaleVariantSelectionRow[],
   scope: SaleVariantSelectionRow["scope"],
@@ -722,8 +748,6 @@ async function getAdditionalItemsForSale(saleId: string) {
         sai.packaging_notes,
         i.notes AS inventory_notes,
         i.condition_notes,
-        i.operational_thumbnail_url,
-        i.operational_image_url,
         pc.model,
         pc.variant,
         pc.storage,
@@ -734,10 +758,20 @@ async function getAdditionalItemsForSale(saleId: string) {
         i.imei2,
         i.serial_number,
         i.operational_thumbnail_url,
-        i.operational_image_url
+        i.operational_image_url,
+        api.thumbnail_url AS product_thumbnail_url,
+        api.image_url AS product_image_url
       FROM sales_additional_items sai
       LEFT JOIN inventory i ON i.id = sai.product_id
       LEFT JOIN product_catalog pc ON pc.id = i.catalog_id
+      LEFT JOIN LATERAL (
+        SELECT thumbnail_url, image_url
+        FROM product_images pi
+        WHERE pi.product_id = i.id
+          AND pi.company_id = sai.company_id
+        ORDER BY pi.is_primary DESC, pi.sort_order ASC, pi.created_at ASC
+        LIMIT 1
+      ) api ON true
       WHERE sai.sale_id = $1
       ORDER BY sai.created_at ASC, sai.id ASC
     `,
@@ -901,6 +935,10 @@ async function getSaleByToken(token: string) {
         i.supplier_name AS inventory_supplier_name,
         i.photos AS inventory_photos,
         i.notes AS inventory_notes,
+        i.operational_thumbnail_url,
+        i.operational_image_url,
+        mpi.thumbnail_url AS product_thumbnail_url,
+        mpi.image_url AS product_image_url,
         i.grade,
         i.battery_health,
         i.ios_version,
@@ -951,6 +989,14 @@ async function getSaleByToken(token: string) {
       LEFT JOIN product_catalog tipc ON tipc.id = tii.catalog_id
       LEFT JOIN inventory i ON i.id = s.inventory_id
       LEFT JOIN product_catalog pc ON pc.id = i.catalog_id
+      LEFT JOIN LATERAL (
+        SELECT thumbnail_url, image_url
+        FROM product_images pi
+        WHERE pi.product_id = i.id
+          AND pi.company_id = s.company_id
+        ORDER BY pi.is_primary DESC, pi.sort_order ASC, pi.created_at ASC
+        LIMIT 1
+      ) mpi ON true
       LEFT JOIN sales ps ON ps.id = i.source_sale_id
       LEFT JOIN customers pc_owner ON pc_owner.id = ps.customer_id
       LEFT JOIN LATERAL (
@@ -1334,7 +1380,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
     grade: row.grade || null,
     batteryHealth: row.battery_health === null || row.battery_health === undefined ? null : Number(row.battery_health),
     boxType: packagingLabel(row.packaging_type, row.packaging_notes, company.shortName),
-    photoUrl: row.operational_thumbnail_url || row.operational_image_url || null,
+    photoUrl: publicItemPhotoUrl(row),
     imei: maskTrailing(row.imei),
     serial: maskTrailing(row.serial_number),
     variationText: consumeVariantSelection(variantSelections, "main", row.inventory_id),
@@ -1372,7 +1418,7 @@ async function buildPublicPurchaseDetails(row: SaleAccessRow): Promise<PublicPur
         grade: item.grade || null,
         batteryHealth: item.battery_health === null || item.battery_health === undefined ? null : Number(item.battery_health),
         boxType: packagingLabel(item.packaging_type, item.packaging_notes, company.shortName),
-        photoUrl: item.operational_thumbnail_url || item.operational_image_url || null,
+        photoUrl: publicItemPhotoUrl(item),
         imei: maskTrailing(item.imei),
         serial: maskTrailing(item.serial_number),
         variationText: consumeVariantSelection(variantSelections, "additional", item.product_id),
